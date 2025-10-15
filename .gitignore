@@ -15,3 +15,7 @@ playwright/.cache/
 .DS_Store
 Code\ Archive/
 *backup*.py
+
+# env files
+.env*
+!.env.example

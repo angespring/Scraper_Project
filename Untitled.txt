@@ -1,0 +1,172 @@
+# Real listing pages
+STARTING_PAGES = [
+    "https://remoteok.com/remote-product+owner-jobs",
+    "https://remoteok.com/?search=product%20owner",
+    "https://remoteok.com/?search=product%20manager",
+    "https://remoteok.com/?search=business%20analyst",
+    "https://weworkremotely.com/categories/remote-product-jobs",
+]
+
+
+STARTING_PAGES += [
+    "https://remote.co/remote-jobs/product/",
+    "https://www.workingnomads.com/jobs?category=product",
+    "https://remotive.com/remote-jobs/product?locations=Canada%2BUSA",
+    "https://nodesk.co/remote-jobs/product/",
+    "https://nodesk.co/remote-jobs/us/",
+    "https://www.edtech.com/jobs/fully-remote-jobs",
+    "https://www.edtech.com/jobs/product-development-jobs",
+    "https://www.higheredjobs.com/search/advanced_action.cfm?Keyword=Product+Owner&Remote=2",
+    "https://www.higheredjobs.com/search/advanced_action.cfm?Keyword=Product+Manager&Remote=2",
+    "https://www.higheredjobs.com/search/advanced_action.cfm?Keyword=Business+Analyst&Remote=2",
+    "https://builtin.com/jobs?search=product%20owner&remote=true",
+    "https://builtin.com/jobs?search=product%20manager&remote=true&category=product",
+]
+
+
+STARTING_PAGES += [
+    # Wellfound (Playwright)
+    "https://wellfound.com/jobs?remote=true&keywords=product%20owner",
+    "https://wellfound.com/jobs?remote=true&keywords=product%20manager&category=product",
+
+    # Welcome to the Jungle (Playwright)
+    "https://www.welcometothejungle.com/en/jobs?query=product%20owner&remote=true",
+    "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true&department=product",
+]
+
+
+STARTING_PAGES += [
+    # Remote-friendly product categories that often list US-eligible roles
+    "https://www.linkedin.com/jobs/search/?keywords=product%20owner&f_TPR=r86400&f_WT=2&location=United%20States",  # LinkedIn remote filter
+    "https://www.linkedin.com/jobs/search/?keywords=product%20manager&f_TPR=r86400&f_WT=2&location=United%20States",  # LinkedIn remote filter
+    "https://www.dice.com/jobs?filters.employmentType=FULLTIME&q=product&radiusUnit=mi",
+    "https://www.dice.com/jobs?filters.employmentType=FULLTIME&q=business+systems+analyst&radiusUnit=mi",
+    "https://www.dice.com/jobs?filters.employmentType=FULLTIME&q=business+analyst&radiusUnit=mi",
+    #"https://www.producthire.co.uk/",                       # product-focused board. Appears to only be jobs in the UK
+    "https://remoteok.com/remote-product-jobs",             # may be skipped by robots; safe to include
+    "https://powertofly.com/jobs/?keywords=product%20owner&location=remote",
+    "https://powertofly.com/jobs/?keywords=product%20manager&location=remote",
+    "https://www.flexjobs.com/search?search=product+owner&location=remote",
+    "https://www.flexjobs.com/search?search=product+manager&location=remote",
+    "https://www.toptal.com/careers/product-jobs",          # remote-friendly board
+    "https://www.toptal.com/careers/business-jobs",         # BA/SA flavor
+    "https://www.toptal.com/careers/management-jobs",       # PM flavor
+    "https://www.toptal.com/careers/leadership-jobs",       # senior PO/PM flavor
+    "https://angel.co/jobs",                                # top-level; your filter will only click detail pages
+    "https://www.glassdoor.com/Job/us-remote-product-owner-jobs-SRCH_IL.0,2_IN1_KO3,18.htm",  # Glassdoor remote filter
+    "https://www.glassdoor.com/Job/us-remote-product-manager-jobs-SRCH_IL.0,2_IN1_KO3,19.htm",  # Glassdoor remote filter
+    "https://www.themuse.com/jobs?categories=product&location=remote",  # The Muse remote filter
+    "https://www.themuse.com/jobs?categories=business&location=remote",   # The Muse BA/SA flavor
+    "https://www.themuse.com/jobs?categories=management&location=remote",  # The Muse PM flavor
+    "https://www.themuse.com/jobs?categories=leadership&location=remote",  # The Muse senior PO/PM flavor
+    "https://www.indeed.com/jobs?q=product+owner&l=Remote",  # Indeed remote filter
+    "https://www.indeed.com/jobs?q=product+manager&l=Remote",  # Indeed remote filter
+    #"https://www.ziprecruiter.com/Jobs/Product-Owner/-in-Remote",  # ZipRecruiter remote filter                            #Forbidden 20251008
+    #"https://www.ziprecruiter.com/Jobs/Product-Manager/-in-Remote",  # ZipRecruiter remote filter                          #Forbidden 20251008
+    "https://www.careerbuilder.com/jobs-product-owner?location=Remote",  # CareerBuilder remote filter
+    "https://www.careerbuilder.com/jobs-product-manager?location=Remote",  # CareerBuilder remote filter
+    "https://www.simplyhired.com/search?q=product+owner&l=remote",  # SimplyHired remote filter
+    "https://www.simplyhired.com/search?q=product+manager&l=remote",  # SimplyHired remote filter
+    "https://www.jobspresso.co/remote-jobs/product/",  # remote-only board
+    "https://www.jobspresso.co/remote-jobs/business/",  # BA/SA flavor
+    "https://www.jobspresso.co/remote-jobs/management/",  # PM flavor
+    "https://www.jobspresso.co/remote-jobs/leadership/",  # senior PO/PM flavor
+    "https://www.remotepm.com/jobs",  # remote-only board
+    "https://www.remotepm.com/jobs?search=product+manager",  # PM flavor
+    "https://www.remotepm.com/jobs?search=business+analyst",  # BA/SA flavor
+    "https://www.remotepm.com/jobs?search=product+owner",  # PO flavor
+    "https://www.remotepm.com/jobs?search=product+lead",  # senior PO/PM flavor
+    "https://www.producthunt.com/jobs?location=remote",  # remote-friendly board
+    "https://www.producthunt.com/jobs?location=united%20states",  # US-friendly board
+    "https://www.producthunt.com/jobs?location=canada",  # CA-friendly board
+    "https://www.producthunt.com/jobs?location=remote&keywords=product+owner",  # PO flavor
+    "https://www.producthunt.com/jobs?location=remote&keywords=product+manager",  # PM flavor
+    "https://www.producthunt.com/jobs?location=remote&keywords=business+analyst",  # BA/SA flavor
+    "https://www.producthunt.com/jobs?location=remote&keywords=product+lead",  # senior PO/PM flavor
+    "https://www.producthunt.com/jobs?location=united%20states&keywords=product+owner",  # PO flavor
+    "https://www.producthunt.com/jobs?location=united%20states&keywords=product+manager",  # PM flavor
+    "https://www.producthunt.com/jobs?location=united%20states&keywords=business+analyst",  # BA/SA flavor
+    "https://www.producthunt.com/jobs?location=united%20states&keywords=product+lead",  # senior PO/PM flavor
+    "https://www.producthunt.com/jobs?location=canada&keywords=product+owner",  # PO flavor
+    "https://www.producthunt.com/jobs?location=canada&keywords=product+manager",  # PM flavor
+    "https://www.producthunt.com/jobs?location=canada&keywords=business+analyst",  # BA/SA flavor
+    "https://www.producthunt.com/jobs?location=canada&keywords=product+lead",  # senior PO/PM flavor
+
+]
+
+
+STARTING_PAGES += [
+    "https://jobs.lever.co/",                                     # top-level; your filter will only click detail pages
+    "https://jobs.lever.co/airtable",                             # example Lever board
+    "https://jobs.lever.co/figma",                                # example Lever board
+    "https://jobs.lever.co/notion",                               # example Lever board
+    "https://jobs.lever.co/zapier",                               # example Lever board
+    #"https://boards.greenhouse.io/embed/job_board?for=fastly",    # will be skipped unless a company is appended       #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=airtable",   # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=asana",      # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=doordash",   # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=figma",      # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=notion",     # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=salesloft",  # example Greenhouse board                          #Paused for now 20251008
+    #"https://boards.greenhouse.io/embed/job_board?for=zapier",     # example Greenhouse board                          #Paused for now 20251008
+    #"https://www.ashbyhq.com/careers",                            # top-level; safe with filter                        #Paused for now 20251008
+    #"https://jobs.ashbyhq.com/airtable",                          # example Ashby board                                #Paused for now 20251008
+    #"https://jobs.ashbyhq.com/figma",                             # example Ashby board                                #Paused for now 20251008
+    #"https://jobs.ashbyhq.com/notion",                            # example Ashby board                                #Paused for now 20251008
+    #"https://jobs.ashbyhq.com/zapier",                            # example Ashby board                                #Paused for now 20251008
+]
+
+
+STARTING_PAGES += [
+    # Startup-heavy boards
+    "https://startup.jobs/product",                                     # requests
+    "https://www.ycombinator.com/jobs?role=product+owner&remote=true",  # Playwright
+    "https://www.ycombinator.com/jobs?role=product&remote=true",        # Playwright
+    "https://www.ycombinator.com/jobs?role=analyst&remote=true",        # BA/SA flavor
+    "https://www.ycombinator.com/jobs?role=pm&remote=true",             # PM flavor
+    "https://www.ycombinator.com/jobs?role=manager&remote=true",        # PM flavor
+    #"https://www.ycombinator.com/jobs?role=owner&remote=true",         # PO flavor              Putting a pause on this site for now
+    "https://www.ycombinator.com/jobs?role=lead&remote=true",           # senior PO/PM flavor
+    #"https://www.ycombinator.com/jobs?role=director&remote=true",      # senior PO/PM flavor   Putting a pause on this site for now
+    #"https://www.ycombinator.com/jobs?role=head&remote=true",          # senior PO/PM flavor   Putting a pause on this site for now
+    #"https://www.ycombinator.com/jobs?role=vp&remote=true",            # senior PO/PM flavor   Putting a pause on this site for now
+    #"https://www.ycombinator.com/jobs?role=chief&remote=true",         # senior PO/PM flavor   Putting a pause on this site for now
+]
+
+
+# Company careers pages to scan for ATS links (small-ish, remote-friendly targets)
+CAREER_PAGES = [
+    # Security / compliance
+    "https://www.vanta.com/company/careers",
+    "https://drata.com/about/careers",
+    "https://secureframe.com/careers",
+    "https://tailscale.com/careers",
+    #"https://goteleport.com/careers/#jobs",                 #Forbidden 20251008
+    "https://www.strongdm.com/careers",
+    "https://www.1password.com/careers",
+    "https://www.crowdstrike.com/careers/",
+    "https://www.knowbe4.com/careers",
+    "https://www.knowbe4.com/careers#open-positions",
+    "https://www.knowbe4.com/careers#job-listings",
+    
+
+    # Fintech
+    "https://www.lithic.com/about/fintech-careers",
+    "https://mercury.com/jobs",
+    "https://www.moderntreasury.com/careers",
+    "https://www.moderntreasury.com/careers#open-positions",
+    "https://www.fundbox.com/careers",
+    "https://www.fundbox.com/careers#open-positions",
+    "https://www.fundbox.com/careers#job-listings",
+
+
+    # Health tech
+    "https://zushealth.com/team/careers",
+    #"https://www.cerner.com/careers",                              #Never seem to work
+    #"https://www.cerner.com/careers#open-positions",               #Never seem to work
+    #"https://www.cerner.com/careers#job-listings",                 #Never seem to work
+    "https://www.athenahealth.com/careers",
+    "https://www.getgarner.com/careers",
+    "https://www.getgarner.com/careers#open-positions",
+    "https://www.getgarner.com/careers#job-listings",
+]

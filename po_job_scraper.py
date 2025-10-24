@@ -261,6 +261,46 @@ from pathlib import Path
 # --- Workday (generic) --------------------------------------------------------
 import json
 
+from urllib.parse import urlparse, parse_qs, urljoin
+
+def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
+    """
+    Convert a Workday listing URL (…myworkdayjobs.com/<tenant>/<site>?q=…)
+    into real job detail links by querying the cxs JSON API.
+    """
+    p = urlparse(listing_url)
+    host = p.netloc
+    # path: /<tenant>/<site> or /recruiting/<tenant>/<site>
+    parts = [s for s in p.path.split("/") if s]
+    if not parts:
+        return []
+    # Workday has both styles; pick the last two segments as tenant/site safely
+    if parts[0] == "recruiting" and len(parts) >= 3:
+        tenant, site = parts[1], parts[2]
+    else:
+        tenant = parts[0]
+        site   = parts[1] if len(parts) > 1 else tenant
+
+    qs = parse_qs(p.query or "")
+    search = " ".join(qs.get("q", [])).strip() or ""
+
+    jobs = _wd_jobs(host, tenant, search, limit=50, max_results=max_results)
+    out: list[str] = []
+    for j in jobs:
+        # Workday returns either `externalPath` or `externalUrl` depending on tenant
+        ext = j.get("externalUrl") or j.get("externalPath") or j.get("url")
+        if not ext:
+            continue
+        # externalPath is like "/en-US/ascensuscareers/details/<slug>/<id>"
+        url = urljoin(f"https://{host}/", ext)
+        out.append(url)
+    # de-dupe
+    seen, deduped = set(), []
+    for u in out:
+        if u not in seen:
+            seen.add(u)
+            deduped.append(u)
+    return deduped
 
 
 def _wd_jobs(host: str, tenant: str, search: str, limit: int = 50, max_results: int = 250) -> list[dict]:
@@ -729,6 +769,10 @@ PLAYWRIGHT_DOMAINS = {
     "wellfound.com", "www.wellfound.com",
     "welcometothejungle.com", "www.welcometothejungle.com", 
     "app.welcometothejungle.com", "us.welcometothejungle.com"
+    "workingnomads.com", "www.workingnomads.com",
+    # JS-heavy boards that need Playwright
+    "myworkdayjobs.com", "wd1.myworkdayjobs.com", "myworkdaysite.com", 
+    "wd5.myworkdaysite.com","ashbyhq.com", "jobs.ashbyhq.com",
 }
 
 
@@ -809,7 +853,8 @@ STARTING_PAGES = [
     "https://remotive.com/remote-jobs/product?locations=Canada%2BUSA",
     "https://weworkremotely.com/categories/remote-product-jobs",
     "https://nodesk.co/remote-jobs/product/",
-    "https://workingnomads.com/jobs?query=product",
+    "https://www.workingnomads.com/jobs?tag=product",
+    "https://www.workingnomads.com/remote-product-jobs",
     "https://www.simplyhired.com/search?q=product+owner&l=remote",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Product%20Development",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Information%20Technology",
@@ -817,15 +862,25 @@ STARTING_PAGES = [
 
     # University of Washington (Workday) — focused keyword searches
     # These are narrow enough that you won’t fetch all 565 jobs.
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=product%20manager",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=product%20owner",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=business%20analyst",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=systems%20analyst",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=business%20systems%20analyst",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=scrum%20master",
-    "https://wd5.myworkdaysite.com/en-US/uw/search?q=release%20train%20engineer",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=product%20manager",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=product%20owner",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=business%20analyst",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=systems%20analyst",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=business%20systems%20analyst",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=scrum%20master",
+    "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=release%20train%20engineer",
 
 
+    # Ascensus (Workday tenant) — focused role searches
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20manager",
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20owner",
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=business%20analyst",
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=systems%20analyst",
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=scrum%20master",
+    # optional: release train engineer / RTE
+    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers/search?q=release%20train%20engineer",
+
+    "https://jobs.ashbyhq.com/zapier?departmentId=9276c6c4-a022-4990-9cf6-5c6ace283aff",
 
     # The Muse works well
     "https://www.themuse.com/jobs?categories=product&location=remote",
@@ -835,7 +890,7 @@ STARTING_PAGES = [
     "https://www.ycombinator.com/jobs/role/product-manager",
 
     # Remote OK
-    "https://remoteok.com/remote-product-manager-jobs",
+    "https://remoteok.com/?location=CA,US,region_NA",
 
     # Built In (JS-heavy → Playwright)
     "https://www.builtin.com/jobs?search=product%20manager&remote=true",
@@ -848,7 +903,7 @@ STARTING_PAGES = [
 
 
     # Wellfound (AngelList Talent) (JS-heavy → Playwright)
-    "https://wellfound.com/role/product-manager?remote=true",
+    "https://wellfound.com/role/r/product-manager",
 
     # Welcome to the Jungle (JS-heavy → Playwright)
     "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true",
@@ -1128,6 +1183,11 @@ def career_board_name(url: str) -> str:
         "bulitin.com": "Built In",
         "www.builtin.com": "Built In",
         "welcometothejungle.com": "Welcome to the Jungle",
+        # in career_board_name(url) or similar mapping
+        "ascensushr.wd1.myworkdayjobs.com": "Ascensus (Workday)",
+        "myworkdayjobs.com": "Workday",
+        "myworkdaysite.com": "Workday",
+
     }
     for k, v in KNOWN.items():
         if host.endswith(k):
@@ -1141,10 +1201,22 @@ def career_board_name(url: str) -> str:
 def random_delay(base_min=MIN_DELAY, base_max=MAX_DELAY):
     time.sleep(random.uniform(base_min, base_max))
 
-def is_job_detail_url(u):
+def is_job_detail_url(u: str) -> bool:
     p = urlparse(u)
     host = p.netloc.lower()
-    path = p.path.lower()
+    path = p.path
+    q = p.query.lower()
+
+    # Workday (both tenants)
+    if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
+        # real jobs live under /job/ or /details/; listing pages use /search
+        return ("/job/" in path or "/details/" in path) and "/search" not in path
+
+    # Ashby
+    if host.endswith("ashbyhq.com") or host.endswith("jobs.ashbyhq.com"):
+        # detail pages look like /{company}/{job-slug-or-id}
+        # examples: /zapier/senior-product-manager-abc123
+        return bool(re.match(r"^/[^/]+/[^/]+/?$", path)) and "departmentid=" not in q
 
      # Glassdoor
     if "glassdoor.com" in host:
@@ -1171,7 +1243,8 @@ def is_job_detail_url(u):
 
     # Working Nomads
     if "workingnomads.com" in host:
-        return "/jobs/" in path and path.count("/") >= 3 and "category" not in path
+            # old: return "/jobs/" in path and path.count("/") >= 3 and "category" not in path
+        return "/jobs/" in path and path.count("/") >= 2 and "category" not in path
 
     # edtech
     if "edtech.com" in host:
@@ -1247,30 +1320,24 @@ def normalize_text(node):
         return ""
     return " ".join(node.get_text(" ", strip=True).split())
 
-def find_job_links(listing_html, base_url):
+def find_job_links(listing_html: str, base_url: str) -> list[str]:
     soup = BeautifulSoup(listing_html, "html.parser")
     anchors = soup.find_all("a", href=True)
-    links = set()
+    links: set[str] = set()
+
     base_host = urlparse(base_url).netloc.lower()
-    # Optional per-domain cap to avoid huge pulls from a single Workday tenant
-    cap = 180 if "myworkdaysite.com" in base_host else None
-    
-    if base_host in BLOCKED_DOMAINS:
-        return []
+    cap = 120 if ("ashbyhq.com" in base_host or "myworkdayjobs.com" in base_host or "myworkdaysite.com" in base_host) else None
 
     for a in anchors:
-        full = urljoin(base_url, a["href"])
-        host = urlparse(full).netloc.lower()
-        if host in BLOCKED_DOMAINS:
-            continue
-        if should_skip_url(full):
-            continue
+        href = a["href"].strip()
+        full = urljoin(base_url, href)
         if is_job_detail_url(full):
             links.add(full)
-        if cap and len(links) >= cap:
+            if cap and sum(1 for L in links if base_host in L) >= cap:
                 break
+
     return list(links)
-    
+
 
 def _clean_bits(bits):
     out, seen = [], set()
@@ -1765,6 +1832,23 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
             page = context.new_page()
             page.goto(url, timeout=PW_GOTO_TIMEOUT, wait_until="domcontentloaded")
             
+            try:
+                from urllib.parse import urlparse
+                h = urlparse(url).netloc.lower()
+
+                if h.endswith("jobs.ashbyhq.com"):
+                    # Wait until job cards/links render (Ashby uses <a href="/<org>/<slug>">)
+                    page.wait_for_selector("a[href^='/" + urlparse(url).path.strip('/').split('/')[0] + "/'], a[href*='/jobs/']", timeout=PW_WAIT_TIMEOUT*2)
+                    # Gentle scroll to trigger lazy loads
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(800)
+
+                elif h.endswith("myworkdayjobs.com") or h.endswith("myworkdaysite.com"):
+                    # Workday often needs a little extra settle time
+                    page.wait_for_timeout(1200)
+            except Exception:
+                pass
+
                         # Auto-scroll for EdTech listing pages (infinite scroll)
             try:
                 from urllib.parse import urlparse
@@ -2906,13 +2990,12 @@ def _wrap_lines(s: str, width: int = 90) -> list[str]:
     rest  = [("   " + ln) for ln in lines[1:]]  # 3-space indent after first
     return first + rest
 
-def _salary_box(amount: int | None) -> str:
+def _salary_box(label: str, amount: int | None, plus: bool = False) -> str:
     if not amount:
         return ""
-    # format and right-justify against a fixed target width of "$100,000"
-    amt = f"${amount:,.0f}"
-    padded = amt.rjust(len("$100,000"))   # 9 chars -> aligns $90,000 with $100,000
-    return _box(f"💲 NEAR MIN  {padded}")
+    amt = f"${amount:,.0f}{'+' if plus else ''}"
+    # right-justify against a fixed target width like "$100,000+"
+    return _box(f"💲 {label:<8} {amt.rjust(len('$100,000+'))}")
 
 
 
@@ -2963,12 +3046,17 @@ def log_event(
             print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
 
 
-        # Salary badge: prefers near-min when present, else uses detected max
-        near = _to_int((job or {}).get("Salary Near Min"))
-        det  = _to_int((job or {}).get("Salary Max Detected"))
-        badge_line = _salary_box(near or det)
-        if badge_line:
-            print(f"{color}{badge_line}{RESET}")
+        # Salary badge(s)
+        status = (job or {}).get("Salary Status", "")
+        near   = _to_int((job or {}).get("Salary Near Min"))
+        det    = _to_int((job or {}).get("Salary Max Detected"))
+
+        if status == "near_min" and near:
+            print(f"{color}{_salary_box('NEAR MIN', near)}{RESET}")
+        elif status == "at_or_above" and det:
+            # optional: show a neutral SALARY line when it meets/beat target
+            print(f"{color}{_salary_box('SALARY', det, plus=True)}{RESET}")
+        # else: no salary line for low/below_floor/unknown
 
         # End-cap: a clean visual break
         print(f"{color}{_box('✅ KEEP')}.{RESET}")
@@ -3060,6 +3148,17 @@ def main():
             continue
 
         host = urlparse(listing_url).netloc
+
+        # Workday listing pages → use the JSON API instead of DOM links
+        if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
+            links = workday_links_from_listing(listing_url)
+        else:
+            # existing branches...
+            if "simplyhired.com/search" in listing_url:
+                links = collect_simplyhired_links(listing_url)
+            else:
+                links = find_job_links(html, listing_url)
+
 
         # HubSpot pagination (page=1..N)
         if "hubspot.com" in host and "/careers/jobs" in listing_url:
@@ -3155,12 +3254,45 @@ def main():
             progress(j, len(all_detail_links), kept_count, skip_count)
             continue
 
-        # Salary evaluation based on description text
-        annual_max, salary_out_of_bounds = eval_salary(details.get("description_snippet", ""))
+        # --- Ascensus (Workday) post-filter: only keep Product/BA/Scrum-family roles ---
+        host = urlparse(link).netloc.lower()
+        if "ascensushr.wd1.myworkdayjobs.com" in host:
+            # Reuse your unified role test (titles + responsibility signals)
+            if not _is_target_role(details):
+                skip_row = _normalize_skip_defaults({
+                    "Job URL": link,
+                    "Title": _title_for_log(details, link),
+                    "Company": details.get("Company", ""),
+                    "Career Board": career_board_name(link),
+                    "Valid Through": details.get("Valid Through", ""),
+                    "Reason Skipped": "Not target role (Ascensus filter)",
+                })
+                _record_skip(skip_row)
+                log_event(
+                    "SKIP",
+                    _title_for_log(skip_row, link),
+                    right=skip_row["Reason Skipped"],
+                    job=skip_row,
+                )
+
+        # --- Salary: detect and label (goes just before keep_row = {...}) ---
+        # Build a single text blob to scan for pay figures
+        _text_for_salary = " ".join([
+            details.get("description_snippet", ""),
+            details.get("Location Chips", ""),
+            details.get("Location", "")
+        ])
+
+        # --- Salary evaluation based on description text ---
+        annual_max, salary_out_of_bounds = eval_salary(details.get("description_snippet", "") or "")
         status, badge = _salary_status(annual_max, None, None)
+
         keep_row_extra = {
-            "Salary Status": status,
-            "Salary Note": badge,
+            "Salary Status": status,                        # at_or_above | near_min | low | below_floor | unknown
+            "Salary Note": badge,                           # e.g., "$105,000"
+            "Salary Max Detected": annual_max or "",
+            "Salary Rule": ("out_of_bounds" if (salary_out_of_bounds or status == "below_floor") else "in_range_or_missing"),
+            "Salary Near Min": (annual_max if status == "near_min" else ""),
         }
 
         # Basic remote/US rules (lightweight; you can expand later)
@@ -3175,24 +3307,22 @@ def main():
             "Reason": "",
             "Date Scraped": now_ts(),
             "Title": normalize_title(details.get("Title", "")),
-            "Career Board": details.get("career_board",""),
             "Company": details.get("Company", ""),
+            "Career Board": details.get("career_board", ""),
             "Location": details.get("Location", ""),
             "Posted": details.get("Posted", ""),
             "Posting Date": details.get("posting_date", ""),
-            "Valid Through": details.get("valid_through",""),
+            "Valid Through": details.get("valid_through", ""),
             "Job URL": details.get("job_url", link),
             "Apply URL": details.get("apply_url", link),
             "Description Snippet": details.get("description_snippet", ""),
-            "WA Rule": wa_rule,
-            "Remote Rule": remote_rule,
-            "US Rule": us_rule,
-            "Salary Max Detected": annual_max if annual_max is not None else "",
-            "Salary Rule": ("out_of_bounds" if salary_out_of_bounds else "in_range_or_missing"),
-            "Salary Est. (Low-High)": "",   # keep placeholder until range parsing is added
+            "WA Rule": "default",
+            "Remote Rule": details.get("is_remote_flag", "unknown_or_onsite"),
+            "US Rule": "default",
             "Location Chips": details.get("location_chips", ""),
             "Applicant Regions": details.get("applicant_regions", ""),
         }
+        keep_row.update(keep_row_extra)  # <-- bring in Salary Status/Note/Max/Rule/Near Min
 
         # --- PUBLIC sanity pass (light network ping + heuristics) ---
         vis2, score2, mark2 = _public_sanity_checks(keep_row)
@@ -3241,9 +3371,11 @@ def main():
                 "WA Rule": wa_rule,
                 "Remote Rule": remote_rule,
                 "US Rule": us_rule,
-                "Salary Max Detected": annual_max if annual_max is not None else "",
-                "Salary Rule": ("out_of_bounds" if salary_out_of_bounds else "in_range_or_missing"),
-                "Salary Est. (Low-High)": "",   # keep placeholder until range parsing is added
+                "Salary Max Detected": keep_row_extra["Salary Max Detected"],
+                "Salary Rule":         keep_row_extra["Salary Rule"],
+                "Salary Status":       keep_row_extra["Salary Status"],
+                "Salary Note":         keep_row_extra["Salary Note"],
+                "Salary Near Min":     keep_row_extra["Salary Near Min"],
                 "Location Chips": keep_row["Location Chips"],
                 "Applicant Regions": keep_row["Applicant Regions"],
             })
@@ -3309,25 +3441,27 @@ def main():
                 # Hard SKIP: salary too low or unknown below soft floor
                 reason = f"Salary below floor (max={detected_max:,.0f})" if detected_max else "Salary below floor (unknown max)"
                 skip_row = _normalize_skip_defaults({
-                    "Job URL":              keep_row["Job URL"],
-                    "Title":                keep_row["Title"],
-                    "Company":              keep_row["Company"],
-                    "Career Board":         keep_row["Career Board"],
-                    "Location":             keep_row["Location"],
-                    "Posted":               keep_row["Posted"],
-                    "Posting Date":         keep_row["Posting Date"],
-                    "Valid Through":        keep_row.get("Valid Through",""),
-                    "Reason Skipped":       reason,
-                    "Apply URL":            keep_row["Apply URL"],
-                    "Description Snippet":  keep_row["Description Snippet"],
-                    "WA Rule":              wa_rule,
-                    "Remote Rule":          remote_rule,
-                    "US Rule":              us_rule,
-                    "Salary Max Detected": annual_max if annual_max is not None else "",
-                    "Salary Rule": ("out_of_bounds" if salary_out_of_bounds else "in_range_or_missing"),
-                    "Salary Est. (Low-High)": "",   # keep placeholder until range parsing is added
-                    "Location Chips":       keep_row["Location Chips"],
-                    "Applicant Regions":    keep_row["Applicant Regions"],
+                "Job URL": keep_row["Job URL"],
+                "Title": keep_row["Title"],
+                "Company": keep_row["Company"],
+                "Career Board": keep_row["Career Board"],
+                "Location": keep_row["Location"],
+                "Posted": keep_row["Posted"],
+                "Posting Date": keep_row["Posting Date"],
+                "Valid Through": keep_row["Valid Through"],
+                "Reason Skipped": rule_reason,
+                "Apply URL": keep_row["Apply URL"],
+                "Description Snippet": keep_row["Description Snippet"],
+                "WA Rule": wa_rule,
+                "Remote Rule": remote_rule,
+                "US Rule": us_rule,
+                "Salary Max Detected": keep_row_extra["Salary Max Detected"],
+                "Salary Rule":         keep_row_extra["Salary Rule"],
+                "Salary Status":       keep_row_extra["Salary Status"],
+                "Salary Note":         keep_row_extra["Salary Note"],
+                "Salary Near Min":     keep_row_extra["Salary Near Min"],
+                "Location Chips": keep_row["Location Chips"],
+                "Applicant Regions": keep_row["Applicant Regions"],
                 })
                 skip_row["Reason Skipped"] = reason
 

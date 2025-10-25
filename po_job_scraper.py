@@ -395,6 +395,7 @@ def parse_hubspot_list_page(html: str, base: str) -> list[str]:
 
         # Skip generic listing CTAs
         if "all open positions" in txt:
+            
             continue
 
         # Accept only real job details like /careers/jobs/<slug or id>
@@ -433,52 +434,67 @@ def parse_hubspot_detail(html: str, job_url: str) -> dict:
     if not title and soup.title and soup.title.string:
         title = soup.title.string.strip()
 
-    # Company: hardcode "HubSpot"
     company = "HubSpot"
 
     # Location: try meta/labels or visible labels
-    # HubSpot varies; gather a reasonable guess
     loc = ""
     for sel in [
-        '[data-test="job-location"]',
-        'span[class*="location"]',
-        'p[class*="location"]',
-        'li[class*="location"]'
+        "[data-test='job-location']",
+        ".job-location",
+        "meta[property='og:locale']",
     ]:
-        el = soup.select_one(sel)
-        if el and el.get_text(strip=True):
-            loc = el.get_text(strip=True)
+        node = soup.select_one(sel)
+        if not node:
+            continue
+        txt = node.get("content") if node.name == "meta" else node.get_text(" ", strip=True)
+        if txt:
+            loc = txt.strip()
             break
 
-    # Description snippet
-    # grab first paragraph-ish text (strip boilerplate if needed)
+    # Description snippet (lightweight)
     desc = ""
-    main = soup.select_one("main") or soup
-    paras = [p.get_text(" ", strip=True) for p in main.select("p")]
-    desc = " ".join(paras[:3])[:600] if paras else ""
+    md = soup.find("meta", attrs={"name": "description"})
+    if md and md.get("content"):
+        desc = md["content"].strip()
+    if not desc:
+        p = soup.find("p")
+        if p:
+            desc = p.get_text(" ", strip=True)[:300]
 
-    # Apply URL: any obvious external apply
+    # Apply URL: look for outbound ATS links, else stick with job_url
     apply_url = ""
-    for a in soup.select('a[href]'):
-        href = a["href"]
-        if ("greenhouse.io" in href or "lever.co" in href or
-            "workday" in href or "smartrecruiters.com" in href):
+    for a in soup.select("a[href]"):
+        href = a.get("href", "")
+        if any(x in href for x in ("greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com")):
             apply_url = urljoin(job_url, href)
             break
-
-    # fallback: if no external link, use job_url as apply
     if not apply_url:
         apply_url = job_url
 
+    # Follow once if HubSpot page is a generic hub
+    if title and title.strip().lower() == "all open positions" and apply_url and apply_url != job_url:
+        try:
+            html2 = get_html(apply_url)
+            if html2:
+                d2 = extract_job_details(html2, apply_url)
+                title = d2.get("Title") or title
+                company = d2.get("Company") or company
+                loc = d2.get("Location") or loc
+                job_url = apply_url
+        except Exception:
+            pass
+
+    # Return normalized detail dict
     return {
         "Title": title,
-        "Company": company,
-        "Location": loc,                        # was "location"
+        "Company": company or "HubSpot",
+        "Location": loc,
         "job_url": job_url,
         "apply_url": apply_url,
         "description_snippet": desc,
-        "career_board": "HubSpot (Public)"
+        "career_board": "HubSpot (Public)",
     }
+
 
 def collect_simplyhired_links(listing_url: str) -> list[str]:
     """Collect job detail links from a SimplyHired search listing."""
@@ -488,6 +504,7 @@ def collect_simplyhired_links(listing_url: str) -> list[str]:
     page_url = listing_url
     pages = 0
     while page_url and pages < MAX_PAGES_SIMPLYHIRED:
+        set_source_tag(listing_url)
         html = get_html(page_url)
         if not html:
             log_event("WARN", "", right=f"Failed to GET listing page: {page_url}")
@@ -748,6 +765,31 @@ def _detect_dead_post(domain: str, soup, raw_text: str) -> str:
         site = domain.replace("www.", "")
         return f"Posting closed or removed on {site}"
 
+def _enrich_salary_fields(d: dict) -> dict:
+    text = " ".join([
+        d.get("Description Snippet",""),
+        d.get("Title",""),
+        d.get("Company",""),
+    ])
+    max_detected = detect_salary_max(text)  # your existing parser
+    d["Salary Max Detected"] = max_detected if max_detected is not None else ""
+
+    # Optional: board estimates if you parse them elsewhere
+    est_low, est_high = d.get("Salary Est Low"), d.get("Salary Est High")
+    status, badge = _salary_status(max_detected, est_low, est_high)
+
+    d["Salary Status"] = status or ""
+    d["Salary Near Min"] = max_detected if status == "near_min" else ""
+    d["Salary Note"] = badge or ""
+    if est_low and est_high:
+        try:
+            d["Salary Est. (Low-High)"] = f"${int(est_low):,} - ${int(est_high):,}"
+        except Exception:
+            d["Salary Est. (Low-High)"] = ""
+    else:
+        d["Salary Est. (Low-High)"] = ""
+    return d
+
 
 import argparse
 parser = argparse.ArgumentParser()
@@ -768,7 +810,7 @@ PLAYWRIGHT_DOMAINS = {
     "builtin.com", "www.builtin.com",
     "wellfound.com", "www.wellfound.com",
     "welcometothejungle.com", "www.welcometothejungle.com", 
-    "app.welcometothejungle.com", "us.welcometothejungle.com"
+    "app.welcometothejungle.com", "us.welcometothejungle.com",
     "workingnomads.com", "www.workingnomads.com",
     # JS-heavy boards that need Playwright
     "myworkdayjobs.com", "wd1.myworkdayjobs.com", "myworkdaysite.com", 
@@ -1187,6 +1229,7 @@ def career_board_name(url: str) -> str:
         "ascensushr.wd1.myworkdayjobs.com": "Ascensus (Workday)",
         "myworkdayjobs.com": "Workday",
         "myworkdaysite.com": "Workday",
+        "edtech.com": "EdTech",
 
     }
     for k, v in KNOWN.items():
@@ -1206,11 +1249,6 @@ def is_job_detail_url(u: str) -> bool:
     host = p.netloc.lower()
     path = p.path
     q = p.query.lower()
-
-    # Workday (both tenants)
-    if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
-        # real jobs live under /job/ or /details/; listing pages use /search
-        return ("/job/" in path or "/details/" in path) and "/search" not in path
 
     # Ashby
     if host.endswith("ashbyhq.com") or host.endswith("jobs.ashbyhq.com"):
@@ -1546,7 +1584,7 @@ def extract_job_details(job_html, job_url):
             "Remote Rule": "unknown_or_onsite",
             "US Rule": "default",
         }
-    Title = ""
+    
     company = ""
     location = ""
     posted = ""
@@ -1555,6 +1593,127 @@ def extract_job_details(job_html, job_url):
 
 
     host = urlparse(job_url).netloc.lower()
+
+    # --- Welcome to the Jungle: extract salary lines after expansion ---
+    if "welcometothejungle.com" in host:
+        # Typical label: "Salary Range: £150,000–£200,000"
+        expanded_text = soup.get_text("\n", strip=True)
+
+        # 1) Look for explicit "Salary Range:" label
+        m = re.search(r"Salary\s*Range\s*:\s*([£$€]\s?[\d,\.Kk]+)\s*[–-]\s*([£$€]?\s?[\d,\.Kk]+)", expanded_text, re.I)
+        if not m:
+            # 2) Broader catch within a Compensation section
+            # e.g., "Compensation and Benefits ... Salary Range: £150,000 - £200,000"
+            comp_block = ""
+            comp_hdr = soup.find(string=re.compile(r"Compensation|Benefits|Salary", re.I))
+            if comp_hdr:
+                # take the parent block text to increase precision
+                comp_block = comp_hdr.parent.get_text(" ", strip=True) if hasattr(comp_hdr, "parent") else ""
+            search_area = comp_block or expanded_text
+            m = re.search(r"(?:Salary|Compensation)[^:\n]*:\s*([£$€]\s?[\d,\.Kk]+)\s*[–-]\s*([£$€]?\s?[\d,\.Kk]+)", search_area, re.I)
+
+        def _to_number(txt: str) -> float | None:
+            if not txt:
+                return None
+            t = txt.replace(",", "").strip()
+            # Handle symbols and K suffix
+            t = re.sub(r"[£$€\s]", "", t)
+            k = 1000 if re.search(r"[Kk]$", t) else 1
+            t = re.sub(r"[Kk]$", "", t)
+            try:
+                return float(t) * k
+            except Exception:
+                return None
+
+        if m:
+            low_txt, high_txt = m.group(1), m.group(2)
+            est_low = _to_number(low_txt)
+            est_high = _to_number(high_txt)
+            if est_low and est_high:
+                salary_est_low = int(est_low)
+                salary_est_high = int(est_high)
+                salary_est_pretty = f"{low_txt.strip()} - {high_txt.strip()}"
+                salary_source = "welcome_to_the_jungle"
+
+
+        # --- Edtech.com: capture "Remote · US" style header chips and set remote ---
+    try:
+        if "edtech.com" in host:
+            # Look near the header/summary cards for compact chips
+            header_nodes = soup.select(
+                "header, .job-summary, .summary, .job-info, .job-overview, .sticky-card, .card"
+            )
+            header_text = " ".join(
+                [n.get_text(" ", strip=True) for n in header_nodes if n and n.get_text(strip=True)]
+            )[:1200]
+
+            # Collect simple geo chips for later display preference
+            chips = []
+            for token in re.findall(r"(Remote|US|United States|Canada|North America|Europe|EU|EMEA|UK)", header_text, flags=re.I):
+                chips.append(token)
+
+            # Flip remote when the header shows it explicitly
+            if re.search(r"\bremote\b", header_text, flags=re.I):
+                is_remote = True
+
+            # Merge into location_chips string if the variable exists, otherwise start it
+            try:
+                existing = [p.strip() for p in (location_chips or "").split("|") if p.strip()]
+            except NameError:
+                existing = []
+            merged = sorted(set(existing + chips), key=str.lower)
+            location_chips = "|".join(merged) if merged else (locals().get("location_chips") or "")
+
+            # Prefer a nicer display location if chips include a region
+            ld_for_loc = {"locations": [c for c in merged if c.lower() not in ("remote", "global", "anywhere")]}
+            location = best_location_for_display(ld_for_loc, location_chips, location)
+    except Exception:
+        pass
+
+    # --- JSON-LD fallback: some pages declare telecommute explicitly ---
+    try:
+        for tag in soup.find_all("script", type="application/ld+json"):
+            import json
+            data = json.loads(tag.string or "{}")
+            nodes = data.get("@graph", []) if isinstance(data, dict) else []
+            candidates = [data] + (nodes if isinstance(nodes, list) else [])
+            for node in candidates:
+                if not isinstance(node, dict):
+                    continue
+                if node.get("@type") in ("JobPosting", "Posting", "Vacancy"):
+                    # You already parse validThrough above; augment with remote signal
+                    jlt = (node.get("jobLocationType") or "").upper()
+                    if "TELECOMMUTE" in jlt:
+                        is_remote = True
+                    # also pick region-ish chips from LD if present
+                    locs = node.get("jobLocation") or node.get("applicantLocationRequirements") or []
+                    if isinstance(locs, dict):
+                        locs = [locs]
+                    for loc in locs:
+                        name = (loc.get("address", {}) or {}).get("addressCountry") or loc.get("name")
+                        if name:
+                            try:
+                                existing = [p.strip() for p in (location_chips or "").split("|") if p.strip()]
+                            except NameError:
+                                existing = []
+                            if name not in existing:
+                                existing.append(name)
+                            location_chips = "|".join(existing)
+    except Exception:
+        pass
+
+
+    if not company:
+        if "weworkremotely.com" in host:
+            node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
+            if node: company = node.get_text(" ", strip=True)
+        elif "builtin.com" in host:
+            node = soup.select_one("[data-qa='company-name'], .job-details__company, a[href*='/company/']")
+            if node: company = node.get_text(" ", strip=True)
+        elif host.endswith("nodesk.co"):
+            node = soup.select_one("h1 + p a, .company a, .company")
+            if node: company = node.get_text(" ", strip=True)
+
 
     # Add this near the top of extract_job_details after host = ...
     if "greenhouse.io" in host or "job-boards.greenhouse.io" in host:
@@ -1723,6 +1882,16 @@ def extract_job_details(job_html, job_url):
     is_remote = bool(REMOTE_BADGE.search(location_chips) or REMOTE_BADGE.search(text_all) or ld_remote)
     if is_hybrid or is_onsite:
         is_remote = False
+    
+    host_s = urlparse(job_url).netloc.replace("www.", "").lower()
+    if host_s in REMOTE_BOARDS and not is_hybrid and not is_onsite:
+        is_remote = True
+
+    remote_rule = (
+        "board_remote" if (host_s in REMOTE_BOARDS and is_remote)
+        else ("hybrid" if is_hybrid else ("onsite" if is_onsite else "unknown_or_onsite"))
+    )
+
 
     display_location = best_location_for_display(ld, location_chips, location)
 
@@ -1759,8 +1928,22 @@ def extract_job_details(job_html, job_url):
     # ➜ normalize the final title right before returning
     Title = normalize_title(Title)
 
+    # before returning, add salary estimates if parsed above
+    if 'salary_est_low' in locals() and 'salary_est_high' in locals():
+        extra_salary = {
+            "Salary Est Low": salary_est_low,
+            "Salary Est High": salary_est_high,
+            "Salary Est. (Low-High)": salary_est_pretty,
+            "Salary Source": salary_source,
+        }
+    else:
+        extra_salary = {}
+
+    # build the core dict (existing return values follow)
+
+
     # always return a dict
-    return {
+    out = {
         "Title": Title,
         "Company": company,
         "Location": location,
@@ -1769,14 +1952,16 @@ def extract_job_details(job_html, job_url):
         "description_snippet": desc_snippet,
         "job_url": job_url,
         "apply_url": apply_url,
-        # new audit fields
         "is_remote_flag": "remote" if is_remote else ("hybrid" if is_hybrid else "unknown_or_onsite"),
         "location_chips": location_chips,
         "applicant_regions": ", ".join(ld.get("applicant_regions", [])),
-        # ✅ add these:
         "valid_through": valid_through,
         "career_board": career_board_name(job_url),
     }
+
+    out.update(extra_salary)
+    return out
+
 
 # --- Auto-scroll helper for infinite-scroll listings (EdTech etc.) ---
 def _autoscroll_listing(page,
@@ -1838,14 +2023,60 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
 
                 if h.endswith("jobs.ashbyhq.com"):
                     # Wait until job cards/links render (Ashby uses <a href="/<org>/<slug>">)
-                    page.wait_for_selector("a[href^='/" + urlparse(url).path.strip('/').split('/')[0] + "/'], a[href*='/jobs/']", timeout=PW_WAIT_TIMEOUT*2)
+                    page.wait_for_selector("a[href*='/jobs/']:not([href$='/jobs'])", timeout=PW_WAIT_TIMEOUT*2)
                     # Gentle scroll to trigger lazy loads
-                    page.mouse.wheel(0, 2000)
+                    page.mouse.wheel(0, 2500)
                     page.wait_for_timeout(800)
 
                 elif h.endswith("myworkdayjobs.com") or h.endswith("myworkdaysite.com"):
                     # Workday often needs a little extra settle time
                     page.wait_for_timeout(1200)
+                
+                elif h.endswith("wellfound.com"):
+                    page.wait_for_selector("a[href^='/jobs/'], a[href^='/l/']", timeout=PW_WAIT_TIMEOUT*2)
+                    page.mouse.wheel(0, 3000)
+                    page.wait_for_timeout(800)
+                
+                elif h.endswith("welcometothejungle.com"):
+                    # Wait for the main content
+                    page.wait_for_selector("main, [data-testid='job-offer']", timeout=PW_WAIT_TIMEOUT*2)
+
+                    # Click any visible "View more" expanders so hidden sections load
+                    try:
+                        # Role-based locator first
+                        buttons = page.get_by_role("button", name=re.compile(r"view more", re.I))
+                        count = buttons.count()
+                        if count:
+                            for i in range(min(count, 4)):
+                                try:
+                                    buttons.nth(i).click()
+                                    page.wait_for_timeout(300)
+                                except Exception:
+                                    pass
+
+                        # Fallback to common WTTJ expanders
+                        for sel in [
+                            "button:has-text('View more')",
+                            "[role='button']:has-text('View more')",
+                            "button[data-testid='show-more']",
+                        ]:
+                            els = page.locator(sel)
+                            n = els.count()
+                            if n:
+                                for i in range(min(n, 4)):
+                                    try:
+                                        els.nth(i).click()
+                                        page.wait_for_timeout(300)
+                                    except Exception:
+                                        pass
+
+                        # Let the DOM settle
+                        page.wait_for_timeout(500)
+                    except Exception:
+                        pass
+
+
+
             except Exception:
                 pass
 
@@ -2980,15 +3211,11 @@ import textwrap
 
 
 def _wrap_lines(s: str, width: int = 90) -> list[str]:
-    """Wrap for console; indent continuation by 3 spaces."""
+    s = " ".join((s or "").split())
     if not s:
-        return []
-    lines = textwrap.wrap(s, width=width)
-    if not lines:
-        return []
-    first = lines[:1]
-    rest  = [("   " + ln) for ln in lines[1:]]  # 3-space indent after first
-    return first + rest
+        return [""]
+    return [s[i:i+width] for i in range(0, len(s), width)]
+
 
 def _salary_box(label: str, amount: int | None, plus: bool = False) -> str:
     if not amount:
@@ -3002,105 +3229,121 @@ def _salary_box(label: str, amount: int | None, plus: bool = False) -> str:
 # ============================================================
 
 
-def log_event(
-    level: str,
-    title: str,
-    right: str = "",
-    job: dict | None = None,
-    salary_near_min: int | None = None,
-):
-    # one-line progress uses carriage return; clear it before printing
+def log_event(level: str,
+              left: str = "",
+              right=None,
+              *,                # accept legacy keyword args safely
+              job=None,
+              url: str | None = None,
+              width: int = 90,
+              **_):
+    """
+    Single, wrapped logger for KEEP/SKIP/INFO/WARN.
+
+    left  = short message (title or reason)
+    right = URL string or a job dict (with optional keys:
+            "Job URL"/"job_url", "Company", "Career Board",
+            "Visibility Status", "Confidence Score", "Confidence Mark")
+
+    Accepts legacy call sites that pass job= and url=.
+    """
+    # Always clear the in-place progress line first so we never bunch lines
     _progress_clear_if_needed()
 
-    lvl = (level or "").upper().strip()
+    lvl   = (level or "").upper()
     color = LEVEL_COLOR.get(lvl, RESET)
+    tag   = _box(lvl)
 
-    # Resolve fields for KEEP
-    company      = (job or {}).get("Company", "") if job else ""
-    career_board = (job or {}).get("Career Board", "") if job else ""
-    desc_snippet = (job or {}).get("Description Snippet", "") if job else ""
-    score_str    = str((job or {}).get("Confidence Score", "") or "").strip()
+    # ---- normalize inputs ----
+    # Prefer job= as the right-side dict if given
+    if job is not None and right is None:
+        right = job
+
+    job_dict = right if isinstance(right, dict) else {}
+
+    # Derive URL in a tolerant order
+    url = (
+        (url or "")
+        or (right.strip() if isinstance(right, str) else "")
+        or job_dict.get("Job URL")
+        or job_dict.get("job_url")
+        or job_dict.get("Apply URL")
+        or ""
+    )
+
+    company      = job_dict.get("Company", "") if job_dict else ""
+    career_board = job_dict.get("Career Board", "") if job_dict else ""
+    vis          = job_dict.get("Visibility Status", "") if job_dict else ""
+    score        = job_dict.get("Confidence Score", "") if job_dict else ""
+    mark         = job_dict.get("Confidence Mark", "") if job_dict else ""
+
+    # Helper to wrap and print one block
+    def _emit(txt: str):
+        for ln in _wrap_lines(str(txt), width=width):
+            print(f"{color}{tag}.{ln}{RESET}")
+
+    # Build left text once
+    left_txt = " ".join((left or "").split())
+    if not left_txt and job_dict:
+        # Fall back to your existing title helper if no explicit left text
+        try:
+            left_txt = _title_for_log(job_dict, url or job_dict.get("Job URL", ""))
+        except Exception:
+            left_txt = job_dict.get("Title", "") or ""
+
+    # Simple levels: INFO, WARN, DONE, etc.
+    if lvl not in {"KEEP", "SKIP"}:
+        if left_txt:
+            _emit(left_txt)
+        if url:
+            for ln in _wrap_lines(url, width=width):
+                print(f"{color}{tag}.{DOT1}{ln}{RESET}")
+        return
+
+    # Detailed KEEP / SKIP layout
+    title = left_txt or job_dict.get("Title", "") or ""
 
     if lvl == "KEEP":
         print(f"{color}{_box('KEEP')}.{title}{RESET}")
 
-        # Optional wrapped note
-        if right:
-            for ln in _wrap_lines(right, width=90):
+        # If caller passed a non-dict right, show it as a note
+        if right and not isinstance(right, dict):
+            for ln in _wrap_lines(str(right), width=width):
                 print(f"{color}{_box('KEEP')}.{ln}{RESET}")
 
-        # Board · Company
-        if company or career_board:
-            print(f"{color}{_box('KEEP')}....{(career_board or '')}.....{(company or '')}{RESET}")
+        if career_board or company:
+            print(f"{color}{_box('KEEP')}....{career_board}.....{company}{RESET}")
 
-        # URL
-        url = (job or {}).get("Job URL") or (job or {}).get("job_url") or (job or {}).get("Apply URL")
         if url:
-            print(f"{color}{_box('KEEP')}....{url}{RESET}")
+            for ln in _wrap_lines(url, width=width):
+                print(f"{color}{_box('KEEP')}....{ln}{RESET}")
 
-        # Visibility + Confidence
-        vis   = (job or {}).get("Visibility Status") or ""
-        score = (job or {}).get("Confidence Score") or ""
-        mark  = (job or {}).get("Confidence Mark") or ""
         if vis or score or mark:
             print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
 
-
-        # Salary badge(s)
-        status = (job or {}).get("Salary Status", "")
-        near   = _to_int((job or {}).get("Salary Near Min"))
-        det    = _to_int((job or {}).get("Salary Max Detected"))
-
-        if status == "near_min" and near:
-            print(f"{color}{_salary_box('NEAR MIN', near)}{RESET}")
-        elif status == "at_or_above" and det:
-            # optional: show a neutral SALARY line when it meets/beat target
-            print(f"{color}{_salary_box('SALARY', det, plus=True)}{RESET}")
-        # else: no salary line for low/below_floor/unknown
-
-        # End-cap: a clean visual break
         print(f"{color}{_box('✅ KEEP')}.{RESET}")
         return
 
     if lvl == "SKIP":
         print(f"{color}{_box('SKIP')}.{title}{RESET}")
 
-        # Board · Company (match KEEP)
-        if company or career_board:
-            print(f"{color}{_box('SKIP')}....{(career_board or '')}.....{(company or '')}{RESET}")
-
-        # URL next
-        url = (job or {}).get("Job URL") or (job or {}).get("job_url") or (job or {}).get("Apply URL")
-        if url:
-            print(f"{color}{_box('SKIP')}....{url}{RESET}")
-
-        # Reason, wrapped, after the metadata
-        if right:
-            for ln in _wrap_lines((right or ""), width=90):
+        if right and not isinstance(right, dict):
+            for ln in _wrap_lines(str(right), width=width):
                 print(f"{color}{_box('SKIP')}.{ln}{RESET}")
 
-        # End-cap
+        if career_board or company:
+            print(f"{color}{_box('SKIP')}....{career_board}.....{company}{RESET}")
+
+        if url:
+            for ln in _wrap_lines(url, width=width):
+                print(f"{color}{_box('SKIP')}....{ln}{RESET}")
+
+        if vis or score or mark:
+            print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
+
         print(f"{color}{_box('🚫 SKIP')}.{RESET}")
         return
 
-
-    if lvl == "WARN":
-        for ln in _wrap_lines((right or ""), width=90):
-            print(f"{color}{_box('WARN')}.{ln}{RESET}")
-        return
-
-    # INFO / other
-    if right:
-        for ln in _wrap_lines(right, width=90):
-            print(f"{color}{_box(lvl)}.{ln}{RESET}")
-    else:
-        print(f"{color}{_box(lvl)}.{title}{RESET}")
-    
-import textwrap
-
-def _wrap_lines(text: str, width: int = 90) -> list[str]:
-    text = (text or "").replace("\n", " ").strip()
-    return textwrap.wrap(text, width=width, break_long_words=False, break_on_hyphens=True)
 
 def _rule(details: dict, key: str, default="default"):
     # allows both snake_case and Title Case with space
@@ -3140,6 +3383,7 @@ def main():
     for i, listing_url in enumerate(pages, start=1):
         t0 = time.time()
         log_info_processing(listing_url)
+        set_source_tag(listing_url)
         html = get_html(listing_url)
         if not html:
             log_event("WARN", "", right=f"Failed to fetch listing page: {listing_url}")
@@ -3149,9 +3393,17 @@ def main():
 
         host = urlparse(listing_url).netloc
 
-        # Workday listing pages → use the JSON API instead of DOM links
+        # Workday listing → detail expansion (Ascensus and similar tenants)
         if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
-            links = workday_links_from_listing(listing_url)
+            try:
+                wd_detail_links = workday_links_from_listing(listing_url, max_results=250)
+                if wd_detail_links:
+                    candidate_links.extend(wd_detail_links)
+                    # Skip generic HTML scraping for Workday listings; we already have details
+                    goto_parse = True  # or continue loop if your structure allows
+            except Exception as e:
+                log_event("WARN", f"Workday expansion failed: {e}", left="Workday", right=listing_url)
+
         else:
             # existing branches...
             if "simplyhired.com/search" in listing_url:
@@ -3171,6 +3423,7 @@ def main():
                     else (listing_url + ("&" if "?" in listing_url else "?") + f"page={page_num}")
                 )
                 log_info_processing(page_url)
+                set_source_tag(listing_url)
                 html = get_html(page_url)
                 links = parse_hubspot_list_page(html or "", base="https://www.hubspot.com")
                 if not links:
@@ -3204,6 +3457,7 @@ def main():
 
     # 2) Visit each job link and extract details
     for j, link in enumerate(all_detail_links, start=1):
+        set_source_tag(listing_url)
         html = get_html(link)
         
         if not html:
@@ -3226,6 +3480,8 @@ def main():
                 continue
         
         details = extract_job_details(html, link)
+        details = _enrich_salary_fields(details)  # sets Salary Near Min, Salary Status, Salary Note, Salary Est. (Low-High)
+
 
         # If extractor marked it as removed/archived, record a skip
         if details.get("Reason Skipped"):

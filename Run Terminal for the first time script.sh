@@ -16,4 +16,5 @@ python -m pip install requests requests-cache beautifulsoup4 python-dateutil \
 python -m playwright install chromium
 
 # 5) run your script
-python po_job_scraper.py
+python3 po_job_scraper.py
+

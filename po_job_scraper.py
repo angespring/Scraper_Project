@@ -265,36 +265,44 @@ from urllib.parse import urlparse, parse_qs, urljoin
 
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
-    Convert a Workday listing URL (…myworkdayjobs.com/<tenant>/<site>?q=…)
-    into real job detail links by querying the cxs JSON API.
+    Convert a Workday listing URL into real job detail links by querying the cxs JSON API.
+    Handles both myworkdaysite and myworkdayjobs patterns.
     """
     p = urlparse(listing_url)
     host = p.netloc
-    # path: /<tenant>/<site> or /recruiting/<tenant>/<site>
     parts = [s for s in p.path.split("/") if s]
-    if not parts:
-        return []
-    # Workday has both styles; pick the last two segments as tenant/site safely
-    if parts[0] == "recruiting" and len(parts) >= 3:
-        tenant, site = parts[1], parts[2]
-    else:
-        tenant = parts[0]
-        site   = parts[1] if len(parts) > 1 else tenant
-
     qs = parse_qs(p.query or "")
     search = " ".join(qs.get("q", [])).strip() or ""
 
+    # tenant rules:
+    # - /recruiting/<tenant>/<site> → take <tenant> from the path
+    # - <tenant>.wdX.myworkdayjobs.com/<site> → take subdomain as tenant
+    # - wdX.myworkdaysite.com/recruiting/<tenant>/<site> → still take from path
+    tenant = None
+    if parts and parts[0] == "recruiting" and len(parts) >= 3:
+        tenant = parts[1]
+    else:
+        sub = host.split(".")[0]
+        # sub like "wd5" is not a tenant; only use subdomain when it’s not wdN
+        if not re.fullmatch(r"wd\d+", sub, re.I):
+            tenant = sub
+        # fallback for rare /<tenant>/<site> on myworkdayjobs.com
+        if not tenant and len(parts) >= 2:
+            tenant = parts[0]
+
+    if not tenant:
+        return []
+
     jobs = _wd_jobs(host, tenant, search, limit=50, max_results=max_results)
+
     out: list[str] = []
     for j in jobs:
-        # Workday returns either `externalPath` or `externalUrl` depending on tenant
         ext = j.get("externalUrl") or j.get("externalPath") or j.get("url")
         if not ext:
             continue
-        # externalPath is like "/en-US/ascensuscareers/details/<slug>/<id>"
-        url = urljoin(f"https://{host}/", ext)
-        out.append(url)
-    # de-dupe
+        out.append(urljoin(f"https://{host}/", ext))
+
+    # de-dupe while preserving order
     seen, deduped = set(), []
     for u in out:
         if u not in seen:
@@ -306,11 +314,9 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
 def _wd_jobs(host: str, tenant: str, search: str, limit: int = 50, max_results: int = 250) -> list[dict]:
     """
     Query Workday cxs jobs endpoint and return raw job dicts.
-    host: e.g., "wd5.myworkdaysite.com"
-    tenant: e.g., "uw"  (UW is 'uw')
-    search: free-text (we include role + optional location terms)
+    Correct path is: /wday/cxs/{tenant}/jobs
     """
-    url = f"https://{host}/wday/cxs/{tenant}/{tenant}/jobs"
+    url = f"https://{host}/wday/cxs/{tenant}/jobs"
     out, offset = [], 0
     headers = {
         "Accept": "application/json, text/plain, */*",
@@ -323,7 +329,7 @@ def _wd_jobs(host: str, tenant: str, search: str, limit: int = 50, max_results: 
         if r.status_code != 200:
             break
         data = r.json() or {}
-        items = data.get("jobPostings", []) or data.get("jobPostings", [])
+        items = data.get("jobPostings", []) or []
         if not items:
             break
         out.extend(items)
@@ -331,6 +337,49 @@ def _wd_jobs(host: str, tenant: str, search: str, limit: int = 50, max_results: 
             break
         offset += limit
     return out
+
+
+from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
+
+def _set_qp(url: str, **updates) -> str:
+    p = urlparse(url)
+    q = parse_qs(p.query)
+    for k, v in updates.items():
+        q[str(k)] = [str(v)]
+    new_q = urlencode({k:v[0] for k,v in q.items()})
+    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
+
+def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
+    """Walk HubSpot /careers/jobs?page=N pagination without double-counting page 1."""
+    seen, out = set(), []
+    # start from whatever ?page= is in the URL, default 1
+    try:
+        start_page = int((parse_qs(urlparse(listing_url).query).get("page") or ["1"])[0])
+    except Exception:
+        start_page = 1
+
+    page = start_page
+    while page <= max_pages:
+        url = _set_qp(listing_url, page=page)
+        set_source_tag(url)
+        html = get_html(url)
+        if not html:
+            break
+        links = parse_hubspot_list_page(html, url)  # your helper already defined
+        # de-dupe across pages
+        added = 0
+        for u in links:
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+                added += 1
+        # stop when a page contributes nothing new
+        if added == 0:
+            break
+        random_delay()
+        page += 1
+    return out
+
 
 def collect_uw_links() -> list[str]:
     """
@@ -553,6 +602,11 @@ def _title_from_url(job_url: str) -> str:
 def _best_title(soup: BeautifulSoup, job_url: str, current: str | None) -> str:
     """Choose the best human title from several sources; avoid numeric IDs."""
     t = (current or "").strip()
+
+    # If title looks like ATS boilerplate, fall back to URL slug
+    bad_ats_titles = ("greenhouse", "my greenhouse", "job board", "lever", "ashby", "workday")
+    if t and any(b in t.lower() for b in bad_ats_titles):
+        t = ""
 
     # 1) og:title
     if not t:
@@ -900,7 +954,7 @@ STARTING_PAGES = [
     "https://www.simplyhired.com/search?q=product+owner&l=remote",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Product%20Development",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Information%20Technology",
-    "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Operations"
+    "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Operations",
 
     # University of Washington (Workday) — focused keyword searches
     # These are narrow enough that you won’t fetch all 565 jobs.
@@ -922,7 +976,7 @@ STARTING_PAGES = [
     # optional: release train engineer / RTE
     "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers/search?q=release%20train%20engineer",
 
-    "https://jobs.ashbyhq.com/zapier?departmentId=9276c6c4-a022-4990-9cf6-5c6ace283aff",
+    "https://jobs.ashbyhq.com/zapier",
 
     # The Muse works well
     "https://www.themuse.com/jobs?categories=product&location=remote",
@@ -950,6 +1004,9 @@ STARTING_PAGES = [
     # Welcome to the Jungle (JS-heavy → Playwright)
     "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true",
 ]
+
+assert all(u.startswith("http") for u in STARTING_PAGES), "A STARTING_PAGES entry is missing a comma."
+
 
 # Company careers pages to scan for ATS boards (PUBLIC sources)
 # Notes:
@@ -1222,7 +1279,7 @@ def career_board_name(url: str) -> str:
         "myworkdaysite.com": "Workday",
         "wd5.myworkdaysite.com": "Workday",
         "glassdoor.com": "Glassdoor",
-        "bulitin.com": "Built In",
+        "builtin.com": "Built In",
         "www.builtin.com": "Built In",
         "welcometothejungle.com": "Welcome to the Jungle",
         # in career_board_name(url) or similar mapping
@@ -1366,6 +1423,22 @@ def find_job_links(listing_html: str, base_url: str) -> list[str]:
     base_host = urlparse(base_url).netloc.lower()
     cap = 120 if ("ashbyhq.com" in base_host or "myworkdayjobs.com" in base_host or "myworkdaysite.com" in base_host) else None
 
+    # --- Ashby special-case: accept both "/{org}/{slug}" and "/{org}/jobs/{id-or-slug}" ---
+    if "ashbyhq.com" in base_host:
+        for a in anchors:
+            href = a["href"].strip()
+            full = urljoin(base_url, href)
+            p = urlparse(full)
+            if p.netloc.lower().endswith("ashbyhq.com"):
+                if re.fullmatch(r"/[^/]+/[^/]+/?", p.path) and "departmentid=" not in p.query.lower():
+                    links.add(full)
+                elif re.fullmatch(r"/[^/]+/jobs/[^/]+/?", p.path):
+                    links.add(full)
+            if cap and sum(1 for L in links if base_host in L) >= cap:
+                break
+        return list(links)
+
+    # --- default path (everything else) ---
     for a in anchors:
         href = a["href"].strip()
         full = urljoin(base_url, href)
@@ -1493,28 +1566,25 @@ _SCHEDULE_SUFFIX_RX = re.compile(r"\b(full[-\s]?time|part[-\s]?time|contract|per
 _PARENS_TRAILER_RX  = re.compile(r"\s*\([^)]*\)\s*$")  # generic trailing (…) cleaner
 
 def normalize_title(t: str) -> str:
-    """Return a clean, comparable job title."""
     if not t:
         return ""
-
     import html, re
     t = html.unescape(str(t)).strip()
 
-    # Remove leading [Hiring], [Remote], brackets, emojis, etc.
+    # Remove leading [Hiring]/[Remote]/emoji/etc.
     t = re.sub(r"^\s*\[[^\]]+\]\s*", "", t).strip()
 
-    # Drop “@Company” suffix if present
+    # Drop “@Company” and “ - Company” suffixes
     t = re.sub(r"\s*@\s*[\w .,&'’\-]+$", "", t).strip()
+    t = re.sub(r"\s*[–—\-|:]\s*@?\s*[\w .,&'’\-]+$", "", t).strip()  # handles “ - ”, “—”, “|”
 
-    # Remove locale/gender markers & contract boilerplate that often trail titles
+    # Remove locale/gender markers & contract boilerplate
     JUNK_TRAIL = r"(?:\(\s*m\s*\/\s*f\s*\/\s*d\s*\)|\(\s*m\s*\/\s*w\s*\/\s*d\s*\)|Vollzeit|Full[-\s]*time|Part[-\s]*time|Contract|Freelance|CDI|CDD|Zeit|Temps|Tempo)\b"
     t = re.sub(rf"\s*(?:{JUNK_TRAIL})(?:\s*[,/|·•-]\s*(?:{JUNK_TRAIL}))*\s*$", "", t, flags=re.I).strip()
 
-    # Collapse whitespace & common punctuation noise
     t = re.sub(r"\s+", " ", t)
     t = re.sub(r"\s+[-–—]\s+$", "", t)
 
-    # Canonical capitalization (but keep acronyms)
     if t.isupper():
         t = t.title()
     return t
@@ -1548,28 +1618,34 @@ def best_location_for_display(ld: dict, chips: str, scraped_loc: str) -> str:
     # 4) Last resort
     return "Remote"
 
-def extract_job_details(job_html, job_url):
+def extract_job_details(job_html: str, job_url: str) -> dict:
     DESCRIPTION_PREVIEW_CHARS = 600
-    soup = BeautifulSoup(job_html, "html.parser")
+    soup = BeautifulSoup(job_html or "", "html.parser")
 
-    # After you’ve parsed soup and before building the return dict
-    Title = _best_title(soup, job_url, Title if 'Title' in locals() else None)
+    # Initialize everything so no branch can reference before assignment
+    Title = ""
+    company = ""
+    location = ""
+    posted = ""
+    posting_date = ""
+    valid_through = ""
+    description = ""
+    apply_url = job_url
+    location_chips = ""
+    is_remote = False
+    is_hybrid = False
+    is_onsite = False
 
- 
-    # --- Detect dead / removed postings (e.g., NoDesk red banner) ---
-    raw_text = job_html if isinstance(job_html, str) else ""
-    dead_reason = _detect_dead_post(urlparse(job_url).netloc.lower(),
-                                    soup,
-                                    raw_text)
-    
-    
+    host = urlparse(job_url).netloc.lower()
+
+    # Hard stop for obviously dead posts
+    dead_reason = _detect_dead_post(host, soup, job_html or "")
     if dead_reason:
-        # Try to salvage some basics even when expired:
-        title = (soup.title.string.strip() if soup.title and soup.title.string else "")
+        title_from_tag = soup.title.string.strip() if soup.title and soup.title.string else ""
         return {
             "Reason Skipped": dead_reason,
             "Job URL": job_url,
-            "Title": title or "Product Owner",
+            "Title": title_from_tag or "Product Owner",
             "Company": "",
             "Location": "",
             "Posting Date": "",
@@ -1579,272 +1655,78 @@ def extract_job_details(job_html, job_url):
             "Location Chips": "",
             "Description Snippet": "",
             "Apply URL": job_url,
-            # light rules so the SKIP row looks consistent
             "WA Rule": "default",
             "Remote Rule": "unknown_or_onsite",
             "US Rule": "default",
         }
-    
-    company = ""
-    location = ""
-    posted = ""
-    description = ""
-    apply_url = job_url
 
-
-    host = urlparse(job_url).netloc.lower()
-
-    # --- Welcome to the Jungle: extract salary lines after expansion ---
-    if "welcometothejungle.com" in host:
-        # Typical label: "Salary Range: £150,000–£200,000"
-        expanded_text = soup.get_text("\n", strip=True)
-
-        # 1) Look for explicit "Salary Range:" label
-        m = re.search(r"Salary\s*Range\s*:\s*([£$€]\s?[\d,\.Kk]+)\s*[–-]\s*([£$€]?\s?[\d,\.Kk]+)", expanded_text, re.I)
-        if not m:
-            # 2) Broader catch within a Compensation section
-            # e.g., "Compensation and Benefits ... Salary Range: £150,000 - £200,000"
-            comp_block = ""
-            comp_hdr = soup.find(string=re.compile(r"Compensation|Benefits|Salary", re.I))
-            if comp_hdr:
-                # take the parent block text to increase precision
-                comp_block = comp_hdr.parent.get_text(" ", strip=True) if hasattr(comp_hdr, "parent") else ""
-            search_area = comp_block or expanded_text
-            m = re.search(r"(?:Salary|Compensation)[^:\n]*:\s*([£$€]\s?[\d,\.Kk]+)\s*[–-]\s*([£$€]?\s?[\d,\.Kk]+)", search_area, re.I)
-
-        def _to_number(txt: str) -> float | None:
-            if not txt:
-                return None
-            t = txt.replace(",", "").strip()
-            # Handle symbols and K suffix
-            t = re.sub(r"[£$€\s]", "", t)
-            k = 1000 if re.search(r"[Kk]$", t) else 1
-            t = re.sub(r"[Kk]$", "", t)
-            try:
-                return float(t) * k
-            except Exception:
-                return None
-
-        if m:
-            low_txt, high_txt = m.group(1), m.group(2)
-            est_low = _to_number(low_txt)
-            est_high = _to_number(high_txt)
-            if est_low and est_high:
-                salary_est_low = int(est_low)
-                salary_est_high = int(est_high)
-                salary_est_pretty = f"{low_txt.strip()} - {high_txt.strip()}"
-                salary_source = "welcome_to_the_jungle"
-
-
-        # --- Edtech.com: capture "Remote · US" style header chips and set remote ---
-    try:
-        if "edtech.com" in host:
-            # Look near the header/summary cards for compact chips
-            header_nodes = soup.select(
-                "header, .job-summary, .summary, .job-info, .job-overview, .sticky-card, .card"
-            )
-            header_text = " ".join(
-                [n.get_text(" ", strip=True) for n in header_nodes if n and n.get_text(strip=True)]
-            )[:1200]
-
-            # Collect simple geo chips for later display preference
-            chips = []
-            for token in re.findall(r"(Remote|US|United States|Canada|North America|Europe|EU|EMEA|UK)", header_text, flags=re.I):
-                chips.append(token)
-
-            # Flip remote when the header shows it explicitly
-            if re.search(r"\bremote\b", header_text, flags=re.I):
-                is_remote = True
-
-            # Merge into location_chips string if the variable exists, otherwise start it
-            try:
-                existing = [p.strip() for p in (location_chips or "").split("|") if p.strip()]
-            except NameError:
-                existing = []
-            merged = sorted(set(existing + chips), key=str.lower)
-            location_chips = "|".join(merged) if merged else (locals().get("location_chips") or "")
-
-            # Prefer a nicer display location if chips include a region
-            ld_for_loc = {"locations": [c for c in merged if c.lower() not in ("remote", "global", "anywhere")]}
-            location = best_location_for_display(ld_for_loc, location_chips, location)
-    except Exception:
-        pass
-
-    # --- JSON-LD fallback: some pages declare telecommute explicitly ---
-    try:
-        for tag in soup.find_all("script", type="application/ld+json"):
-            import json
-            data = json.loads(tag.string or "{}")
-            nodes = data.get("@graph", []) if isinstance(data, dict) else []
-            candidates = [data] + (nodes if isinstance(nodes, list) else [])
-            for node in candidates:
-                if not isinstance(node, dict):
-                    continue
-                if node.get("@type") in ("JobPosting", "Posting", "Vacancy"):
-                    # You already parse validThrough above; augment with remote signal
-                    jlt = (node.get("jobLocationType") or "").upper()
-                    if "TELECOMMUTE" in jlt:
-                        is_remote = True
-                    # also pick region-ish chips from LD if present
-                    locs = node.get("jobLocation") or node.get("applicantLocationRequirements") or []
-                    if isinstance(locs, dict):
-                        locs = [locs]
-                    for loc in locs:
-                        name = (loc.get("address", {}) or {}).get("addressCountry") or loc.get("name")
-                        if name:
-                            try:
-                                existing = [p.strip() for p in (location_chips or "").split("|") if p.strip()]
-                            except NameError:
-                                existing = []
-                            if name not in existing:
-                                existing.append(name)
-                            location_chips = "|".join(existing)
-    except Exception:
-        pass
-
-
-    if not company:
-        if "weworkremotely.com" in host:
-            node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
-            if node: company = node.get_text(" ", strip=True)
-        elif "builtin.com" in host:
-            node = soup.select_one("[data-qa='company-name'], .job-details__company, a[href*='/company/']")
-            if node: company = node.get_text(" ", strip=True)
-        elif host.endswith("nodesk.co"):
-            node = soup.select_one("h1 + p a, .company a, .company")
-            if node: company = node.get_text(" ", strip=True)
-
-
-    # Add this near the top of extract_job_details after host = ...
-    if "greenhouse.io" in host or "job-boards.greenhouse.io" in host:
-        # Try strong title sources first
-        if not Title:
-            og = soup.find("meta", property="og:title")
-            if og and og.get("content"):
-                Title = og["content"].strip()
-        if not Title:
-            h1 = soup.find("h1") or soup.select_one("[data-testid='title'], .app-title, .opening h2")
-            if h1 and h1.get_text(strip=True):
-                Title = h1.get_text(strip=True)
-
-        # If still a number, use the previous path segment (the slug before /jobs/<id>)
-        if not Title:
-            p = urlparse(job_url)
-            segs = [s for s in p.path.split("/") if s]
-            if len(segs) >= 2 and segs[-1].isdigit():
-                Title = segs[-2].replace("-", " ")
-
-        Title = normalize_title(Title)
-
-
-    # NEW — attempt to read validThrough from any JSON-LD blocks
-    valid_through = ""
-    try:
-        for tag in soup.find_all("script", type="application/ld+json"):
-            import json
-            data = json.loads(tag.string or "{}")
-            # unwrap @graph if present
-            nodes = data.get("@graph", []) if isinstance(data, dict) else []
-            candidates = [data] + (nodes if isinstance(nodes, list) else [])
-            for node in candidates:
-                if isinstance(node, dict) and node.get("@type") in ("JobPosting", "Posting", "Vacancy"):
-                    vt = node.get("validThrough") or node.get("valid_through")
-                    if vt:
-                        # normalize to YYYY-MM-DD
-                        from dateutil import parser as dateparser
-                        valid_through = dateparser.parse(vt).date().isoformat()
-                        raise StopIteration
-    except StopIteration:
-        pass
-    except Exception:
-        pass
-
-    if "hubspot.com" in urlparse(job_url).netloc:
+    # HubSpot detail pages
+    if "hubspot.com" in host:
         return parse_hubspot_detail(job_html, job_url)
 
+    # Prefer a strong title
+    Title = _best_title(soup, job_url, None)
+    Title = normalize_title(Title)
 
-    # --- Glassdoor specific parsing ---
-    if "glassdoor.com" in host and "/job-listing/" in job_url:
-        # Title
-        h1 = soup.select_one('[data-test="jobTitle"]') or soup.find("h1")
-        if h1:
-            Title = h1.get_text(" ", strip=True)
+    # Single JSON-LD parse reused everywhere
+    ld = parse_jobposting_ldjson(job_html or "")
 
-        # Company
-        c = soup.select_one('[data-test="employerName"]')
-        if not c:
-            c = soup.select_one('[data-test="jobHeader"] [data-test="employerName"]')
-        if c:
-            company = c.get_text(" ", strip=True)
+    if not Title and ld.get("Title"):
+        Title = normalize_title(ld["Title"])
 
-        # Location
-        loc = soup.select_one('[data-test="Location"]') or soup.select_one('[data-test="jobLocation"]')
-        if loc:
-            location = loc.get_text(" ", strip=True)
+    if ld.get("valid_through"):
+        try:
+            valid_through = dateparser.parse(ld["valid_through"]).date().isoformat()
+        except Exception:
+            valid_through = ld["valid_through"]
 
-        # Posted date
-        posted_el = soup.select_one('[data-test="postedOn"]')
-        if posted_el:
-            posted_raw = posted_el.get_text(" ", strip=True)
-            try:
-                from dateutil import parser as dateparser
-                posted = dateparser.parse(posted_raw, fuzzy=True).date().isoformat()
-            except Exception:
-                posted = posted_raw
+    if ld.get("date_posted"):
+        posting_date = ld["date_posted"]
 
-        # Description
-        desc = (
-            soup.select_one('[data-test="jobDescriptionContent"]')
-            or soup.select_one('#JobDescriptionContainer')
-            or soup.select_one('article')
-        )
-        if desc:
-            description = " ".join(desc.get_text(" ", strip=True).split())
+    # Company
+    company = ld.get("Company") or company_from_url_fallback(job_url) or ""
+    if not company:
+        node = None
+        if "weworkremotely.com" in host:
+            node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
+        elif "builtin.com" in host:
+            node = soup.select_one("[data-qa='company-name'], .job-details__company, a[href*='/company/']")
+        elif host.endswith("nodesk.co"):
+            node = soup.select_one("h1 + p a, .company a, .company")
+        if node:
+            company = node.get_text(" ", strip=True)
 
-    # --- Title fallback (slug -> words) ---
-    if not Title:
-        p = urlparse(job_url)
-        segs = [s for s in p.path.split("/") if s]
-        if segs:
-            Title = " ".join(segs[-1].replace("-", " ").split())
-        else:
-            Title = "Product Owner"
+    # Location chips then display location
+    location_chips = gather_location_chips(job_url, soup, ld, [])
 
+    # Remote/hybrid/onsite flags
+    text_all = soup.get_text(" ", strip=True)
+    ld_remote = (ld.get("job_location_type", "").lower() == "telecommute")
+    is_hybrid = bool(HYBRID_REGEX.search(location_chips) or HYBRID_REGEX.search(text_all))
+    is_onsite = bool(ONSITE_REGEX.search(location_chips) or ONSITE_REGEX.search(text_all))
+    is_remote = bool(REMOTE_BADGE.search(location_chips) or REMOTE_BADGE.search(text_all) or ld_remote)
+    if is_hybrid or is_onsite:
+        is_remote = False
+    host_slim = urlparse(job_url).netloc.replace("www.", "").lower()
+    if host_slim in REMOTE_BOARDS and not is_hybrid and not is_onsite:
+        is_remote = True
 
-
-
-    # LD+JSON
-    ld = parse_jobposting_ldjson(job_html)
-    Title = ld.get("Title") or Title
-    company = ld.get("Company") or company or company_from_url_fallback(job_url) or company
-    if not location and ld.get("locations"):
-        location = ", ".join(ld["locations"])
-    posting_date = ld.get("date_posted")
-
-    # site meta
-    # site meta (only trust on ATS/company hosts, not on boards)
-    meta_org = soup.find("meta", attrs={"property": "og:site_name"}) or soup.find("meta", attrs={"name": "application-name"})
-    if meta_org and meta_org.get("content"):
-        site_name = meta_org["content"].strip()
-        host = urlparse(job_url).netloc.lower().replace("www.", "")
-        is_board = any(host.endswith(h) for h in BOARD_HOSTS)
-        is_ats   = any(host.endswith(h) for h in ATS_HOSTS)
-        if is_ats and not company:
-            company = site_name  # OK on ATS
-        # else: ignore on boards/aggregators, keep whatever we already found
-
-    text_all = normalize_text(soup)
+    # Scraped location fallback
+    scraped_loc = ""
     loc_match = re.search(r"\b(Location|Based in|Location:)\s*[:\-]?\s*([A-Za-z0-9,\s\-]+)", text_all, re.I)
     if loc_match:
-        location = loc_match.group(2).strip()
+        scraped_loc = loc_match.group(2).strip()
     elif REMOTE_REGEX.search(text_all):
-        location = "Remote"
+        scraped_loc = "Remote"
 
-    date_match = re.search(r"(Posted|Date posted|Published)\s*[:\-]?\s*([A-Za-z0-9, \-]+)", text_all, re.I)
-    if date_match:
-        posted_raw = date_match.group(2).strip()
+    location = best_location_for_display(ld, location_chips, scraped_loc)
+
+    # Posted date
+    posted_match = re.search(r"(Posted|Date posted|Published)\s*[:\-]?\s*([A-Za-z0-9, \-]+)", text_all, re.I)
+    if posted_match:
+        posted_raw = posted_match.group(2).strip()
         try:
-            posted = dateparser.parse(posted_raw).date().isoformat()
+            posted = dateparser.parse(posted_raw, fuzzy=True).date().isoformat()
         except Exception:
             posted = posted_raw
 
@@ -1853,7 +1735,7 @@ def extract_job_details(job_html, job_url):
         if pd:
             posting_date = pd
 
-    # description
+    # Description
     for sel in ("article", ".job-description", ".description", ".job-body", ".posting", ".job-posting"):
         node = soup.select_one(sel)
         if node:
@@ -1867,100 +1749,36 @@ def extract_job_details(job_html, job_url):
                 best = txt
         description = best[:5000]
 
-    # apply link (best-effort)
+    # Apply URL
     for a in soup.find_all("a", href=True):
         t = a.get_text(" ", strip=True).lower()
         if "apply" in t or "submit" in t or "apply now" in t:
             apply_url = urljoin(job_url, a["href"])
             break
 
-    location_chips = gather_location_chips(job_url, soup, ld, [])
-
-    ld_remote = (ld.get("job_location_type", "").lower() == "telecommute")
-    is_hybrid = bool(HYBRID_REGEX.search(location_chips) or HYBRID_REGEX.search(text_all))
-    is_onsite = bool(ONSITE_REGEX.search(location_chips) or ONSITE_REGEX.search(text_all))
-    is_remote = bool(REMOTE_BADGE.search(location_chips) or REMOTE_BADGE.search(text_all) or ld_remote)
-    if is_hybrid or is_onsite:
-        is_remote = False
-    
-    host_s = urlparse(job_url).netloc.replace("www.", "").lower()
-    if host_s in REMOTE_BOARDS and not is_hybrid and not is_onsite:
-        is_remote = True
-
-    remote_rule = (
-        "board_remote" if (host_s in REMOTE_BOARDS and is_remote)
-        else ("hybrid" if is_hybrid else ("onsite" if is_onsite else "unknown_or_onsite"))
-    )
-
-
-    display_location = best_location_for_display(ld, location_chips, location)
-
-    # if chips show a city, ST and we still lack location, use it
-    if not location and location_chips:
-        m = re.search(r"\b[A-Za-z .'-]+,\s*[A-Z]{2}\b", location_chips)
-        if m:
-            location = m.group(0)
-
-    # last resort, never return empty title
-    if not Title:
-        # try slug-based guess or at least a placeholder
-        p = urlparse(job_url)
-        segs = [s for s in p.path.split('/') if s]
-        if segs:
-            Title = " ".join(segs[-1].replace('-', ' ').split()).strip() or "Product Owner"
-        else:
-            Title = "Product Owner"
-    
-    # (your existing code that builds desc_snippet)
-    # desc_snippet = ...  ← your last snippet-building line
-
-    # --- build + refine the snippet (wrap/trim before refining) ---
-    desc_snippet = " ".join((description or "").split())[:DESCRIPTION_PREVIEW_CHARS]
-
-    # Final, robust title choice and cleanup
+    # Final polish
     Title = _best_title(soup, job_url, Title)
     Title = normalize_title(Title)
+    desc_snippet = " ".join((description or "").split())[:DESCRIPTION_PREVIEW_CHARS]
+    desc_snippet = _refine_remotive_snippet(host_slim, soup, desc_snippet, Title)
 
-    # Prefer a strong lead sentence on Remotive pages
-    host = _host(job_url)
-    desc_snippet = _refine_remotive_snippet(host, soup, desc_snippet, Title)
-
-    # ➜ normalize the final title right before returning
-    Title = normalize_title(Title)
-
-    # before returning, add salary estimates if parsed above
-    if 'salary_est_low' in locals() and 'salary_est_high' in locals():
-        extra_salary = {
-            "Salary Est Low": salary_est_low,
-            "Salary Est High": salary_est_high,
-            "Salary Est. (Low-High)": salary_est_pretty,
-            "Salary Source": salary_source,
-        }
-    else:
-        extra_salary = {}
-
-    # build the core dict (existing return values follow)
-
-
-    # always return a dict
-    out = {
+    return {
         "Title": Title,
         "Company": company,
         "Location": location,
         "Posted": posted,
-        "posting_date": posting_date or "",
-        "description_snippet": desc_snippet,
-        "job_url": job_url,
-        "apply_url": apply_url,
-        "is_remote_flag": "remote" if is_remote else ("hybrid" if is_hybrid else "unknown_or_onsite"),
-        "location_chips": location_chips,
-        "applicant_regions": ", ".join(ld.get("applicant_regions", [])),
-        "valid_through": valid_through,
-        "career_board": career_board_name(job_url),
+        "Posting Date": posting_date or "",
+        "Valid Through": valid_through,
+        "Description Snippet": desc_snippet,
+        "Job URL": job_url,
+        "Apply URL": apply_url,
+        "Career Board": career_board_name(job_url),
+        "Location Chips": location_chips,
+        "Remote Rule": (
+            "board_remote" if (host_slim in REMOTE_BOARDS and is_remote)
+            else ("hybrid" if is_hybrid else ("onsite" if is_onsite else "unknown_or_onsite"))
+        ),
     }
-
-    out.update(extra_salary)
-    return out
 
 
 # --- Auto-scroll helper for infinite-scroll listings (EdTech etc.) ---
@@ -2633,8 +2451,8 @@ def log_info_found(n: int, url: str, elapsed_s: float):
     _progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
     host = _host(url)
-    # Example: [🔎 FOUND 60           ]....candidate job links on edtech.com in 71.7s
-    print(f"{c}{_found_box(n)}....candidate job links on {host} in {elapsed_s:.1f}s{RESET}")
+    # Example: [🔎 FOUND 60           ].candidate job links on edtech.com in 71.7s
+    print(f"{c}{_found_box(n)}.candidate job links on {host} in {elapsed_s:.1f}s{RESET}")
 
 def log_info_done():
     _progress_clear_if_needed()
@@ -3179,7 +2997,7 @@ def _vis_pad(s: str, width: int) -> str:
 
 def _box(text: str) -> str:
     """Render a fixed-width bracket like: [🟠 QUIET  48        ] with visual padding."""
-    return f"[{_vis_pad(text, _STATUS_W)}]"
+    return f"[{_vis_pad(text, _STATUS_W)}].."
 
 
 
@@ -3306,11 +3124,6 @@ def log_event(level: str,
     if lvl == "KEEP":
         print(f"{color}{_box('KEEP')}.{title}{RESET}")
 
-        # If caller passed a non-dict right, show it as a note
-        if right and not isinstance(right, dict):
-            for ln in _wrap_lines(str(right), width=width):
-                print(f"{color}{_box('KEEP')}.{ln}{RESET}")
-
         if career_board or company:
             print(f"{color}{_box('KEEP')}....{career_board}.....{company}{RESET}")
 
@@ -3318,18 +3131,24 @@ def log_event(level: str,
             for ln in _wrap_lines(url, width=width):
                 print(f"{color}{_box('KEEP')}....{ln}{RESET}")
 
+        # Salary line
+        det = _to_int(job_dict.get("Salary Max Detected"))
+        est = (job_dict.get("Salary Est. (Low-High)") or "").strip()
+        if det:
+            print(f"{color}{_salary_box('Max', det, plus=(str(job_dict.get('Salary Status','')).lower()=='at_or_above'))}{RESET}")
+        elif est:
+            # show estimates when no detected max
+            for ln in _wrap_lines(f"💲 Estimated {est}", width=width):
+                print(f"{color}{_box('KEEP')}....{ln}{RESET}")
+
         if vis or score or mark:
             print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
 
-        print(f"{color}{_box('✅ KEEP')}.{RESET}")
+        print(f"{color}{_box('✅ DONE')}.{RESET}")
         return
 
     if lvl == "SKIP":
         print(f"{color}{_box('SKIP')}.{title}{RESET}")
-
-        if right and not isinstance(right, dict):
-            for ln in _wrap_lines(str(right), width=width):
-                print(f"{color}{_box('SKIP')}.{ln}{RESET}")
 
         if career_board or company:
             print(f"{color}{_box('SKIP')}....{career_board}.....{company}{RESET}")
@@ -3338,10 +3157,15 @@ def log_event(level: str,
             for ln in _wrap_lines(url, width=width):
                 print(f"{color}{_box('SKIP')}....{ln}{RESET}")
 
+        reason = job_dict.get("Reason Skipped") or ""
+        if reason:
+            for ln in _wrap_lines(reason, width=width):
+                print(f"{color}{_box('SKIP')}....{ln}{RESET}")
+
         if vis or score or mark:
             print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
 
-        print(f"{color}{_box('🚫 SKIP')}.{RESET}")
+        print(f"{color}{_box('🚫 DONE')}.{RESET}")
         return
 
 
@@ -3349,6 +3173,36 @@ def _rule(details: dict, key: str, default="default"):
     # allows both snake_case and Title Case with space
     return details.get(key) or details.get(key.replace("_", " ").title()) or default
 
+def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
+    """Build a normalized 'skip' row from whatever we know."""
+    d = details or {}
+    # ensure fields like chips/regions/salary are present if we have snippet/title
+    if d:
+        d = _normalize_job_defaults(d)
+        d = _enrich_salary_fields(d)
+
+    base = {
+        "Job URL": link,
+        "Career Board": career_board_name(link),
+        "Reason Skipped": reason or "Filtered by rules",
+    }
+
+    # copy nice-to-have fields if present
+    for k in (
+        "Title","Company","Location","Posted","Posting Date","Valid Through",
+        "Apply URL","Description Snippet","Location Chips","Applicant Regions",
+        "Salary Max Detected","Salary Rule","Salary Status","Salary Note","Salary Est. (Low-High)"
+    ):
+        if d.get(k):
+            base[k] = d[k]
+
+    return _normalize_skip_defaults(base)
+
+def _log_and_record_skip(link: str, reason: str, details: dict | None = None) -> dict:
+    row = _make_skip_row(link, reason, details)
+    _record_skip(row)
+    log_event("SKIP", _title_for_log(row, link), job=row)  # reason prints once inside SKIP block
+    return row
 
 ##########################################################
 ##########################################################
@@ -3361,6 +3215,7 @@ skipped_rows = []    # the “skip” rows in internal-key form
 
 
 def main():
+    global kept_count, skip_count
     start_ts = datetime.now()
     print("[INFO                  ].Starting run")
 
@@ -3391,18 +3246,35 @@ def main():
             progress(i, total_pages, kept_count, skip_count)
             continue
 
-        host = urlparse(listing_url).netloc
+        host = urlparse(listing_url).netloc.lower()
+
+        # HubSpot listing → handle pagination here and continue
+        if "hubspot.com" in host and "/careers/jobs" in listing_url:
+            links = collect_hubspot_links(listing_url, max_pages=25)
+            all_detail_links.extend(links)
+
+            # NEW: show "[🔎 FOUND XX ]....candidate job links on hubspot.com in Ys"
+            elapsed = time.time() - t0
+            log_info_found(len(links), listing_url, elapsed)
+            log_info_done()
+            progress(i, total_pages, kept_count, skip_count)
+            continue
 
         # Workday listing → detail expansion (Ascensus and similar tenants)
         if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
             try:
                 wd_detail_links = workday_links_from_listing(listing_url, max_results=250)
                 if wd_detail_links:
-                    candidate_links.extend(wd_detail_links)
-                    # Skip generic HTML scraping for Workday listings; we already have details
-                    goto_parse = True  # or continue loop if your structure allows
+                    all_detail_links.extend(wd_detail_links)
+
+                    # NEW: print a FOUND line for Workday expansions too
+                    elapsed = time.time() - t0
+                    log_info_found(len(wd_detail_links), listing_url, elapsed)
+                    log_info_done()
+                    progress(i, total_pages, kept_count, skip_count)
+                    continue
             except Exception as e:
-                log_event("WARN", f"Workday expansion failed: {e}", left="Workday", right=listing_url)
+                log_event("WARN", f"Workday expansion failed: {e}")
 
         else:
             # existing branches...
@@ -3433,7 +3305,7 @@ def main():
                 if page_num > 20:  # safety cap
                     break
 
-            log_event("INFO", f"Found {len(hubspot_links)} candidate job links on hubspot.com")
+            log_event("INFO", f"Found {len(hubspot_links)}.candidate job links on hubspot.com")
             all_detail_links.extend(hubspot_links)
             log_info_done()
             progress(i, total_pages, kept_count, skip_count)
@@ -3456,44 +3328,79 @@ def main():
     print(f"[INFO                  ].Collected {len(all_detail_links)} unique job links")
 
     # 2) Visit each job link and extract details
+    # 2) Visit each job link and extract details
     for j, link in enumerate(all_detail_links, start=1):
         set_source_tag(listing_url)
         html = get_html(link)
-        
+
+        # A) Could not fetch detail page → record a minimal SKIP and continue
         if not html:
-            # Prefer a rule reason if we already know enough; otherwise show technical
-                default_reason = "Failed to fetch job detail page"
-                board = career_board_name(link)
-                title_for_log = _title_for_log({"Title": ""}, link)
+            default_reason = "Failed to fetch job detail page"
+            board = career_board_name(link)
+            title_for_log = _title_for_log({"Title": ""}, link)
 
-                skip_row = _normalize_skip_defaults({
-                    "Job URL": link,
-                    "Title": title_for_log,
-                    "Company": "",
-                    "Career Board": board,
-                    "Valid Through": "",
-                    "Reason Skipped": choose_skip_reason({"Job URL": link}, default_reason),
-                })
-                _record_skip(skip_row)
-                log_event("SKIP", title_for_log, skip_row["Reason Skipped"], job=skip_row)
-                progress(j, len(all_detail_links), kept_count, skip_count)
-                continue
-        
+            skip_row = _normalize_skip_defaults({
+                "Job URL": link,
+                "Apply URL": link,
+                "Title": title_for_log,
+                "Company": "",
+                "Career Board": board,
+                "Valid Through": "",
+                "Reason Skipped": choose_skip_reason({"Job URL": link}, technical_fallback=default_reason),
+                "WA Rule": "default",
+                "Remote Rule": "unknown_or_onsite",
+                "US Rule": "default",
+                "Salary Max Detected": "",
+                "Salary Rule": "",
+                "Salary Near Min": "",
+                "Salary Status": "",
+                "Salary Note": "",
+                "Salary Est. (Low-High)": "",
+                "Location Chips": "",
+                "Applicant Regions": "",
+            })
+
+            _record_skip(skip_row)
+            log_event("SKIP", _title_for_log(skip_row, link), skip_row["Reason Skipped"], job=skip_row)
+            skip_count += 1
+            progress(j, len(all_detail_links), kept_count, skip_count)
+            continue
+
+        # B) We have HTML → parse details and enrich salary
         details = extract_job_details(html, link)
-        details = _enrich_salary_fields(details)  # sets Salary Near Min, Salary Status, Salary Note, Salary Est. (Low-High)
+        details = _enrich_salary_fields(details)  # fills Salary Near Min, Status, Note, Est. (Low-High)
+
+        # always normalize and enrich before rules/decisions
+        details = _normalize_job_defaults(details)
+        details = _enrich_salary_fields(details)
+
+        # compute derived fields once
+        details["WA Rule"] = details.get("WA Rule", "default")
+        details["Remote Rule"] = details.get("Remote Rule", "default")
+        details["US Rule"] = details.get("US Rule", "default")
+        details["Reason"] = details.get("Reason","")  # leave as-is unless you set it
+        vis, score, mark = compute_visibility_and_confidence(details)
+        details["Visibility Status"] = vis
+        details["Confidence Score"]  = score
+        details["Confidence Mark"]   = mark
+
+        _record_keep(to_keep_sheet_row(details))
 
 
-        # If extractor marked it as removed/archived, record a skip
+        # choose a specific reason (uses title/snippet/regions after enrich)
+        reason = choose_skip_reason(details, technical_fallback="Filtered by rules")
+
+        # C) If extractor itself marked as removed/archived → SKIP with details
         if details.get("Reason Skipped"):
             row = _normalize_skip_defaults({
                 "Title": details.get("Title", ""),
-                "Company": details.get("Company", ""),      # ← add
-                "Career Board": details.get("career_board",""),     # added
-                "Location": details.get("Location", ""),    # ← add
+                "Company": details.get("Company", ""),
+                "Career Board": details.get("career_board",""),
+                "Location": details.get("Location", ""),
                 "Description Snippet": details.get("description_snippet", ""),
                 "Posted": details.get("Posted", ""),
                 "Posting Date": details.get("posting_date",""),
-                "Valid Through": details.get("valid_through",""),   # added
+                "Valid Through": details.get("valid_through",""),
                 "Job URL": link,
                 "Apply URL": details.get("apply_url", ""),
                 "Reason Skipped": details["Reason Skipped"],
@@ -3505,15 +3412,16 @@ def main():
                 "Location Chips": details.get("location_chips", ""),
                 "Applicant Regions": details.get("applicant_regions", ""),
             })
-            log_event("SKIP", _title_for_log(row, link), row["Reason Skipped"], job=row)
             _record_skip(row)
+            log_event("SKIP", _title_for_log(row, link), job=row)
+            skip_count += 1
             progress(j, len(all_detail_links), kept_count, skip_count)
             continue
 
-        # --- Ascensus (Workday) post-filter: only keep Product/BA/Scrum-family roles ---
+        # D) Ascensus (Workday) post-filter: only keep Product/BA/Scrum family roles
         host = urlparse(link).netloc.lower()
-        if "ascensushr.wd1.myworkdayjobs.com" in host:
-            # Reuse your unified role test (titles + responsibility signals)
+        if "ascensushr.wd1.myworkdayjobs.com/ascensuscareers" in host:
+            # reuse your intent/role test
             if not _is_target_role(details):
                 skip_row = _normalize_skip_defaults({
                     "Job URL": link,
@@ -3524,12 +3432,13 @@ def main():
                     "Reason Skipped": "Not target role (Ascensus filter)",
                 })
                 _record_skip(skip_row)
-                log_event(
-                    "SKIP",
-                    _title_for_log(skip_row, link),
-                    right=skip_row["Reason Skipped"],
-                    job=skip_row,
-                )
+                log_event("SKIP", _title_for_log(skip_row, link), right=skip_row["Reason Skipped"], job=skip_row)
+                skip_count += 1
+                progress(j, len(all_detail_links), kept_count, skip_count)
+                continue
+
+        # ...continue with KEEP decision and recording below...
+
 
         # --- Salary: detect and label (goes just before keep_row = {...}) ---
         # Build a single text blob to scan for pay figures
@@ -3635,11 +3544,11 @@ def main():
                 "Location Chips": keep_row["Location Chips"],
                 "Applicant Regions": keep_row["Applicant Regions"],
             })
-            log_event("SKIP", _title_for_log(skip_row, link), right=skip_row["Reason Skipped"], job=skip_row)
 
-            _record_skip(skip_row)
-            progress(j, len(all_detail_links), kept_count, skip_count)
+            _log_and_record_skip(link, rule_reason, keep_row)
             continue
+
+
         # --- End rule-based skip gate ---
 
 
@@ -3680,15 +3589,8 @@ def main():
                 keep_row["Confidence Mark"] = "🟠"
 
                 _record_keep(keep_row)
-
-                # Console: show the badge and align brackets
-                log_event(
-                    "KEEP",
-                    _title_for_log(keep_row, link),   # you already have this helper
-                    job=keep_row,
-                    salary_near_min=detected_max,     # or whatever variable holds the near-min int
-                )
-                progress(j, len(all_detail_links), kept_count, skip_count)  # keep this after printing
+                log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
+                progress(j, len(all_detail_links), kept_count, skip_count)
 
                 job = keep_row  # for any downstream usage
 
@@ -3722,11 +3624,7 @@ def main():
                 skip_row["Reason Skipped"] = reason
 
                 _record_skip(skip_row)
-
-                # ▼ ADD THIS LINE
-                log_event("SKIP", _title_for_log(skip_row, link), right=skip_row["Reason Skipped"], job=skip_row)
-
-
+                log_event("SKIP", _title_for_log(skip_row, link), right=skip_row)
                 progress(j, len(all_detail_links), kept_count, skip_count)
                 continue
 
@@ -3735,12 +3633,8 @@ def main():
             # Normal KEEP (salary OK or not limiting)
             keep_row.pop("Salary Near Min", None)   # keep clean
             _record_keep(keep_row)
-            log_event(
-                "KEEP",
-                _title_for_log(keep_row, link),
-                job=keep_row,
-            )
-            progress(j, len(all_detail_links), kept_count, skip_count)   # <— add this line
+            log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
+            progress(j, len(all_detail_links), kept_count, skip_count)
 
 
             job = keep_row
@@ -3832,7 +3726,7 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
         return
 
     if prompt:
-        ans = input("Push code updates to GitHub now? [y/N] ").strip().lower()
+        ans = input("Push code updates to GitHub now? [y/n] ").strip().lower()
         if ans != "y":
             print("[INFO                  ].Skipped push.")
             return

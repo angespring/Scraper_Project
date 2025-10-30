@@ -1,6 +1,3 @@
-### Ange - Very top of scraper ###
-
-
 # --- Auto-backup section for job-scraper project ---
 import shutil
 import subprocess
@@ -9,38 +6,6 @@ from datetime import datetime, timedelta
 
 import builtins  # use real print here, not the later override
 import sys, os, time
-
-
-import argparse
-# New: module-safe defaults (will be overwritten in main())
-SMOKE = False
-SALARY_FLOOR = 110_000
-SALARY_CEIL = None
-
-
-def _parse_args():
-    p = argparse.ArgumentParser(
-        prog="po_job_scraper.py",
-        description="Product jobs scraper – full run or quick smoke."
-    )
-    # smoke/run-shaping
-    p.add_argument("--smoke", action="store_true",
-                   help="Fast run: limit listing pages and job links, tighten timeouts")
-    p.add_argument("--only", type=str, default="",
-                   help="Comma list of site keywords to include (e.g. 'greenhouse,workday,hubspot')")
-    p.add_argument("--limit-pages", type=int, default=0,
-                   help="Hard cap on number of listing pages to visit")
-    p.add_argument("--limit-links", type=int, default=0,
-                   help="Hard cap on number of job detail links to visit")
-
-    # existing salary knobs
-    p.add_argument("--floor", type=int, default=110_000,
-                   help="Minimum target salary filter")
-    p.add_argument("--ceil", type=int, default=0,
-                   help="Optional salary ceiling; 0 means no ceiling")
-
-    return p.parse_args()
-
 
 # ensure logs and progress render immediately
 try:
@@ -170,7 +135,6 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                     old.unlink()
                     _bk_log_wrap("BACKUP", f"Pruned by count {old.name}")
                 except OSError as e:
-                    progress_clear_if_needed()
                     builtins.print(f"{_bkts()} [WARN                ].Could not remove {old.name}: {e}")
 
 # --- HOW TO USE (uncomment exactly one) ---
@@ -308,55 +272,6 @@ import json
 
 from urllib.parse import urlparse, parse_qs, urljoin
 
-# ── progress line & spinner (centralized) ──────────────────────────────────────
-import sys, time
-
-
-#_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-#_spin_i = 0
-#_progress_on = False
-#_last_tick = 0.0
-
-#def _progress_print(line: str) -> None:
-#    """Render/overwrite one sticky status line (no newline)."""
-#    sys.stdout.write("\r" + line)
-#    sys.stdout.flush()
-
-#def progress(i: int, total: int, kept: int, skipped: int) -> None:
-#    """
-#    Show a sticky progress row like:
-#      [⠋ PROGRESS        ]...59/1000 kept=30 skip=29
-#    Called once per job (or on heartbeat).
-#    """
-#    global _spin_i, _progress_on, _last_tick
-#    _progress_on = True
-#    # tick spinner at most ~12fps to avoid flicker
-#    now = time.time()
-#    if now - _last_tick > 0.08:
-#       _spin_i = (_spin_i + 1) % len(_SPINNER)
-#        _last_tick = now
-#    spin = _SPINNER[_spin_i]
-#    bar = f"[{spin} PROGRESS           ]...{i}/{total} kept={kept} skip={skipped}"
-#    _progress_print(bar)
-
-def progress_clear_if_needed() -> None:
-    """Erase any active sticky progress line before normal printing.
-    This delegates to the unified _progress_clear_if_needed implementation.
-    """
-    _progress_clear_if_needed()
-
-
-def progress_done(i: int, total: int, kept: int, skipped: int) -> None:
-    """Finalize the sticky line at the end of the loop and drop a newline."""
-    progress(i, total, kept, skipped)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-    # sticky is “off” after we’ve committed the newline
-    global _progress_on
-    _progress_on = False
-
-
-
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
     Convert a Workday listing URL into real job detail links by querying the cxs JSON API.
@@ -443,7 +358,6 @@ def _set_qp(url: str, **updates) -> str:
     new_q = urlencode({k:v[0] for k,v in q.items()})
     return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
 
-import re
 def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
     """Walk HubSpot /careers/jobs?page=N pagination without double-counting page 1, with per-page logs."""
     seen, out = set(), []
@@ -459,19 +373,16 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
 
         # NEW: per-page progress logs
         t0 = time.time()
-        progress_clear_if_needed()
         log_info_processing(url)
 
         html = get_html(url)
         if not html:
             log_event("WARN", "", right=f"Failed to GET listing page: {url}")
-            progress_clear_if_needed()
             log_info_done()
             break
 
         links = parse_hubspot_list_page(html, url)
         elapsed = time.time() - t0
-        progress_clear_if_needed()
         log_info_found(len(links), url, elapsed)
 
         # de-dupe across pages
@@ -481,7 +392,7 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
                 seen.add(u)
                 out.append(u)
                 added += 1
-        progress_clear_if_needed()
+
         log_info_done()
 
         # stop when a page contributes nothing new
@@ -986,18 +897,17 @@ def _enrich_salary_fields(d: dict) -> dict:
 
 
 import argparse
-#parser = argparse.ArgumentParser()
-#parser.add_argument("--floor", type=int, default=110_000)
-#parser.add_argument("--ceil",  type=int, default=0)
-#args = parser.parse_args()
-SMOKE = False
-SALARY_CEIL = None
+parser = argparse.ArgumentParser()
+parser.add_argument("--floor", type=int, default=110_000)
+parser.add_argument("--ceil",  type=int, default=0)
+args = parser.parse_args()
+SALARY_FLOOR = args.floor
+SALARY_CEIL  = args.ceil or None
+KEEP_UNKNOWN_SALARY = True  # keep jobs when no salary is detected
 
 # Salary rules
 SALARY_FLOOR = 110_000          # your target minimum
 SOFT_SALARY_FLOOR = 90_000      # below this => SKIP, between here and FLOOR => QUIET keep
-# If True, jobs with no detectable salary are allowed (not skipped).
-KEEP_UNKNOWN_SALARY = True
 
 
 PLAYWRIGHT_DOMAINS = {
@@ -1077,7 +987,8 @@ SKIPPED_KEYS = [
 STARTING_PAGES = [
 
     # Business Analyst / Systems Analyst
-    "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
+    "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
+    "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
 
     # Scrum Master / RTE
@@ -2551,53 +2462,43 @@ _PROGRESS_ACTIVE = False
 _PROGRESS_WIDTH  = 0
 
 
-# unique tracking to avoid double-appends across the run
-_seen_kept_urls: set[str] = set()
-_seen_skip_urls: set[str] = set()
-kept_count: int = 0
-skip_count: int = 0
+# unique tracking to avoid double-appends
+_seen_kept_urls  = set()
+_seen_skip_urls  = set()
+kept_count = 0
+skip_count = 0
 
-def _record_keep(row: dict) -> None:
-    """Append a KEEP row once, update counts, and write to CSV in small batches."""
-    global kept_count, kept_rows, _seen_kept_urls
-    u = (row.get("Job URL") or row.get("job_url") or "").strip()
+def _record_keep(row: dict):
+    """Append a keep row once and bump kept_count."""
+    global kept_count, kept_rows
+    u = row.get("Job URL") or row.get("job_url") or ""
+    if u and u in _seen_kept_urls:
+        return
     if u:
-        if u in _seen_kept_urls:
-            return
         _seen_kept_urls.add(u)
-    kept_rows.append(to_keep_sheet_row(row))
+    kept_rows.append(row)
     kept_count += 1
 
-
-def _record_skip(row: dict) -> None:
-    """Append a SKIP row once, update counts, and write to CSV in small batches."""
-    global skip_count, skipped_rows, _seen_skip_urls
-    u = (row.get("Job URL") or row.get("job_url") or "").strip()
+def _record_skip(row: dict):
+    """Append a skip row once and bump skip_count."""
+    global skip_count, skipped_rows
+    u = row.get("Job URL") or row.get("job_url") or ""
+    if u and u in _seen_skip_urls:
+        return
     if u:
-        if u in _seen_skip_urls:
-            return
         _seen_skip_urls.add(u)
-    row = _normalize_skip_defaults(dict(row))
-    skipped_rows.append(to_skipped_sheet_row(row))
+    skipped_rows.append(row)
     skip_count += 1
-
-def progress_heartbeat(every: float = 0.10) -> None:
-    """
-    Repaint the live progress line while we’re idle between fetches.
-    We do not advance counts here; just tick the spinner.
-    """
-    # no change to _p["processed"]; just animate
-    progress_tick()
 
 
 def _progress_clear_if_needed():
-    """If a carriage-return progress is active, erase it in-place."""
-    global _PROGRESS_ACTIVE, _PROGRESS_WIDTH
+    global _PROGRESS_ACTIVE, _last_progress
     if _PROGRESS_ACTIVE:
-        sys.stdout.write("\r" + (" " * _PROGRESS_WIDTH) + "\r")  # erase
-        sys.stdout.flush()
+        # erase the whole previous progress line even if it wrapped
+        blank = " " * (len(_last_progress) + 8)
+        print("\r" + blank + "\r", end="", flush=True)
         _PROGRESS_ACTIVE = False
-        _PROGRESS_WIDTH  = 0
+        _last_progress = ""
 
 LEVEL_WIDTH = 20  # keep this equal to your other logger's width- padding in Terminal display
 
@@ -3062,85 +2963,79 @@ _PROGRESS_ACTIVE = False  # keep it with your color/log helpers
 import sys
 # {_stamp()}
 import sys as _sys
+import time
 
-# ===== Progress line (carriage-return) =====
-import re, time, sys
+# --- Live progress + periodic snapshots ---------------------------------------
+# --- Live progress line (single, non-sticky) ----------------------------------
+_last_progress   = ""
+_last_heartbeat  = 0.0
+_spin_i          = 0
+_SPINNER         = "⠋⠙⠚⠞⠖⠦⠴⠲⠳⠓"
+_LAST_PROGRESS_TS = 0.0
 
-_SPINNER = "⠋⠙⠚⠞⠖⠦⠴⠲⠳⠓"
-_p = {"active": False, "width": 0, "processed": 0, "total": 0, "spin": 0, "last": 0.0}
+# keep the state so heartbeat can repaint accurately
+_pstate = {"i": 0, "total": 0, "kept": 0, "skipped": 0}
 
-RESET = "\x1b[0m"          # keep or reuse your existing constant
-LEVEL_WIDTH = 20           # keep equal to your tag width
+def _progress_line(spin: str) -> str:
+    processed = min(_pstate["kept"] + _pstate["skipped"], _pstate["total"])
+    box = _box(f"{spin} PROGRESS")
+    return f"{LEVEL_COLOR['INFO']}{box}.{processed}/{_pstate['total']} kept={_pstate['kept']} skip={_pstate['skipped']}{RESET}"
 
-def _ansi_strip(s: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+def progress(i: int, total: int, kept: int, skip: int):
+    global _PROGRESS_ACTIVE, _LAST_PROGRESS_TS
 
-def _box(tag: str) -> str:
-    t = (tag or "").upper().ljust(LEVEL_WIDTH)
-    return f"[{t[:LEVEL_WIDTH]}]"
-
-def _progress_print(msg: str) -> None:
-    s = f"\r{_box('INFO')}.{msg}{RESET}"
-    sys.stdout.write(s)
-    sys.stdout.flush()
-    _p["active"] = True
-    _p["width"] = len(_ansi_strip(s))
-
-def _progress_clear_if_needed() -> None:
-    if _p["active"]:
-        sys.stdout.write("\r" + (" " * _p["width"]) + "\r")
-        sys.stdout.flush()
-        _p["active"] = False
-        _p["width"] = 0
-
-def progress_set_total(n: int) -> None:
-    _p["total"] = int(n or 0)
-
-def progress_tick(processed: int | None = None) -> None:
-    if processed is not None:
-        _p["processed"] = processed
+    # rate-limit updates (keeps CPU & terminal calmer)
     now = time.time()
-    if now - _p["last"] > 0.08:
-        _p["spin"] = (_p["spin"] + 1) % len(_SPINNER)
-        _p["last"] = now
-    spin = _SPINNER[_p["spin"]]
-    msg = f"[{spin} PROGRESS]...{_p['processed']}/{_p['total']} kept={kept_count} skip={skip_count}"
-    _progress_print(msg)
-
-# Backward-compat wrapper so your existing calls still work
-def progress(i: int, total: int, kept: int, skipped: int) -> None:
-    # keep external signature but drive the new engine
-    if total != _p["total"]:
-        progress_set_total(total)
-    # do not assign kept_count/skip_count here; those come from _record_keep/_record_skip
-    progress_tick(i)
-
-
-# --- Background spinner heartbeat --------------------------------------------
-from threading import Thread, Event
-_spinner_stop = Event()
-_spinner_thread = None
-
-def _spinner_loop():
-    # keep ticking the spinner while progress is active
-    while not _spinner_stop.is_set():
-        progress_heartbeat(every=0.12)
-        time.sleep(0.05)
-
-def start_spinner():
-    global _spinner_thread
-    if _spinner_thread and _spinner_thread.is_alive():
+    if _PROGRESS_ACTIVE and (now - _LAST_PROGRESS_TS) < 0.15 and i < total:
         return
-    _spinner_stop.clear()
-    _spinner_thread = Thread(target=_spinner_loop, daemon=True)
-    _spinner_thread.start()
+    _LAST_PROGRESS_TS = now
 
-def stop_spinner():
-    _spinner_stop.set()
+    line = _progress_line(i, total, kept, skip)  # your existing builder
+    sys.stdout.write("\r" + line)
+    sys.stdout.flush()
+    _PROGRESS_ACTIVE = True
+
+    if i >= total:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        _PROGRESS_ACTIVE = False
+
+
+def heartbeat(every: float = 0.6) -> None:
+    """Tick the spinner while we’re idle between fetches."""
+    global _last_heartbeat, _spin_i
+    if not _PROGRESS_ACTIVE or not _last_progress:
+        return
+    now = time.monotonic()
+    if now - _last_heartbeat >= every:
+        _spin_i += 1
+        print(_progress_line(_SPINNER[_spin_i % len(_SPINNER)]), end="\r", flush=True)
+        _last_heartbeat = now
+
 def refresh_progress() -> None:
     """Repaint the last progress line after multi-line logs."""
     if _PROGRESS_ACTIVE and _last_progress:
         print(_last_progress, end="\r", flush=True)
+
+def progress_pages(i: int, total: int, host: str = ""):
+    """Sticky spinner while crawling listing pages."""
+    global _PROGRESS_ACTIVE, _LAST_PROGRESS_TS
+    now = time.time()
+    if _PROGRESS_ACTIVE and (now - _LAST_PROGRESS_TS) < 0.15 and i < total:
+        return
+    _LAST_PROGRESS_TS = now
+
+    # Build a compact line like: [⠋ PAGES ] ...hubspot.com page 7/21
+    label = _box("PAGES")
+    host_s = _host(host) if host else ""
+    line = f"{LEVEL_COLOR['INFO']}{label} ]...{host_s} page {i}/{total}{RESET}"
+    sys.stdout.write("\r" + line)
+    sys.stdout.flush()
+    _PROGRESS_ACTIVE = True
+    if i >= total:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        _PROGRESS_ACTIVE = False
 
 # -------------------------------------------------------------------------------
 
@@ -3369,16 +3264,13 @@ def log_event(level: str,
     title = left_txt or job_dict.get("Title", "") or ""
 
     if lvl == "KEEP":
-        progress_clear_if_needed()
         print(f"{color}{_box('KEEP')}.{title}{RESET}")
 
         if career_board or company:
-            progress_clear_if_needed()
             print(f"{color}{_box('KEEP')}....{career_board}.....{company}{RESET}")
 
         if url:
             for ln in _wrap_lines(url, width=width):
-                progress_clear_if_needed()
                 print(f"{color}{_box('KEEP')}....{ln}{RESET}")
 
         # Salary line
@@ -3389,7 +3281,6 @@ def log_event(level: str,
         elif est:
             # show estimates when no detected max
             for ln in _wrap_lines(f"💲 Estimated {est}", width=width):
-                progress_clear_if_needed()
                 print(f"{color}{_box('KEEP')}....{ln}{RESET}")
 
         if vis or score or mark:
@@ -3400,27 +3291,23 @@ def log_event(level: str,
         return
 
     if lvl == "SKIP":
-        progress_clear_if_needed()
         print(f"{color}{_box('SKIP')}.{title}{RESET}")
 
         if career_board or company:
-            progress_clear_if_needed()
             print(f"{color}{_box('SKIP')}....{career_board}.....{company}{RESET}")
 
         if url:
             for ln in _wrap_lines(url, width=width):
-                progress_clear_if_needed()
                 print(f"{color}{_box('SKIP')}....{ln}{RESET}")
 
         reason = job_dict.get("Reason Skipped") or ""
         if reason:
             for ln in _wrap_lines(reason, width=width):
-                progress_clear_if_needed()
                 print(f"{color}{_box('SKIP')}....{ln}{RESET}")
 
         if vis or score or mark:
             print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
-        progress_clear_if_needed()
+
         print(f"{color}{_box('🚫 DONE')}.{RESET}")
         refresh_progress()
         return
@@ -3458,25 +3345,10 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
     return _normalize_skip_defaults(base)
 
 def _log_and_record_skip(link: str, reason: str, details: dict | None = None) -> dict:
-    """Normalize details, record the SKIP row (increments skip_count), and log one clean line."""
     row = _make_skip_row(link, reason, details)
-    _record_skip(row)  # <-- this increments skip_count and batches to CSV
-    progress_clear_if_needed()
-    log_event("SKIP", _title_for_log(row, link), right=row["Reason Skipped"], job=row)
+    _record_skip(row)
+    log_event("SKIP", _title_for_log(row, link), job=row)  # reason prints once inside SKIP block
     return row
-
-
-# ===== Results storage and counters =====
-kept_count = 0
-skip_count = 0
-kept_rows: list[dict] = []
-skipped_rows: list[dict] = []
-_seen_kept_urls: set[str] = set()
-_seen_skip_urls: set[str] = set()
-
-def _canonical_url(row: dict) -> str:
-    return (row.get("Job URL") or row.get("job_url") or "").strip()
-
 
 ##########################################################
 ##########################################################
@@ -3490,25 +3362,7 @@ skipped_rows = []    # the “skip” rows in internal-key form
 
 def main():
     global kept_count, skip_count
-    args = _parse_args()
-
-    # make these globals visible outside main()
-    global SMOKE, SALARY_FLOOR, SALARY_CEIL
-    SMOKE = args.smoke or os.getenv("SMOKE") == "1"
-    PAGE_CAP = args.limit_pages or (3 if SMOKE else 0)
-    LINK_CAP = args.limit_links or (40 if SMOKE else 0)
-    ONLY_KEYS = [s.strip().lower() for s in args.only.split(",") if s.strip()]
-
-    SALARY_FLOOR = args.floor
-    SALARY_CEIL  = args.ceil or None
-
-    # If you use requests, tighten timeouts on smoke runs
-    if SMOKE:
-        os.environ.setdefault("SCRAPER_TIMEOUT_SECS", "5")
-
-    global kept_count, skip_count
     start_ts = datetime.now()
-    progress_clear_if_needed()
     print("[INFO                  ].Starting run")
 
     # Carry-forward map from Google Sheets: url -> (Applied?, Reason)
@@ -3521,52 +3375,20 @@ def main():
         _progress_clear_if_needed()
         print(f"[GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
 
-    # 1) Build the final set of listing pages
+        # Build the final set of listing pages:
     pages = STARTING_PAGES + expand_career_sources()
-
-    # 2) Optional caps and filters (driven by CLI flags)
-    if ONLY_KEYS:
-        pages = [u for u in pages if any(k in u.lower() for k in ONLY_KEYS)]
-
-    if PAGE_CAP:
-        pages = pages[:PAGE_CAP]
-
-    if SMOKE:
-        pages = pages[:1]  # keep one source in smoke runs
-
     total_pages = len(pages)
-
-    # 3) Collect detail links from each listing page (your existing loop stays here)
     all_detail_links = []
-
-    # Keep only selected sites when --only is used
-    if ONLY_KEYS:
-        pages = [u for u in pages if any(k in u.lower() for k in ONLY_KEYS)]
-
-    # Cap listing pages
-    if PAGE_CAP:
-        pages = pages[:PAGE_CAP]
-
-    total_pages = len(pages)
-
-    pages = STARTING_PAGES + expand_career_sources()
-    total_pages = len(pages)
-
-    if SMOKE:
-        pages = pages[:1]          # one listing source only
-        total_pages = len(pages)
 
     # 1) Gather job detail links from each listing page
     for i, listing_url in enumerate(pages, start=1):
         t0 = time.time()
         if "hubspot.com/careers/jobs" not in listing_url:
-            progress_clear_if_needed()
             log_info_processing(listing_url)
         set_source_tag(listing_url)
         html = get_html(listing_url)
         if not html:
             log_event("WARN", "", right=f"Failed to fetch listing page: {listing_url}")
-            progress_clear_if_needed()
             log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
             continue
@@ -3580,7 +3402,6 @@ def main():
 
             # NEW: show "[🔎 FOUND XX ]....candidate job links on hubspot.com in Ys"
             elapsed = time.time() - t0
-            progress_clear_if_needed()
             log_info_found(len(links), listing_url, elapsed)
             log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
@@ -3595,7 +3416,6 @@ def main():
 
                     # NEW: print a FOUND line for Workday expansions too
                     elapsed = time.time() - t0
-                    progress_clear_if_needed()
                     log_info_found(len(wd_detail_links), listing_url, elapsed)
                     log_info_done()
                     #progress(i, total_pages, kept_count, skip_count)
@@ -3628,7 +3448,6 @@ def main():
                     if "page=" in listing_url
                     else (listing_url + ("&" if "?" in listing_url else "?") + f"page={page_num}")
                 )
-                progress_clear_if_needed()
                 log_info_processing(page_url)
                 set_source_tag(listing_url)
                 html = get_html(page_url)
@@ -3642,7 +3461,6 @@ def main():
 
             log_event("INFO", f"Found {len(hubspot_links)}.candidate job links on hubspot.com")
             all_detail_links.extend(hubspot_links)
-            progress_clear_if_needed()
             log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
             continue
@@ -3652,7 +3470,7 @@ def main():
             links = collect_simplyhired_links(listing_url)
         else:
             links = find_job_links(html, listing_url)
-        progress_clear_if_needed()
+
         log_info_found(len(links), listing_url, time.time() - t0)
         all_detail_links.extend(links)
         log_info_done()
@@ -3660,40 +3478,21 @@ def main():
 
     # De-dup links
     all_detail_links = list(dict.fromkeys(all_detail_links))
-    print(f"[INFO .Collected {len(all_detail_links)} unique job links]")
-
-    # Cap detail links for smoke runs or explicit --limit-links
-    if LINK_CAP:
-        all_detail_links = all_detail_links[:LINK_CAP]
-        progress_set_total(len(all_detail_links))   # keep progress line correct
-
 
     # Proper INFO row (keeps the old look)
-    progress_clear_if_needed()
-    print(f"[INFO .Collected {len(all_detail_links)} unique job links")
-    # set total for progress line
-    #progress_set_total(len(all_detail_links))
-    # start spinner heartbeat
-    #start_spinner()
+    _progress_clear_if_needed()
+    c = LEVEL_COLOR.get("INFO", RESET)
+    print(f"{c}{_info_box()}.Collected {len(all_detail_links)} unique job links{RESET}")
 
-    #progress_set_total(len(all_detail_links))
+    # reset per-run so progress = kept + skip
     _seen_kept_urls.clear()
     _seen_skip_urls.clear()
-    # reset run counters so progress = kept + skip = j
     kept_count = 0
     skip_count = 0
 
 
     # 2) Visit each job link and extract details
-    start_spinner()
-    # Cap the number of job links in smoke runs
-    if SMOKE:
-        all_detail_links = all_detail_links[:40]   # ~40 jobs max
-        progress_set_total(len(all_detail_links))  # reset the total to match the cap
-
     for j, link in enumerate(all_detail_links, start=1):
-        progress_tick(j)  # advance spinner one frame
-        progress(j, len(all_detail_links), kept_count, skip_count)  # paint counts text
 
         set_source_tag(listing_url)
         html = get_html(link)
@@ -3726,8 +3525,9 @@ def main():
                 "Applicant Regions": "",
             })
 
-            _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-            # skip_count increment handled by _record_skip()
+            _record_skip(skip_row)
+            log_event("SKIP", _title_for_log(skip_row, link), skip_row["Reason Skipped"], job=skip_row)
+            #skip_count += 1
             progress(j, len(all_detail_links), kept_count, skip_count)
             continue
 
@@ -3777,8 +3577,9 @@ def main():
                 "Location Chips": details.get("location_chips", ""),
                 "Applicant Regions": details.get("applicant_regions", ""),
             })
-            _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-            # skip_count increment handled by _record_skip()
+            _record_skip(row)
+            log_event("SKIP", _title_for_log(row, link), job=row)
+            #skip_count += 1
             progress(j, len(all_detail_links), kept_count, skip_count)
             continue
 
@@ -3795,12 +3596,11 @@ def main():
                     "Valid Through": details.get("Valid Through", ""),
                     "Reason Skipped": "Not target role (Ascensus filter)",
                 })
-                _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-                # skip_count increment handled by _record_skip()
+                _record_skip(skip_row)
+                log_event("SKIP", _title_for_log(skip_row, link), right=skip_row["Reason Skipped"], job=skip_row)
+                #skip_count += 1
                 progress(j, len(all_detail_links), kept_count, skip_count)
                 continue
-
-        # ...continue with KEEP decision and recording below...
 
 
         # --- Salary: detect and label (goes just before keep_row = {...}) ---
@@ -3986,7 +3786,8 @@ def main():
                 })
                 skip_row["Reason Skipped"] = reason
 
-                _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
+                _record_skip(skip_row)
+                log_event("SKIP", _title_for_log(skip_row, link), right=skip_row)
                 progress(j, len(all_detail_links), kept_count, skip_count)
                 continue
 
@@ -4001,9 +3802,9 @@ def main():
 
             job = keep_row
         # ---------------------------------------------------------------------
-    # stop spinner and clear sticky line once we finish
-    stop_spinner()
-    _progress_clear_if_needed()
+        # after the for-loop finishes
+        progress(len(all_detail_links), len(all_detail_links), kept_count, skip_count)
+
 
 
     # 3) Write CSVs
@@ -4023,15 +3824,6 @@ def main():
     _progress_clear_if_needed()
     print(f"[DONE                  ].CSV: {SKIPPED_CSV}")
 
-    # Final flush
-    if kept_rows:
-        write_rows_csv(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
-        kept_rows.clear()
-    if skipped_rows:
-        write_rows_csv(SKIPPED_CSV, skipped_rows, SKIP_FIELDS)
-        skipped_rows.clear()
-
-
     # ---- Optional GitHub push (one place, at the end) ----
     commit_msg = f"job-scraper: {RUN_TS} kept={kept_count}, skipped={skip_count}"
     if PUSH_MODE == "auto":
@@ -4049,6 +3841,10 @@ def main():
     elif GIT_PUSH_MODE == "prompt":
         git_prompt_then_push(commit_msg)
     # "manual" does nothing
+
+    # ✅ after you’ve done _record_keep(...) or _record_skip(...)
+    progress(j, len(all_detail_links), kept_count, skip_count)
+
 
 
 
@@ -4093,22 +3889,19 @@ def _git_has_changes(root: str) -> bool:
 def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     root = _git_root()
     if not root:
-        progress_clear_if_needed()
         print("[INFO                  ].Not a Git repo. Skipping push.")
-        refresh_progress()
+        progress_pages(i, total_pages, listing_url)
         return
     if not _git_has_changes(root):
-        progress_clear_if_needed()
         print("[INFO                  ].No file changes to commit.")
-        refresh_progress()
+        progress_pages(i, total_pages, listing_url)
         return
 
     if prompt:
         ans = input("Push code updates to GitHub now? [y/n] ").strip().lower()
         if ans != "y":
-            progress_clear_if_needed()
             print("[INFO                  ].Skipped push.")
-            refresh_progress()
+            progress_pages(i, total_pages, listing_url)
 
             return
 
@@ -4118,10 +3911,8 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     _git_run("git pull --rebase", cwd=root)
     code, out = _git_run("git push", cwd=root)
     if code == 0:
-        progress_clear_if_needed()
         print("[INFO                  ].Pushed to GitHub.")
     else:
-        progress_clear_if_needed()
         print("[WARN                  ].Push failed:\n" + out)
 
 

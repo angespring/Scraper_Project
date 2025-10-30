@@ -18,3 +18,28 @@ python -m playwright install chromium
 # 5) run your script
 python3 po_job_scraper.py
 
+
+
+
+######################################################################################
+#
+#•Normal run (setup if needed, then scrape; logs to logs/ run_YYYYMMDD_HHMMSS.log):
+#            bash                                                                                                                                                     • Copy code
+#            ~/job-scraper/run_scraper.sh
+#
+#
+#• Rebuild the environment from scratch:
+#            bash                                                                                                                                                     • Copy code
+#            ~/job-scraper/run_scraper.sh --rebuild
+#
+#
+#• Skip installing the Playwright browser (saves a couple seconds):
+#            bash                                                                                                                                                     • Copy code
+#            ~/job-scraper/run_scraper.sh —-no-browser
+#
+#
+#• Quieter setup messages:
+#            bash                                                                                                                                                     • Copy code
+#            ~/job-scraper/run_scraper.sh --quiet
+#
+######################################################################################

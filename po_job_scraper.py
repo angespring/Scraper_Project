@@ -3660,7 +3660,7 @@ def main():
 
     # De-dup links
     all_detail_links = list(dict.fromkeys(all_detail_links))
-    print(f"[INFO .Collected {len(all_detail_links)} unique job links]")
+    print(f"[INFO ].Collected {len(all_detail_links)} unique job links]")
 
     # Cap detail links for smoke runs or explicit --limit-links
     if LINK_CAP:
@@ -3670,7 +3670,7 @@ def main():
 
     # Proper INFO row (keeps the old look)
     progress_clear_if_needed()
-    print(f"[INFO .Collected {len(all_detail_links)} unique job links")
+    print(f"[INFO ].Collected {len(all_detail_links)} unique job links")
     # set total for progress line
     #progress_set_total(len(all_detail_links))
     # start spinner heartbeat

@@ -1,46 +1,62 @@
-### Ange - Very top of scraper ###
+### Very top of scraper ###
 
 
 # --- Auto-backup section for job-scraper project ---
+from urllib.parse import urlparse, urljoin, urlsplit, parse_qs, urlunparse
 import shutil
 import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
+
 
 import builtins  # use real print here, not the later override
 import sys, os, time
 
+# for the live progress spinner thread
+import threading
 
+
+# --- Unified CLI args & run configuration (single parse, early) ---
 import argparse
-# New: module-safe defaults (will be overwritten in main())
-SMOKE = False
-SALARY_FLOOR = 110_000
-SALARY_CEIL = None
-
 
 def _parse_args():
     p = argparse.ArgumentParser(
         prog="po_job_scraper.py",
         description="Product jobs scraper – full run or quick smoke."
     )
-    # smoke/run-shaping
+    # run shape
     p.add_argument("--smoke", action="store_true",
-                   help="Fast run: limit listing pages and job links, tighten timeouts")
+                   help="Fast run: fewer pages/links, tighter timeouts")
     p.add_argument("--only", type=str, default="",
                    help="Comma list of site keywords to include (e.g. 'greenhouse,workday,hubspot')")
     p.add_argument("--limit-pages", type=int, default=0,
-                   help="Hard cap on number of listing pages to visit")
+                   help="Hard cap on listing pages visited (0 = unlimited)")
     p.add_argument("--limit-links", type=int, default=0,
-                   help="Hard cap on number of job detail links to visit")
+                   help="Hard cap on job detail links visited (0 = unlimited)")
 
-    # existing salary knobs
+    # salary knobs
     p.add_argument("--floor", type=int, default=110_000,
                    help="Minimum target salary filter")
-    p.add_argument("--ceil", type=int, default=0,
+    p.add_argument("--ceil",  type=int, default=0,
                    help="Optional salary ceiling; 0 means no ceiling")
 
     return p.parse_args()
 
+ARGS = _parse_args()
+
+# Run-time flags (downstream code reads these)
+SMOKE       = bool(ARGS.smoke)
+ONLY_FILTER = {s.strip().lower() for s in ARGS.only.split(",") if s.strip()}  # e.g. {'workday','greenhouse'}
+PAGE_CAP    = int(ARGS.limit_pages) if ARGS.limit_pages else None
+LINK_CAP    = int(ARGS.limit_links) if ARGS.limit_links else None
+
+# Salary thresholds (globals read elsewhere)
+SALARY_FLOOR = int(ARGS.floor)
+SALARY_CEIL  = (int(ARGS.ceil) or None)
+
+# Push control (leave as-is if you prefer to be prompted)
+PUSH_MODE = "ask"     # "auto" | "ask" | "off"
 
 # ensure logs and progress render immediately
 try:
@@ -52,6 +68,23 @@ except Exception:
 
 # ---- fixed-width, wrapped logger for long lines ----
 _LOG_WRAP_WIDTH = 120
+
+from urllib.parse import urlparse, urlunparse
+
+def _link_key(u: str) -> str:
+    """
+    Lowercase host, strip 'www.', drop query and fragment, and
+    remove a trailing '/' so /job/abc and /job/abc/ are the same.
+    """
+    try:
+        p = urlparse(u)
+        host = p.netloc.lower().replace("www.", "")
+        path = p.path.rstrip("/")
+        clean = urlunparse((p.scheme, host, path, "", "", ""))
+        return clean
+    except Exception:
+        return (u or "").strip().rstrip("/")
+
 
 def _bkts() -> str:
     return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
@@ -71,11 +104,15 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 3, width: int = _LOG_WRAP
         chunk, rest = rest[:width], rest[width:]
         builtins.print(f"{ts} [{section:<22}].{prefix}{chunk}")
 
+# put near your custom print() (right after _builtin_print = builtins.print)
+#def raw_print(*args, **kwargs):
+#    """Bypass the timestamping print for system lines (progress, GS)."""
+#    return _builtin_print(*args, **kwargs)
 # Modes:
 #   "manual"  = do nothing
 #   "prompt"  = ask at the end of the run
 #   "auto"    = commit and push automatically at the end
-GIT_PUSH_MODE = "manual"    # change to "prompt" or "auto" when you want
+GIT_PUSH_MODE = "prompt"    # change to "prompt" or "auto" when you want
 
 def git_commit_and_push(message: str) -> None:
     repo_dir = Path(__file__).resolve().parent
@@ -87,26 +124,28 @@ def git_commit_and_push(message: str) -> None:
     # commit (no-op if nothing to commit)
     commit = _run(["git", "commit", "-m", message])
     if "nothing to commit" in commit.stdout.lower():
-        print("[GIT                   ].No changes to commit.")
+        log_print("[GIT                   ].No changes to commit.")
         return
     # push
     push = _run(["git", "push"])
     if push.returncode == 0:
-        print("[GIT                   ].Pushed to remote.")
+        log_print("[GIT                   ].Pushed to remote.")
     else:
-        print("[GITERR                ].Push failed:")
+        log_print("[GITERR                ].Push failed:")
         for ln in (push.stdout or "").splitlines():
-            print(f"[GITERR                ].{ln}")
+            log_print(f"[GITERR                ].{ln}")
 
 def git_prompt_then_push(default_msg: str) -> None:
     try:
-        ans = input("[GIT] Push changes to GitHub now? (y/N) ").strip().lower()
+        ans = input("[GIT] Push changes to GitHub now? (y/n) ").strip().lower()
         if ans == "y":
             git_commit_and_push(default_msg)
     except Exception:
         # non-interactive environment
         pass
 
+# If True, keep jobs even when no salary is detected; if False, treat as SKIP.
+KEEP_UNKNOWN_SALARY = False
 
 
 # Set this to True later if you want to STOP creating "backup of backup" files.
@@ -188,6 +227,12 @@ from datetime import datetime
 import builtins, datetime as _dt
 _builtin_print = builtins.print
 
+def log_printf(msg: str, ts: str) -> None:
+    """Print one line using the provided timestamp (bypass the wrapper)."""
+    progress_clear_if_needed()
+    _builtin_print(f"{ts} {msg}")
+
+
 def print(*args, **kwargs):
     ts = _dt.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
     if args:
@@ -203,6 +248,8 @@ REQUIRED_PACKAGES = [
     "python-dateutil",
     "playwright",
     "wcwidth",
+    #"gspread",
+    #"google-auth",
 ]
 
 BLOCKED_DOMAINS = {
@@ -221,7 +268,6 @@ def _stamp() -> str:
 
 def log(section: str, msg: str) -> None:
     print(f"[{section:<22}].{msg}")   # padding in Terminal display
-
 
 def _ensure(pkg: str):
     """Import if available; otherwise pip install and stream output with timestamps."""
@@ -297,7 +343,62 @@ import re
 
 import requests
 from bs4 import BeautifulSoup
-from dateutil import parser as dateparser
+from dateutil import parser
+_STATE_ABBR = {"AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY",
+               "LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND",
+               "OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"}
+
+def safe_parse_dt(value: str):
+    s = (value or "").strip()
+    # Remove bare state abbreviations that the parser mistakes for tz names
+    s = re.sub(r"\b(" + "|".join(_STATE_ABBR) + r")\b", "", s)
+    try:
+        # fuzzy to ignore leftovers, ignoretz to avoid tz warnings
+        return parser.parse(s, fuzzy=True, ignoretz=True)
+    except Exception:
+        return None
+
+import warnings
+try:
+    from dateutil.parser import UnknownTimezoneWarning
+    warnings.filterwarnings("ignore", category=UnknownTimezoneWarning)
+except Exception:
+    pass
+# --- Safe date parsing to avoid UnknownTimezoneWarning ---
+from dateutil.tz import tzoffset
+from dateutil.parser import UnknownTimezoneWarning
+warnings.filterwarnings("ignore", category=UnknownTimezoneWarning)
+
+from urllib.parse import urlparse
+
+def _job_key(details: dict, link: str) -> str:
+    """
+    Prefer a durable page/job identifier; fall back to host + last path segment.
+    Works for The Muse (job_id_numeric / job_id_vendor) and is harmless for others.
+    """
+    jid = (details.get("job_id_numeric")
+           or details.get("job_id_vendor"))
+    if jid:
+        return f"{details.get('Career Board','')}|{jid}"
+
+    p = urlparse(details.get("Job URL") or link)
+    last = (p.path.rstrip("/").split("/") or [""])[-1]
+    # if the last segment is empty (root), use the full path
+    last = last or p.path.rstrip("/")
+    return f"{p.netloc.lower()}|{last.lower()}"
+
+def parse_date_relaxed(s):
+    """Parse many date strings while neutralizing stray 'tzname' tokens like 'WI' or 'IL'.
+    Some job pages concatenate a location right after a date, which confuses dateutil
+    and emits UnknownTimezoneWarning. We map any unknown tzname to a zero offset.
+    Returns ISO date string when possible, else the original string.
+    """
+    try:
+        dt = dateparse_date_relaxed(str(s), fuzzy=True,
+                              tzinfos=lambda name, offset: tzoffset(name, 0))
+        return dt.date().isoformat()
+    except Exception:
+        return s
 from urllib import robotparser
 from playwright.sync_api import sync_playwright
 
@@ -305,67 +406,108 @@ import csv
 from pathlib import Path
 # --- Workday (generic) --------------------------------------------------------
 import json
+import urllib.parse as up
 
-from urllib.parse import urlparse, parse_qs, urljoin
-
-# ── progress line & spinner (centralized) ──────────────────────────────────────
+# ── Single-line progress indicator (safe; no title contamination) ──
 import sys, time
 
-
-#_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-#_spin_i = 0
-#_progress_on = False
-#_last_tick = 0.0
+_PROGRESS_ACTIVE = False
 
 #def _progress_print(line: str) -> None:
-#    """Render/overwrite one sticky status line (no newline)."""
+#    """Draw/refresh the live, single-line progress row (no newline)."""
+#    global _PROGRESS_ACTIVE, _PROGRESS_WIDTH
 #    sys.stdout.write("\r" + line)
 #    sys.stdout.flush()
+#    _PROGRESS_ACTIVE = True
+#    _PROGRESS_WIDTH = len(line)
 
-#def progress(i: int, total: int, kept: int, skipped: int) -> None:
-#    """
-#    Show a sticky progress row like:
-#      [⠋ PROGRESS        ]...59/1000 kept=30 skip=29
-#    Called once per job (or on heartbeat).
-#    """
-#    global _spin_i, _progress_on, _last_tick
-#    _progress_on = True
-#    # tick spinner at most ~12fps to avoid flicker
-#    now = time.time()
-#    if now - _last_tick > 0.08:
-#       _spin_i = (_spin_i + 1) % len(_SPINNER)
-#        _last_tick = now
-#    spin = _SPINNER[_spin_i]
-#    bar = f"[{spin} PROGRESS           ]...{i}/{total} kept={kept} skip={skipped}"
-#    _progress_print(bar)
 
-def progress_clear_if_needed() -> None:
-    """Erase any active sticky progress line before normal printing.
-    This delegates to the unified _progress_clear_if_needed implementation.
-    """
-    _progress_clear_if_needed()
+def progress(i: int, total: int, kept: int, skipped: int) -> None:
+    """Repaint the spinner at ~12fps; never prints a newline."""
+    global _spin_i, _last_tick
+    now = time.time()
+    if now - _last_tick > 0.08:  # ~12 fps
+        _spin_i = (_spin_i + 1) % len(_SPINNER)
+        _last_tick = now
+    spin = _SPINNER[_spin_i]
+    _progress_print(f"[{spin} PROGRESS           ]...{i}/{total} kept={kept} skip={skipped}")
+
 
 
 def progress_done(i: int, total: int, kept: int, skipped: int) -> None:
-    """Finalize the sticky line at the end of the loop and drop a newline."""
+    """Finalize the live row with a newline so the cursor returns to a fresh line."""
     progress(i, total, kept, skipped)
     sys.stdout.write("\n")
     sys.stdout.flush()
-    # sticky is “off” after we’ve committed the newline
-    global _progress_on
-    _progress_on = False
+
+# Always clear the live line if the process exits unexpectedly
+import atexit
+#atexit.register(progress_clear_if_needed)
+
+def log_printf(msg: str, ts: str) -> None:
+    """Print exactly one line using the provided timestamp, bypassing the wrapper."""
+    progress_clear_if_needed()
+    _builtin_print(f"{ts} {msg}")
 
 
+# --- Safe log print: always clear the live progress line first ---
+def log_print(msg: str) -> None:
+    progress_clear_if_needed()
+    print(msg)  # your timestamped print wrapper
+
+# --- Company helpers (JSON-LD first) -----------------------------------------
+
+def _company_from_ldnode(d: dict) -> str:
+    """Pull 'hiringOrganization.name' out of a JobPosting JSON-LD node (including @graph)."""
+    if not isinstance(d, dict):
+        return ""
+    # Direct JobPosting node
+    if d.get("@type") == "JobPosting":
+        org = d.get("hiringOrganization") or d.get("hiringOrganisation")
+        if isinstance(org, dict):
+            name = (org.get("name") or "").strip()
+            if name:
+                return name
+    # Sometimes data is under a @graph list
+    if isinstance(d.get("@graph"), list):
+        for n in d["@graph"]:
+            name = _company_from_ldnode(n)
+            if name:
+                return name
+    return ""
+
+def company_from_jsonld(soup) -> str:
+    """Search all <script type='application/ld+json'> and return company if present."""
+    import json
+    for s in soup.find_all("script", type="application/ld+json"):
+        try:
+            payload = s.string or s.get_text() or ""
+            if not payload.strip():
+                continue
+            data = json.loads(payload)
+        except Exception:
+            continue
+        # List or single object
+        if isinstance(data, list):
+            for d in data:
+                name = _company_from_ldnode(d)
+                if name:
+                    return name
+        else:
+            name = _company_from_ldnode(data)
+            if name:
+                return name
+    return ""
 
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
     Convert a Workday listing URL into real job detail links by querying the cxs JSON API.
     Handles both myworkdaysite and myworkdayjobs patterns.
     """
-    p = urlparse(listing_url)
+    p = up.urlparse(listing_url)
     host = p.netloc
     parts = [s for s in p.path.split("/") if s]
-    qs = parse_qs(p.query or "")
+    qs = up.parse_qs(p.query)
     search = " ".join(qs.get("q", [])).strip() or ""
 
     # tenant rules:
@@ -394,7 +536,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
         ext = j.get("externalUrl") or j.get("externalPath") or j.get("url")
         if not ext:
             continue
-        out.append(urljoin(f"https://{host}/", ext))
+        out.append(up.urljoin(f"https://{host}/", ext))
 
     # de-dupe while preserving order
     seen, deduped = set(), []
@@ -433,22 +575,39 @@ def _wd_jobs(host: str, tenant: str, search: str, limit: int = 50, max_results: 
     return out
 
 
-from urllib.parse import urlencode, urlparse, parse_qs, urlunparse
+#from urllib.parse import urlparse as _urlparse, parse_qs, urljoin
 
 def _set_qp(url: str, **updates) -> str:
-    p = urlparse(url)
-    q = parse_qs(p.query)
+    p = up.urlparse(url)
+    q = up.parse_qs(p.query)
     for k, v in updates.items():
         q[str(k)] = [str(v)]
-    new_q = urlencode({k:v[0] for k,v in q.items()})
-    return urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
+    new_q = up.urlencode({k:v[0] for k,v in q.items()})
+    return up.urlunparse((p.scheme, p.netloc, p.path, p.params, new_q, p.fragment))
+
+# BeautifulSoup is available already in your file
+from bs4 import BeautifulSoup
+
+def muse_company_from_header(html: str) -> str:
+    """
+    The Muse: <a class="job-header_jobHeaderCompanyNameProgrammatic ...">Equinix, Inc</a>
+    """
+    try:
+        soup = BeautifulSoup(html or "", "html.parser")
+        a = soup.select_one("a.job-header_jobHeaderCompanyNameProgrammatic")
+        if a and a.get_text(strip=True):
+            return a.get_text(strip=True)
+    except Exception:
+        pass
+    return ""
+
 
 import re
 def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
     """Walk HubSpot /careers/jobs?page=N pagination without double-counting page 1, with per-page logs."""
     seen, out = set(), []
     try:
-        start_page = int((parse_qs(urlparse(listing_url).query).get("page") or ["1"])[0])
+        start_page = int((up.parse_qs(up.urlparse(listing_url).query).get("page") or ["1"])[0])
     except Exception:
         start_page = 1
 
@@ -457,22 +616,20 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
         url = _set_qp(listing_url, page=page)
         set_source_tag(url)
 
-        # NEW: per-page progress logs
         t0 = time.time()
         progress_clear_if_needed()
-        log_info_processing(url)
 
         html = get_html(url)
         if not html:
             log_event("WARN", "", right=f"Failed to GET listing page: {url}")
             progress_clear_if_needed()
-            log_info_done()
+            #log_info_done()
             break
 
         links = parse_hubspot_list_page(html, url)
         elapsed = time.time() - t0
         progress_clear_if_needed()
-        log_info_found(len(links), url, elapsed)
+        #log_info_found(len(links), url, elapsed)
 
         # de-dupe across pages
         added = 0
@@ -481,13 +638,15 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
                 seen.add(u)
                 out.append(u)
                 added += 1
+
         progress_clear_if_needed()
-        log_info_done()
+        #log_info_done()
 
         # stop when a page contributes nothing new
         if added == 0:
             break
 
+        # gentle pause before next page
         random_delay()
         page += 1
 
@@ -535,6 +694,8 @@ ROLE_RX = re.compile(
     r")\b"
 )
 
+
+
 import urllib.parse
 
 MAX_PAGES_SIMPLYHIRED = 2  # bump later if you like
@@ -562,14 +723,14 @@ def parse_hubspot_list_page(html: str, base: str) -> list[str]:
 
         # Accept only real job details like /careers/jobs/<slug or id>
         if "/careers/jobs/" in href:
-            p = urlparse(urljoin(base, href))
+            p = up.urlparse(up.urljoin(base, href))
             segs = [s for s in p.path.split("/") if s]
             if len(segs) >= 3:  # careers / jobs / <slug-or-id>
-                out.append(urljoin(base, href))
+                out.append(up.urljoin(base, href))
 
         # Still allow direct ATS links
         if any(k in href for k in ("greenhouse.io", "lever.co", "workday", "smartrecruiters.com")):
-            out.append(urljoin(base, href))
+            out.append(up.urljoin(base, href))
 
     # de-dupe while preserving order
     seen, deduped = set(), []
@@ -628,7 +789,7 @@ def parse_hubspot_detail(html: str, job_url: str) -> dict:
     for a in soup.select("a[href]"):
         href = a.get("href", "")
         if any(x in href for x in ("greenhouse.io", "lever.co", "myworkdayjobs.com", "smartrecruiters.com")):
-            apply_url = urljoin(job_url, href)
+            apply_url = up.urljoin(job_url, href)
             break
     if not apply_url:
         apply_url = job_url
@@ -639,6 +800,8 @@ def parse_hubspot_detail(html: str, job_url: str) -> dict:
             html2 = get_html(apply_url)
             if html2:
                 d2 = extract_job_details(html2, apply_url)
+                d2 = enrich_salary_fields(d2, page_host=up.urlparse(apply_url).netloc)
+
                 title = d2.get("Title") or title
                 company = d2.get("Company") or company
                 loc = d2.get("Location") or loc
@@ -646,8 +809,7 @@ def parse_hubspot_detail(html: str, job_url: str) -> dict:
         except Exception:
             pass
 
-    # Return normalized detail dict
-    return {
+    details = {
         "Title": title,
         "Company": company or "HubSpot",
         "Location": loc,
@@ -656,6 +818,10 @@ def parse_hubspot_detail(html: str, job_url: str) -> dict:
         "description_snippet": desc,
         "career_board": "HubSpot (Public)",
     }
+
+    # Final title cleanup with company context
+    details["Title"] = normalize_title(details.get("Title"), details.get("Company"))
+    return details
 
 
 def collect_simplyhired_links(listing_url: str) -> list[str]:
@@ -696,11 +862,285 @@ def collect_simplyhired_links(listing_url: str) -> list[str]:
 
 ID_LIKE_RX = re.compile(r"^[\d._-]{5,}$")
 
+from bs4 import BeautifulSoup
+import urllib.parse as up
+
+def extract_job_details(html: str, job_url: str) -> dict:
+    """
+    Generic page detail parser used by many boards.
+    Safe and defensive: never raises, returns a dict with the keys our pipeline expects.
+    """
+    soup = BeautifulSoup(html or "", "html.parser")
+    host = up.urlparse(job_url).netloc
+    company_from_header = None
+    board_from_header = None
+
+
+    # ---- Title
+    title = ""
+    h1 = soup.find("h1")
+    if h1 and h1.get_text(strip=True):
+        title = h1.get_text(strip=True)
+    if not title:
+        og = soup.find("meta", property="og:title")
+        if og and og.get("content"):
+            title = og["content"].strip()
+    if not title and soup.title and soup.title.get_text():
+        title = soup.title.get_text(strip=True)
+
+    # ---- Company (try header, JSON-LD, or obvious labels)
+    company = ""
+    a = (
+        soup.select_one("a.job-header__jobHeaderCompanyNameProgrammatic")
+        or soup.select_one("a.job-header_jobHeaderCompanyNameProgrammatic")
+        or soup.select_one("header a[href*='/profiles/']")
+    )
+    if a:
+        company = (a.get_text(" ", strip=True) or "").strip()
+
+    if not company:
+        # JSON-LD hiringOrganization.name
+        try:
+            for script in soup.find_all("script", type="application/ld+json"):
+                txt = script.string or ""
+                if "hiringOrganization" in txt:
+                    import json
+                    data = json.loads(txt)
+                    objs = data if isinstance(data, list) else [data]
+                    for obj in objs:
+                        org = (obj.get("hiringOrganization") or {})
+                        name = (org.get("name") or "").strip()
+                        if name:
+                            company = name
+                            break
+                    if company:
+                        break
+        except Exception:
+            pass
+    
+    #from bs4 import BeautifulSoup
+    from urllib.parse import urlparse
+
+    def company_from_header_meta(host: str, html: str) -> str | None:
+        soup = BeautifulSoup(html or "", "html.parser")
+
+        # common across many boards
+        og = soup.find("meta", attrs={"property": "og:site_name"})
+        if og and og.get("content"):
+            return og["content"].strip()
+
+        t = soup.find("title")
+        if t:
+            txt = t.get_text(" ", strip=True)
+            # common HubSpot pattern: "Job Title - Company"
+            if " - " in txt:
+                maybe = txt.split(" - ")[-1].strip()
+                if 2 <= len(maybe) <= 80:
+                    return maybe
+
+        # board-specific fallbacks
+        h = host.lower()
+        if "greenhouse.io" in h:
+            # Greenhouse: Company shows in header breadcrumbs or meta name
+            bc = soup.select_one('[data-mapped="employer_name"], .company-name, .app-title')
+            if bc:
+                return bc.get_text(" ", strip=True)
+        if "builtin.com" in h:
+            # Built In: often og:site_name is "Built In" so fall back to company link in header
+            c = soup.select_one('a[href*="/company/"], .company__name, [data-test="company-name"]')
+            if c:
+                return c.get_text(" ", strip=True)
+        if "hubspot.com" in h:
+            # HubSpot: try meta og:title "Job Title - Company"
+            ogt = soup.find("meta", attrs={"property": "og:title"})
+            if ogt and " - " in ogt.get("content",""):
+                return ogt["content"].rsplit(" - ", 1)[-1].strip()
+
+        return None
+
+    # ---- Location
+    loc = ""
+    cand = (
+        soup.select_one("[class*='location']") or
+        soup.select_one("li:has(svg) + li") or
+        soup.find("span", string=lambda s: s and "remote" in s.lower())
+    )
+    if cand:
+        loc = cand.get_text(" ", strip=True)
+
+    # ---- Description (short)
+    desc = ""
+    md = soup.find("meta", attrs={"name": "description"})
+    if md and md.get("content"):
+        desc = md["content"].strip()
+    if not desc:
+        p = soup.find("p")
+        if p:
+            desc = p.get_text(" ", strip=True)[:300]
+            page_txt = soup.get_text(" ", strip=True).lower()
+
+
+    # ---- Build details and normalize
+    details = {
+        "Title": title,
+        "Company": company,
+        "Career Board": infer_board_from_url(job_url),
+        "Location": loc,
+        "Description": desc,
+        "Description Snippet": desc,     # if you keep a shorter one
+        "Job URL": job_url,
+        "job_url": job_url,              # legacy key you already use
+    }
+
+    # normalize title/company first
+    #details = _derive_company_and_title(details, html)
+
+    # ---- capture full page text for rules/salary parsing ----
+    page_txt = soup.get_text(" ", strip=True).lower()
+    details["page_text"] = page_txt
+
+    # ---- optional: capture The Muse Job ID (avoids false salary hits) ----
+    m = re.search(r"\bJob\s*ID:\s*([A-Za-z0-9_-]+),?\s*(\d+)?", page_txt, re.I)
+    if m:
+        details["job_id_vendor"]  = m.group(1)
+        if m.group(2):
+            details["job_id_numeric"] = m.group(2)
+    
+    # after: page_txt = soup.get_text(" ", strip=True).lower()
+    details["page_text"] = page_txt          # keep if you’re using it elsewhere
+    details["Description"] = soup.get_text(" ", strip=True)
+    details = enrich_salary_fields(details, page_host=host)
+
+
+    # Location text
+    loc_text = (details.get("Location") or "").strip()
+    if not loc_text and "remote" in page_txt:
+        details["Location"] = "Remote"
+
+    # Location Chips (normalize to a lowercase set, then write back as list)
+    chips = set()
+    lc = details.get("Location Chips")
+    if isinstance(lc, (list, tuple)):
+        chips.update(str(x).lower() for x in lc if x)
+    elif isinstance(lc, str) and lc:
+        chips.update(x.strip().lower() for x in lc.split(",") if x.strip())
+
+    if "remote" in page_txt:
+        chips.add("remote")
+    if details.get("Location", "").lower() == "remote":
+        chips.add("remote")
+
+    details["Location Chips"] = sorted(chips) if chips else []
+
+    # Country Chips: mark US/Canada eligibility if we see obvious signals.
+    country = set()
+    cc = details.get("Country Chips")
+    if isinstance(cc, (list, tuple)):
+        country.update(str(x).lower() for x in cc if x)
+
+    # Common signals in postings
+    if any(t in page_txt for t in ("united states", "u.s.", "usa")):
+        country.add("us")
+    if "canada" in page_txt:
+        country.add("canada")
+
+    # --- Company (prefer header; then meta/title; then URL) ---
+    company_from_header = ""
+    host = up.urlparse(job_url).netloc.lower()
+
+    # The Muse
+    if "themuse.com" in host:
+        node = (
+            soup.select_one("header .job-header__jobHeaderCompanyNameProgrammatic")
+            or soup.select_one("header .job-header__jobHeaderCompanyName")
+            or soup.select_one(".job-details__company a")
+            or soup.select_one("a[href^='/profiles/'], a[href^='/companies/']")
+        )
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+
+    # We Work Remotely
+    if not company_from_header and "weworkremotely.com" in host:
+        node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+
+    # NoDesk
+    if not company_from_header and host.endswith("nodesk.co"):
+        node = soup.select_one("h1 > p, a.company a, .company")
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+
+    # HubSpot
+    if not company_from_header and ("hubspot.com" in host):
+        node = (
+            soup.select_one("[data-company-name]")
+            or soup.select_one(".job-metadata a[href*='company']")
+            or soup.select_one("header .company a, header .company")
+        )
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+
+    # Greenhouse
+    if not company_from_header and ("greenhouse.io" in host):
+        node = (
+            soup.select_one(".company-name")
+            or soup.select_one(".app-title .company")
+            or soup.select_one(".opening .company")
+        )
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+
+    # Built In
+    if not company_from_header and ("builtin.com" in host):
+        node = (
+            soup.select_one("[data-test='company-name']")
+            or soup.select_one(".job-hero__company a")
+            or soup.select_one(".job-hero__company")
+        )
+        if node:
+            company_from_header = node.get_text(" ", strip=True)
+        if not company_from_header:
+            m = re.search(r"builtin\.com/company/([^/?#]+)", job_url)
+            if m:
+                company_from_header = m.group(1).replace("-", " ")
+
+    company = (
+        _company_from_common_selectors(soup)
+        or _company_from_meta_or_title(host, soup)
+        #or company_from_header
+        or company_from_url_fallback(job_url)
+        or ""
+    )
+    company = _normalize_company_name(company)
+    if company:
+        details["Company"] = company
+
+    if not company:
+        fallback = company_from_header_meta(host, html)
+        if fallback:
+            company = fallback
+    details["Company"] = company or "No Company Found"
+
+
+    details["Description"] = soup.get_text(" ", strip=True)
+    details = enrich_salary_fields(details, page_host=host)
+
+    details["Country Chips"] = sorted(country)
+
+    # Final title cleanup: strip trailing/leading company from Title using Company context
+    details["Title"] = normalize_title(details.get("Title"), details.get("Company"))
+
+    # Now enrich salary with host + full text available
+    details = enrich_salary_fields(details, page_host=host)
+
+    return details
+
 def _looks_like_id(s: str | None) -> bool:
     return bool(s and ID_LIKE_RX.fullmatch(s.strip()))
 
 def _title_from_url(job_url: str) -> str:
-    p = urlparse(job_url)
+    p = up.urlparse(job_url)
     segs = [s for s in p.path.split("/") if s]
     cand = ""
     if segs:
@@ -820,65 +1260,68 @@ def _is_target_role(d: dict) -> bool:
     return False
 
 def _is_remote(d: dict) -> bool:
-    rr   = str(d.get("Remote Rule", "")).lower()
-    chip = (d.get("Location Chips") or "").lower()
-    loc  = (d.get("Location") or "").lower()
-    text = " ".join([chip, loc, rr])
+    rr  = str(d.get("Remote Rule") or "").lower()
+    loc = str(d.get("Location") or "").lower()
+    chips_val = d.get("Location Chips")
+    chips = " ".join(map(str, chips_val)).lower() if isinstance(chips_val, (list, tuple)) else str(chips_val or "").lower()
+
+    text = " ".join([chips, loc, rr])
+
+    # new fast-paths
+    if "flexible / remote" in text or "flexible remote" in text:
+        return True
+    if " remote" in text or text.startswith("remote") or "/remote" in text:
+        return True
+
+    # keep your existing allow/deny patterns below
     if re.search(r"\bremote\b", text) or "anywhere" in text or "global" in text:
-        return not re.search(r"\b(on[-\s]?site|in[-\s]?office|hybrid)\b", text)
-    return False
+        return True
+    return not re.search(r"\b(on[-\s]?site|in[-\s]?office|hybrid)\b", text)
 
 def _is_us_canada_eligible(d: dict) -> bool:
     """
-    Liberal when unknown, strict when explicit non-NA regions appear.
-    Accept if any signal mentions US/Canada. Reject on strong non-NA signals.
-    For 'remote except these states', treat as eligible if HOME_STATE is not excluded.
+    Liberal when unknown, stricter when explicit non-NA regions appear.
+    Accept any strong US/Canada mentions. Reject on strong non-NA signals.
     """
-    regions = " ".join([
-        str(d.get("Applicant Regions") or ""),
-        str(d.get("Location Chips") or ""),
-        str(d.get("Location") or ""),
+    # Country chips
+    country_chips = d.get("Country Chips")
+    countries = set()
+    if isinstance(country_chips, (list, tuple)):
+        countries.update(str(x).lower() for x in country_chips if x)
+    else:
+        for t in str(country_chips or "").lower().split(","):
+            t = t.strip()
+            if t:
+                countries.add(t)
+
+    # Location chips (can be list)
+    loc_chips = d.get("Location Chips")
+    if isinstance(loc_chips, (list, tuple)):
+        loc_chips_txt = " ".join(map(str, loc_chips)).lower()
+    else:
+        loc_chips_txt = str(loc_chips or "").lower()
+
+    txt = " ".join([
+        str(d.get("Location") or "").lower(),
+        str(d.get("Description Snippet") or "").lower(),
+        loc_chips_txt,
     ])
-    regions_low = regions.lower()
-    desc_low = (d.get("Description Snippet") or "").lower()
 
-    chips = (d.get("Location Chips") or "").lower()
-    txt   = (d.get("Description Snippet") or "").lower()
+    # Strong positives
+    if countries & {"us", "usa", "united states", "canada", "ca"}:
+        return True
+    if any(p in txt for p in [
+        "us only", "usa only", "anywhere in the us", "anywhere in the united states",
+        "eligible to work in the us", "canada"
+    ]):
+        return True
 
-    if "usa only" in chips or "usa only" in txt or "us only" in chips or "us only" in txt:
-        return True   # US OK, Canada not required
-
-    # 1) strong non-NA region mention -> not eligible
-    if NON_NA_STRONG.search(regions_low) or NON_NA_STRONG.search(desc_low):
+    # Strong non-NA negatives
+    if any(n in txt for n in ["europe", "emea", "apac", "latam", "australia", "new zealand", "uk only"]):
         return False
 
-    # 2) positive NA mention -> eligible
-    NA_HIT = re.compile(r"\b(us|u\.s\.?|united states|usa|canada|canadian)\b", re.I)
-    if NA_HIT.search(regions_low) or NA_HIT.search(desc_low):
-        return True
-
-    # 2b) remote with excluded states -> eligible iff HOME_STATE not in excluded set
-    excluded = _extract_excluded_states(regions_low + " " + desc_low)
-    if excluded:
-        my_state = (HOME_STATE or "").strip().lower()
-        if my_state and my_state not in excluded:
-            return True
-        return False
-
-    # 3) remote-first boards with no explicit regions -> soft allow unless copy says otherwise
-    url = (d.get("Job URL") or d.get("job_url") or "").lower()
-    host = urlparse(url).netloc.replace("www.", "")
-    if host in REMOTE_BOARDS and SOFT_US_FOR_REMOTE_BOARDS:
-        combined = regions_low + " " + desc_low
-        if EU_STRONG.search(combined) or NON_US_STRONG.search(combined) or NON_NA_STRONG.search(combined):
-            return False
-        return True
-
-    # 4) unknown but clearly says 'remote' with no constraints -> allow
-    if "remote" in regions_low:
-        return True
-
-    return False
+    # Default allow if we can't tell
+    return True
 
 def build_rule_reason(d: dict) -> str:
     reasons = []
@@ -908,7 +1351,7 @@ def choose_skip_reason(d: dict, technical_fallback: str) -> str:
 
 
 # --- URL helpers used throughout ---
-from urllib.parse import urlparse, urljoin, parse_qs, unquote
+#from urllib.parse import urlparse, urljoin, parse_qs, unquote
 
 _NO_LONGER_AVAILABLE_PATTERNS = [
     "no longer available",
@@ -959,49 +1402,232 @@ def _detect_dead_post(domain: str, soup, raw_text: str) -> str:
         site = domain.replace("www.", "")
         return f"Posting closed or removed on {site}"
 
-def _enrich_salary_fields(d: dict) -> dict:
-    text = " ".join([
-        d.get("Description Snippet",""),
-        d.get("Title",""),
-        d.get("Company",""),
-    ])
-    max_detected = detect_salary_max(text)  # your existing parser
-    d["Salary Max Detected"] = max_detected if max_detected is not None else ""
+# constants you already have; keep your own values if different
+SALARY_TARGET_MIN  = 120_000
+SALARY_NEAR_DELTA  = 15_000
+TRIGGER_PHRASES = (
+    "competitive base", "competitive salary", "competitive compensation",
+    "very competitive", "highly competitive", "market competitive",
+    "salary commensurate", "commensurate with experience",
+    "market rate", "salary doe", "doe", "compensation package",
+)
+# catches “competitive … base … salary” even with words in between
+SALARY_SIGNAL_RX = re.compile(r"\b(very|highly)?\s*competitive\b.*\bbase\b.*\bsalary\b", re.I | re.S)
 
-    # Optional: board estimates if you parse them elsewhere
-    est_low, est_high = d.get("Salary Est Low"), d.get("Salary Est High")
-    status, badge = _salary_status(max_detected, est_low, est_high)
+def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
+    t = (text or "").lower()
+    return any(p in t for p in phrases)
 
-    d["Salary Status"] = status or ""
-    d["Salary Near Min"] = max_detected if status == "near_min" else ""
-    d["Salary Note"] = badge or ""
-    if est_low and est_high:
-        try:
-            d["Salary Est. (Low-High)"] = f"${int(est_low):,} - ${int(est_high):,}"
-        except Exception:
-            d["Salary Est. (Low-High)"] = ""
-    else:
-        d["Salary Est. (Low-High)"] = ""
-    return d
+
+from bs4 import BeautifulSoup  # you already import bs4 earlier; safe to use here
 
 
 import argparse
-#parser = argparse.ArgumentParser()
-#parser.add_argument("--floor", type=int, default=110_000)
-#parser.add_argument("--ceil",  type=int, default=0)
-#args = parser.parse_args()
-SMOKE = False
-SALARY_CEIL = None
+# --- unified argparse (KEEP this and remove any earlier parser) ---
+args = _parse_args()
+
+# expose flags the rest of the file expects
+SMOKE         = bool(getattr(args, "smoke", False))
+LINK_CAP      = int(getattr(args, "limit_links", 0) or 0)
+PUSH_MODE     = str(getattr(args, "push", "ask"))           # if your code uses this
+GIT_PUSH_MODE = str(getattr(args, "git_push_mode", "ask"))  # if your code uses this
+
+# salary knobs kept for backward compatibility
+SALARY_FLOOR  = getattr(args, "floor", None)
+SALARY_CEIL   = getattr(args, "ceil",  None)
+
 
 # Salary rules
-SALARY_FLOOR = 110_000          # your target minimum
-SOFT_SALARY_FLOOR = 90_000      # below this => SKIP, between here and FLOOR => QUIET keep
+SALARY_FLOOR = 110000          # your target minimum
+SOFT_SALARY_FLOOR = 90000      # below this => SKIP, between here and FLOOR => QUIET keep
 # If True, jobs with no detectable salary are allowed (not skipped).
-KEEP_UNKNOWN_SALARY = True
+KEEP_UNKNOWN_SALARY = True  # treat "unknown salary" items as KEEP (True) or SKIP (False)
+
+# ── Terminal-only display helpers ─────────────────────────────────────────────
+
+def _safe_disp(val: str | None, fallback: str) -> str:
+    val = (val or "").strip()
+    return val if val else fallback
+
+
+
+    # OLD: --- Salary line formatting for terminal output ---
+    """
+    Terminal-only line:
+      [💲 SALARY $90,000 ]...Near min
+      [💲 SALARY $90,000 ]...At or above min
+      [💲 SALARY $xxx,xxx ]...Estimated
+      [💲 SALARY ]...Missing or Unknown
+    """
+def _fmt_salary_line(row: dict) -> str:
+    """
+    Turn the salary-related columns on a keep_row into a short human string.
+
+    It is intentionally forgiving: it will show *something* if we have any of:
+    - an estimated range
+    - a detected max value
+    - a status / note
+    - a placeholder (e.g. "Competitive salary")
+    """
+    # Raw values from the row
+    status      = (row.get("Salary Status") or "").strip()
+    placeholder = (row.get("Salary Placeholder") or "").strip()
+    est_str     = (row.get("Salary Est. (Low-High)") or "").strip()
+
+    max_raw     = row.get("Salary Max Detected") or ""
+    near_min    = bool(row.get("Salary Near Min"))
+
+    parts: list[str] = []
+
+    # 1) Preferred: human-friendly estimated range, if present
+    if est_str:
+        parts.append(est_str)
+
+    # 2) Fallback: just show the max we saw
+    if not est_str and max_raw:
+        try:
+            max_int = int(str(max_raw).replace(",", "").strip())
+            parts.append(f"max ≈ ${max_int:,}")
+        except ValueError:
+            # Couldn't parse as int – just show whatever text we have
+            parts.append(str(max_raw))
+
+    # 3) If we’re near your configured floor, add a warning tag
+    if near_min:
+        parts.append("⚠ near floor")
+
+    # 4) Status / note can give extra context (e.g. “estimated”, “signal-only”)
+    if status:
+        parts.append(f"({status})")
+
+    # 5) Placeholder is things like “Competitive salary”, when no numbers exist
+    if placeholder:
+        parts.append(placeholder)
+
+    # If we assembled anything at all, join with separators
+    if parts:
+        return " · ".join(parts)
+
+    # Absolute fallback – nothing detected anywhere
+    return "Missing or Unknown"
+
+def _company_and_board_for_terminal(row: dict) -> tuple[str, str]:
+    company = (row.get("Company") or "").strip()
+    board   = (row.get("Career Board") or row.get("career_board") or "").strip()
+    if not company:
+        company = "No Company Found"
+    if not board:
+        board = "No Board Found"
+    return company, board
+
+import re
+#from urllib.parse import urlparse
+
+def _derive_company_and_title(d: dict, html: str | None = None) -> dict:
+    """
+    Return a copy of d with a cleaned Title and a filled Company when the board
+    embeds it in Title or URL. Handles patterns like 'IT Business Analyst at Hitachi Energy'
+    or 'Hitachi Energy – IT Business Analyst', and Muse-style URLs /jobs/<company>/...
+    """
+    out = dict(d)
+    t = (out.get("Title") or "").strip()
+    company = (out.get("Company") or "").strip()
+    url = (out.get("Job URL") or out.get("job_url") or "").strip()
+
+    # Title patterns
+    m = re.match(r"^(?P<title>.+?)\s+at\s+(?P<company>.+)$", t, flags=re.I)
+
+    if not m:
+        # Only split on hyphen if the left side is NOT a role and the right side IS a role
+        m2 = re.match(r"^(?P<left>.+?)\s*[-–|]\s*(?P<right>.+)$", t)
+        if m2:
+            left  = m2.group("left").strip()
+            right = m2.group("right").strip()
+            ROLE_RX = re.compile(
+                r"\b("
+                r"product|program|project|business|data|software|system|systems|platform|growth|marketing|ops|operations"
+                r")\b.*\b("
+                r"analyst|owner|manager|specialist|engineer|designer|lead|director|administrator|architect"
+                r")\b",
+                re.I,
+            )
+            # only treat left as company when left!=role and right==role
+            if not company and not ROLE_RX.search(left) and ROLE_RX.search(right):
+                company = left
+                t = right
+            # else: leave t as-is
+
+    if m:
+        # Prefer explicit company from title if we do not already have one
+        if not company:
+            company = m.group("company").strip()
+        t = m.group("title").strip()
+
+            # Prefer the on-page company name (e.g., The Muse header / JSON-LD)
+        if not company and html:
+            try:
+                soup = BeautifulSoup(html, "html.parser")
+
+                # The Muse — header company name (multiple class variants seen)
+                a = (
+                    soup.select_one("a.job-header__jobHeaderCompanyNameProgrammatic")
+                    or soup.select_one("a.job-header_jobHeaderCompanyNameProgrammatic")
+                    or soup.select_one("header a[href*='/profiles/']")
+                )
+                if a:
+                    name = (a.get_text(" ", strip=True) or "").strip()
+                    if name:
+                        company = name
+
+                # Fallback: JSON-LD hiringOrganization.name
+                if not company:
+                    for s in soup.select('script[type="application/ld+json"]'):
+                        try:
+                            data = json.loads(s.string or "")  # may raise
+                            # normalize to list to iterate
+                            candidates = data if isinstance(data, list) else [data]
+                            for node in candidates:
+                                org = (
+                                    node.get("hiringOrganization")
+                                    or node.get("organization")
+                                    or {}
+                                )
+                                name = (org.get("name") or "").strip()
+                                if name:
+                                    company = name
+                                    break
+                            if company:
+                                break
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+                
+        # …after title-pattern checks…
+        if not company and html:
+            try:
+                soup = BeautifulSoup(html, "html.parser")
+                # The Muse – company link in the job header
+                a = soup.select_one("a.job-header__jobHeaderCompanyNameProgrammatic")
+                if a:
+                    name = (a.get_text(" ", strip=True) or "").strip()
+                    if name:
+                        company = name
+            except Exception:
+                pass
+
+
+    out["Title"] = t
+    if company:
+        out["Company"] = company
+    return out
+
+
 
 
 PLAYWRIGHT_DOMAINS = {
     "edtech.com", "www.edtech.com",
+    "edtechjobs.io/", "www.edtechjobs.io",
     "builtin.com", "www.builtin.com",
     "wellfound.com", "www.wellfound.com",
     "welcometothejungle.com", "www.welcometothejungle.com", 
@@ -1062,6 +1688,8 @@ MAX_SECONDS_PER_SITE = 60     # hard cap per listing page
 GS_KEY_PATH = "/Users/ange/job-scraper/service_account.json"   # absolute path to your JSON key
 GS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1UloVHEsBxvMJ3WeQ8XkHvtIrL1cQ2CiyD50bsOb-Up8/edit?gid=1531552984#gid=1531552984"              # full URL to “product jobs scraper”
 GS_TAB_NAME = "Table1"  # or "Sheet1" — match the tab name shown in the bottom-left of the sheet
+# GitHub push control (toggle: "off" | "ask" | "auto")
+#PUSH_MODE = "ask"   # Set to "auto" for automatic pushes, or "off" to disable
 
 SKIPPED_KEYS = [
     "Date Scraped","Title","Company",
@@ -1078,6 +1706,8 @@ STARTING_PAGES = [
 
     # Business Analyst / Systems Analyst
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
+    #"https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
+    #"https://www.builtin.com/jobs?search=business%20analyst&remote=true",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
 
     # Scrum Master / RTE
@@ -1095,6 +1725,8 @@ STARTING_PAGES = [
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Product%20Development",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Information%20Technology",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Operations",
+    "https://edtechjobs.io/jobs/product-management?location=Remote",
+    "https://edtechjobs.io/jobs/business-analysis?location=Remote",
 
     # University of Washington (Workday) — focused keyword searches
     # These are narrow enough that you won’t fetch all 565 jobs.
@@ -1133,7 +1765,7 @@ STARTING_PAGES = [
     "https://www.builtin.com/jobs?search=product%20owner&remote=true",
 
     # HubSpot (server-rendered listings; crawl like a board)
-    "https://www.hubspot.com/careers/jobs?page=1&query=product",
+    "https://www.hubspot.com/careers/jobs?q=product&;page=1",
     # If you want a tighter filter and HubSpot supports it, you can also try:
     # "https://www.hubspot.com/careers/jobs?page=1&functions=product&location=Remote%20-%20USA",
 
@@ -1209,7 +1841,7 @@ NON_US_HINTS = re.compile(
     r"\b(europe|emea|eu|united kingdom|uk|england|ireland|scotland|wales|germany|france|spain|italy|"
     r"netherlands|belgium|sweden|norway|finland|denmark|switzerland|austria|poland|czech|portugal|"
     r"romania|bulgaria|greece|hungary|slovakia|baltics|australia|new zealand|india|singapore|mexico|"
-    r"ukraine|brazil|argentina|colombia|apac|latam)\b",
+    r"ukraine|brazil|argentina|colombia|apac|costa rica|latam)\b",
     re.I,
 )
 
@@ -1362,7 +1994,7 @@ SKIP_FIELDS = [
 
 def can_fetch(url):
     """Check robots.txt with a timeout so it never hangs."""
-    parsed = urlparse(url)
+    parsed = up.urlparse(url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     rp = robotparser.RobotFileParser()
     try:
@@ -1383,11 +2015,11 @@ def can_fetch(url):
 
 def polite_get(url, retries=2):
     backoff = 1.5
-    req_host = urlparse(url).netloc.lower()
+    req_host = up.urlparse(url).netloc.lower()
     for attempt in range(retries + 1):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-            final_host = urlparse(resp.url).netloc.lower()
+            final_host = up.urlparse(resp.url).netloc.lower()
             # If the request was redirected off-site to a blocked or aggregator domain, treat as not-fetchable
             REDIRECT_BLOCKERS = {"talent.com", "de.talent.com", "in.talent.com"}
             if final_host != req_host and (final_host in BLOCKED_DOMAINS or final_host in REDIRECT_BLOCKERS):
@@ -1405,7 +2037,7 @@ def polite_get(url, retries=2):
 
 def career_board_name(url: str) -> str:
     """Return a human-friendly name for the site that hosts the job page."""
-    host = urlparse(url).netloc.lower().replace("www.", "")
+    host = up.urlparse(url).netloc.lower().replace("www.", "")
     # Friendly names for common hosts
     KNOWN = {
         "nodesk.co": "NoDesk",
@@ -1431,6 +2063,7 @@ def career_board_name(url: str) -> str:
         "myworkdayjobs.com": "Workday",
         "myworkdaysite.com": "Workday",
         "edtech.com": "EdTech",
+        "edtechjobs.io": "EdTech Jobs",
 
     }
     for k, v in KNOWN.items():
@@ -1446,7 +2079,7 @@ def random_delay(base_min=MIN_DELAY, base_max=MAX_DELAY):
     time.sleep(random.uniform(base_min, base_max))
 
 def is_job_detail_url(u: str) -> bool:
-    p = urlparse(u)
+    p = up.urlparse(u)
     host = p.netloc.lower()
     path = p.path
     q = p.query.lower()
@@ -1487,6 +2120,10 @@ def is_job_detail_url(u: str) -> bool:
 
     # edtech
     if "edtech.com" in host:
+        return path.startswith("/jobs/") and not path.endswith("-jobs") and path.count("/") >= 2
+
+    # edtechjobs
+    if "edtechjobs.io" in host:
         return path.startswith("/jobs/") and not path.endswith("-jobs") and path.count("/") >= 2
 
     # Built In
@@ -1539,7 +2176,7 @@ def should_skip_url(u: str) -> bool:
     """Return True for URLs we never want to treat as job details."""
     if not u:
         return True
-    p = urlparse(u)
+    p = up.urlparse(u)
     host = p.netloc.lower()
     path = p.path.lower()
 
@@ -1554,25 +2191,35 @@ def should_skip_url(u: str) -> bool:
     return False
 
 
-def normalize_text(node):
-    if not node:
+# --- replace your current normalize_text with this ---
+def normalize_text(node_or_text, strip=True) -> str:
+    """Return a single-spaced string from either a Soup node or a plain string."""
+    if node_or_text is None:
         return ""
-    return " ".join(node.get_text(" ", strip=True).split())
+    # If it's a soup node (Tag/NavigableString) use get_text; otherwise treat as str
+    if hasattr(node_or_text, "get_text"):
+        s = node_or_text.get_text(" ", strip=strip)
+    else:
+        s = str(node_or_text)
+        if strip:
+            s = s.strip()
+    # collapse all whitespace
+    return " ".join(s.split())
 
 def find_job_links(listing_html: str, base_url: str) -> list[str]:
     soup = BeautifulSoup(listing_html, "html.parser")
     anchors = soup.find_all("a", href=True)
     links: set[str] = set()
 
-    base_host = urlparse(base_url).netloc.lower()
+    base_host = up.urlparse(base_url).netloc.lower()
     cap = 120 if ("ashbyhq.com" in base_host or "myworkdayjobs.com" in base_host or "myworkdaysite.com" in base_host) else None
 
     # --- Ashby special-case: accept both "/{org}/{slug}" and "/{org}/jobs/{id-or-slug}" ---
     if "ashbyhq.com" in base_host:
         for a in anchors:
             href = a["href"].strip()
-            full = urljoin(base_url, href)
-            p = urlparse(full)
+            full = up.urljoin(base_url, href)
+            p = up.urlparse(full)
             if p.netloc.lower().endswith("ashbyhq.com"):
                 if re.fullmatch(r"/[^/]+/[^/]+/?", p.path) and "departmentid=" not in p.query.lower():
                     links.add(full)
@@ -1585,7 +2232,7 @@ def find_job_links(listing_html: str, base_url: str) -> list[str]:
     # --- default path (everything else) ---
     for a in anchors:
         href = a["href"].strip()
-        full = urljoin(base_url, href)
+        full = up.urljoin(base_url, href)
         if is_job_detail_url(full):
             links.add(full)
             if cap and sum(1 for L in links if base_host in L) >= cap:
@@ -1608,9 +2255,12 @@ def _clean_bits(bits):
             out.append(t)
     return out
 
+def _as_text(v):
+    return " ".join(map(str, v)) if isinstance(v, (list, tuple)) else str(v or "")
+
 def gather_location_chips(job_url: str, soup: BeautifulSoup, ld: dict, existing: list[str] | None = None) -> str:
     """Pull chips/badges that hint remote/region/type from common boards + ldjson."""
-    host = urlparse(job_url).netloc.replace("www.", "")
+    host = up.urlparse(job_url).netloc.replace("www.", "")
     bits: list[str] = list(existing or [])
 
     # 1) JSON-LD signals
@@ -1720,28 +2370,44 @@ _GENDER_WORDS_RX    = re.compile(r"\b(mwd|m/w/d|w/m/d)\b", re.I)
 _SCHEDULE_SUFFIX_RX = re.compile(r"\b(full[-\s]?time|part[-\s]?time|contract|permanent|temporary|vollzeit|teilzeit)\b", re.I)
 _PARENS_TRAILER_RX  = re.compile(r"\s*\([^)]*\)\s*$")  # generic trailing (…) cleaner
 
-def normalize_title(t: str) -> str:
+# Put near your other regex helpers
+HYPHEN_CHARS_RX   = r"[\-\u2013\u2014]"  # -, – , —
+COMPANY_SUFFIX_RX = r"(?:,?\s*(?:inc\.?|llc|ltd|limited|corp(?:oration)?))?"
+
+def _norm_company_for_compare(s: str) -> str:
+    import re
+    s = re.sub(COMPANY_SUFFIX_RX + r"$", "", str(s or ""), flags=re.I).strip()
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+def normalize_title(t: str, company: str | None = None) -> str:
+    """Normalize title without chopping legitimate role parts after hyphens."""
+    import re, html
     if not t:
         return ""
-    import html, re
     t = html.unescape(str(t)).strip()
+    # light cleanup only
+    #t = re.sub(r"\s+", " ", t)
 
-    # Remove leading [Hiring]/[Remote]/emoji/etc.
-    t = re.sub(r"^\s*\[[^\]]+\]\s*", "", t).strip()
+    if not company:
+        return t
 
-    # Drop “@Company” and “ - Company” suffixes
-    t = re.sub(r"\s*@\s*[\w .,&'’\-]+$", "", t).strip()
-    t = re.sub(r"\s*[–—\-|:]\s*@?\s*[\w .,&'’\-]+$", "", t).strip()  # handles “ - ”, “—”, “|”
+    comp_norm = _norm_company_for_compare(company)
+    if not comp_norm:
+        return t
 
-    # Remove locale/gender markers & contract boilerplate
-    JUNK_TRAIL = r"(?:\(\s*m\s*\/\s*f\s*\/\s*d\s*\)|\(\s*m\s*\/\s*w\s*\/\s*d\s*\)|Vollzeit|Full[-\s]*time|Part[-\s]*time|Contract|Freelance|CDI|CDD|Zeit|Temps|Tempo)\b"
-    t = re.sub(rf"\s*(?:{JUNK_TRAIL})(?:\s*[,/|·•-]\s*(?:{JUNK_TRAIL}))*\s*$", "", t, flags=re.I).strip()
+    # Try strip trailing “… – Company”
+    parts = re.split(rf"\s*{HYPHEN_CHARS_RX}\s*", t)
+    if len(parts) >= 2:
+        tail_norm = _norm_company_for_compare(parts[-1])
+        if tail_norm == comp_norm:
+            # keep everything before the last hyphen; preserve original spacing minimally
+            return " - ".join(parts[:-1]).strip()
 
-    t = re.sub(r"\s+", " ", t)
-    t = re.sub(r"\s+[-–—]\s+$", "", t)
+    # Try strip leading “Company – …”
+    head_norm = _norm_company_for_compare(parts[0]) if parts else ""
+    if head_norm == comp_norm and len(parts) >= 2:
+        return " - ".join(parts[1:]).strip()
 
-    if t.isupper():
-        t = t.title()
     return t
  
 
@@ -1773,172 +2439,326 @@ def best_location_for_display(ld: dict, chips: str, scraped_loc: str) -> str:
     # 4) Last resort
     return "Remote"
 
-def extract_job_details(job_html: str, job_url: str) -> dict:
-    DESCRIPTION_PREVIEW_CHARS = 600
-    soup = BeautifulSoup(job_html or "", "html.parser")
+import re
 
-    # Initialize everything so no branch can reference before assignment
-    Title = ""
-    company = ""
-    location = ""
-    posted = ""
-    posting_date = ""
-    valid_through = ""
-    description = ""
-    apply_url = job_url
-    location_chips = ""
-    is_remote = False
-    is_hybrid = False
-    is_onsite = False
+# Optional: tidy up ALL-CAPS or stray spaces before punctuation
+def _normalize_company_name(s: str) -> str:
+    if not s:
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    if s.isupper() and not re.search(r"[A-Z]\.", s):  # turn “HITACHI ENERGY” into “Hitachi Energy”
+        s = s.title()
+    return s.replace(" ,", ",").replace(" .", ".")
 
-    host = urlparse(job_url).netloc.lower()
+#def _safe_node_text(node) -> str:
+#    try:
+#        # BeautifulSoup Tag path
+#        return node.get_text(" ", strip=True)
+#    except AttributeError:
+#        # None or plain string
+#        return str(node or "")
+    
+def _safe_node_text(node):
+    return " ".join(node.get_text(" ", strip=True).split()) if node else ""
 
-    # Hard stop for obviously dead posts
-    dead_reason = _detect_dead_post(host, soup, job_html or "")
-    if dead_reason:
-        title_from_tag = soup.title.string.strip() if soup.title and soup.title.string else ""
-        return {
-            "Reason Skipped": dead_reason,
-            "Job URL": job_url,
-            "Title": title_from_tag or "Product Owner",
-            "Company": "",
-            "Location": "",
-            "Posting Date": "",
-            "Posted": "",
-            "Career Board": career_board_name(job_url),
-            "Valid Through": "",
-            "Location Chips": "",
-            "Description Snippet": "",
-            "Apply URL": job_url,
-            "WA Rule": "default",
-            "Remote Rule": "unknown_or_onsite",
-            "US Rule": "default",
-        }
+def _company_from_meta_or_title(host: str, soup) -> str:
+    # Try common meta/title patterns first (works well on The Muse)
+    # 1) og:title often looks like "Business Analyst at Experian | The Muse"
+    meta = soup.find("meta", attrs={"property": "og:title"})
+    if meta and meta.get("content"):
+        m = re.search(r"\bat\s+([^|–-]+)", meta["content"], flags=re.I)
+        if m:
+            return m.group(1).strip()
 
-    # HubSpot detail pages
-    if "hubspot.com" in host:
-        return parse_hubspot_detail(job_html, job_url)
+    # 2) <title> fallback with same pattern
+    t = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
+    if t:
+        m = re.search(r"\bat\s+([^|–-]+)", t, flags=re.I)
+        if m:
+            return m.group(1).strip()
 
-    # Prefer a strong title
-    Title = _best_title(soup, job_url, None)
-    Title = normalize_title(Title)
+    return ""
 
-    # Single JSON-LD parse reused everywhere
-    ld = parse_jobposting_ldjson(job_html or "")
 
-    if not Title and ld.get("Title"):
-        Title = normalize_title(ld["Title"])
+def _company_from_common_selectors(soup) -> str:
+    # Try a few likely places; harmless if they don't exist
+    cand = (
+        soup.select_one("[data-qa='company-name']")
+        or soup.select_one("[data-testid='company-name']")
+        or soup.select_one("a.company, span.company, header .company")
+    )
+    if cand:
+        return cand.get_text(strip=True)
+    return ""
 
-    if ld.get("valid_through"):
+
+def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
+    """
+    Single source of truth for salary parsing + classification.
+
+    Produces:
+      - Salary Max Detected (int or "")
+      - Salary Est. (Low-High) (str)
+      - Salary Near Min (int or "")
+      - Salary Status: at_or_above | near_min | below_floor | estimated | unknown
+      - Salary Placeholder: e.g., "Competitive base salary" when phrases present but no numbers
+      - Salary Rule: compact label for Sheets filtering
+      - Salary Range Text: raw text we scanned (debugging)
+    """
+    import re
+
+    # ---- Config (uses your global floors if present) ----
+    SALARY_FLOOR = 100_000  # your floor
+    SOFT_SALARY_FLOOR = 85_000
+
+    # --- init (prevents UnboundLocalError) ---
+    est_low = None
+    est_high = None
+    nums = []
+    max_detected = None
+    salary_signal = False
+
+    try:
+        floor = SALARY_FLOOR
+    except NameError:
+        floor = 120_000
+    try:
+        soft = SOFT_SALARY_FLOOR
+    except NameError:
+        soft = max(0, floor - 15_000)
+
+    TRIGGER_PHRASES = (
+        "competitive base", "competitive salary", "competitive compensation",
+        "very competitive", "highly competitive", "market competitive",
+        "salary commensurate", "commensurate with experience",
+        "market rate", "salary doe", "doe", "compensation package",
+    )
+    # ---- Build a single blob from fields we already have ----
+    sr = d.get("Salary Range", "")
+    sr_text = sr.get("Text") if isinstance(sr, dict) else (sr or "")
+    parts = [
+        d.get("Title", ""),
+        d.get("Company", ""),
+        d.get("Location", ""),
+        d.get("Description") or d.get("Description Snippet") or "",
+        (d.get("page_text", "") or "")[:4000],  # new
+    ]
+    # ---- build/cleanup text for salary scan ----
+    # (keep your existing joins above)
+    blob = " ".join([
+        str(d.get("Title","")),
+        str(d.get("Company","")),
+        str(d.get("Description Snippet","") or d.get("Description","") or ""),
+        str(d.get("page_text",""))  # <-- ensure this is included
+    ]).lower()
+    blob_clean = re.sub(r"\s+", " ", blob).strip()
+    
+    import re
+
+    # 1) Remove anything on / after a “Job ID:” line (Muse puts a huge numeric tail here)
+    blob = re.sub(r"(?mi)^\s*job\s*id\s*:.*$", "", blob)
+
+    # 2) Remove very long naked digit blobs (7+ digits) that are almost never salaries
+    blob = re.sub(r"\b\d{7,}\b", "", blob)
+
+    # 3) Kill URLs and querystrings (often pack long digits)
+    blob = re.sub(r"https?://\S+", "", blob)
+
+    # --- harden against benefit numbers like 401(k) / 403(b) / 457(b) etc. ---
+    # operate on the current working text: 'blob'
+    blob = re.sub(r"\b401\s*\(\s*k\s*\)|\b401k\b", "401k_plan", blob, flags=re.I)
+    blob = re.sub(r"\b403\s*\(\s*b\s*\)|\b403b\b", "403b_plan", blob, flags=re.I)
+    blob = re.sub(r"\b457\s*\(\s*b\s*\)|\b457b\b", "457b_plan", blob, flags=re.I)
+
+    # neutralize retirement-plan strings so they can't be misread as $401,000 etc.
+    blob_clean = re.sub(r"\b401\s*[\(\-\s]*k\)?\b", "retirement_plan", blob_clean, flags=re.I)
+    blob_clean = re.sub(r"\b401k\b", "retirement_plan", blob_clean, flags=re.I)
+    blob_clean = re.sub(r"\b457\s*b\b", "retirement_plan", blob_clean, flags=re.I)
+
+    # neutralize retirement-plan tokens so they can't look like money
+    blob_clean = re.sub(r"\b401\s*\(?k\)?\b", "401k plan", blob_clean, flags=re.I)
+    blob_clean = re.sub(r"\b457\s*b\b", "457b plan", blob_clean, flags=re.I)
+
+
+    # ---- helpers for number normalization ----
+    def _to_money_int(s: str | None) -> int | None:
+        if not s:
+            return None
+        t = str(s).strip().lower()
+        # keep a memory of whether 'k' was present
+        has_k = t.endswith("k")
+        # strip all non-digits
+        digits = re.sub(r"[^\d]", "", t)
+        if not digits:
+            return None
         try:
-            valid_through = dateparser.parse(ld["valid_through"]).date().isoformat()
+            n = int(digits)
         except Exception:
-            valid_through = ld["valid_through"]
+            return None
+        if has_k:
+            n *= 1000
+        return n
 
-    if ld.get("date_posted"):
-        posting_date = ld["date_posted"]
+    # ---- money patterns ----
+    # We ONLY count numbers that carry a salary signal:
+    #  - currency symbol/word near number, OR
+    #  - explicit 'k' suffix (e.g., 160k), OR
+    #  - '/year', 'per year', 'annual', 'yr'
+    MONEY_RX = re.compile(r"""
+    (?:
+        (?P<cur>\$|usd|eur|gbp)\s*               # currency (required if no 'k' or per-year words)
+    )?
+    (?P<num>
+        \d{1,3}(?:[ ,]\d{3})+ |                  # 120,000  or  1 200 000
+        \d{2,3}                                  # 80 .. 999 (with optional k)
+    )
+    (?P<ksuf>\s*[kK])?                            # 120k
+    (?:
+        \s*(?:/year|per\s*year|per\s*annum|annual|yr) # optional per-year words
+    )?
+    """, re.X)
 
-    # Company
-    company = ld.get("Company") or company_from_url_fallback(job_url) or ""
-    if not company:
-        node = None
-        if "weworkremotely.com" in host:
-            node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
-        elif "builtin.com" in host:
-            node = soup.select_one("[data-qa='company-name'], .job-details__company, a[href*='/company/']")
-        elif host.endswith("nodesk.co"):
-            node = soup.select_one("h1 + p a, .company a, .company")
-        if node:
-            company = node.get_text(" ", strip=True)
+    TRIGGER_PHRASES = (
+        "competitive base", "competitive salary", "competitive compensation",
+        "very competitive", "highly competitive", "market competitive",
+        "salary commensurate", "commensurate with experience",
+        "market rate", "salary doe", "doe", "compensation package",
+    )
+    # ---- region-preferring extraction (Washington first) ----
+    def _find_range_for(region: str, text: str):
+        """
+        Matches a sentence like:
+        "In Washington, the expected compensation ... between $90,000.00 and $120,000.00"
+        Returns (lo, hi) as ints or None.
+        """
+        rx = re.compile(
+            rf"{region}[^$]{{0,160}}\$?\s*([0-9][\d,\.]+)\s*(?:to|-|–|—|and)\s*\$?\s*([0-9][\d,\.]+)",
+            re.I | re.S
+        )
+        m = rx.search(text)
+        if m:
+            lo = _to_int(m.group(1))
+            hi = _to_int(m.group(2))
+            if lo and hi:
+                return lo, hi
+        return None
 
-    # Location chips then display location
-    location_chips = gather_location_chips(job_url, soup, ld, [])
+    # Prefer Washington first (also catches "California and Washington")
+    est_low = est_high = None
+    max_detected = None  # ensure this is initialized before we may reference it
 
-    # Remote/hybrid/onsite flags
-    text_all = soup.get_text(" ", strip=True)
-    ld_remote = (ld.get("job_location_type", "").lower() == "telecommute")
-    is_hybrid = bool(HYBRID_REGEX.search(location_chips) or HYBRID_REGEX.search(text_all))
-    is_onsite = bool(ONSITE_REGEX.search(location_chips) or ONSITE_REGEX.search(text_all))
-    is_remote = bool(REMOTE_BADGE.search(location_chips) or REMOTE_BADGE.search(text_all) or ld_remote)
-    if is_hybrid or is_onsite:
-        is_remote = False
-    host_slim = urlparse(job_url).netloc.replace("www.", "").lower()
+    wa_hit = _find_range_for("washington", blob_clean)
+    if wa_hit:
+        est_low, est_high = wa_hit
+        max_detected = est_high  # seed with WA high end
+        status = "at_or_above" if max_detected >= floor else ("near_min" if max_detected >= soft else "below_floor")
+        rule = "At/above min" if status=="at_or_above" else ("Near min" if status=="near_min" else "Below floor")
 
-    # Remote-first boards default to remote unless the page screams hybrid/onsite
-    if host_slim in REMOTE_BOARDS and not is_hybrid and not is_onsite:
-        is_remote = True
+        d["Salary Max Detected"] = max_detected
+        d["Salary Est. (Low-High)"] = f"{est_low:,}–{est_high:,}"
+        d["Salary Near Min"] = max_detected if status=="near_min" else ""
+        d["Salary Status"] = status
+        d["Salary Rule"] = rule
+        d["Salary Range Text"] = sr_text or ""
+        d["Salary Note"] = d.get("Salary Note","")
+        d["Salary Placeholder"] = d.get("Salary Placeholder","")
+        # We still continue into the generic scan below, but WA values are already set.
+        return d
 
-    remote_rule = (
-        "board_remote" if (host_slim in REMOTE_BOARDS and not is_hybrid and not is_onsite)
-        else ("hybrid" if is_hybrid else ("onsite" if is_onsite else "unknown_or_onsite"))
+        # ---- scan (collect span-aware hits) ----
+    nums = []
+    status = ""
+    est_low = est_high = None
+
+    # --- scan (collect span-aware hits) ---
+    hits = []           # (value, local_span_text)
+    for m in MONEY_RX.finditer(blob_clean):
+        full = m.group(0).lower()
+
+        if "401k" in full or "401(k)" in full or "457b" in full or "457(b)" in full:
+            continue  # skip retirement plan numbers
+
+        # require a clear per-year cue so 401(k)/457(b) etc. don’t look like salaries
+        has_per_year = any(w in full for w in ("/year", " per year", " per annum", " annual", " yr"))
+        if not has_per_year:
+            continue
+
+        val  = _to_money_int(full)  # or your (num + k-suffix) handling as you have it
+        if val is None or val < 20_000 or val > 1_000_000:
+            continue
+
+        # keep nearby text so we can detect “washington” proximity later
+        span = blob_clean[max(0, m.start()-120): m.end()+120]
+        hits.append((val, span))
+
+    # prefer any hit whose nearby text mentions Washington; otherwise take the overall max
+    wa_hits = [h for h in hits if "washington" in h[1]]
+    pick = (max(wa_hits, key=lambda h: h[0]) if wa_hits
+            else (max(hits, key=lambda h: h[0]) if hits else None))
+
+    max_detected = pick[0] if pick else (max(nums) if nums else None)
+    if nums:
+        est_low, est_high = min(nums), max(nums)
+
+
+    max_detected = max(nums) if nums else None
+    if nums:
+        lo = min(nums)
+        hi = max(nums)
+        est_low, est_high = lo, hi
+
+    # ---- phrase signal even when no numbers ----
+    phrase_hit = any(p in blob for p in TRIGGER_PHRASES)
+    if phrase_hit:
+        d["Salary Status"] = d.get("Salary Status") or "estimated"
+        d["Salary Rule"] = d.get("Salary Rule") or "Signal"
+        d["Salary Note"] = d.get("Salary Note") or "Competitive salary language on page"
+        d["Salary Placeholder"] = d.get("Salary Placeholder") or "Competitive base salary"
+        return d
+
+    # ---- classify ----
+    try:
+        floor = SALARY_FLOOR
+    except NameError:
+        floor = 100_000
+
+    try:
+        soft = SOFT_SALARY_FLOOR
+    except NameError:
+        soft = max(0, floor - 15_000)
+
+    if max_detected is not None:
+        if max_detected >= floor:
+            status = "at_or_above"
+        elif max_detected >= soft:
+            status = "near_min"
+        else:
+            status = "below_floor"
+    else:
+        status = "estimated" if phrase_hit else "unknown"
+
+    rule = (
+        "At/above min" if status == "at_or_above" else
+        "Near min"     if status == "near_min"     else
+        "Below floor"  if status == "below_floor"  else
+        "Estimated"    if status == "estimated"    else
+        "Unknown"
     )
 
- 
-    # Scraped location fallback
-    scraped_loc = ""
-    loc_match = re.search(r"\b(Location|Based in|Location:)\s*[:\-]?\s*([A-Za-z0-9,\s\-]+)", text_all, re.I)
-    if loc_match:
-        scraped_loc = loc_match.group(2).strip()
-    elif REMOTE_REGEX.search(text_all):
-        scraped_loc = "Remote"
+    # Optional human notes
+    if any(p in blob for p in TRIGGER_PHRASES):
+        d["Salary Status"] = d.get("Salary Status") or "Signal"
+        d["Salary Note"] = d.get("Salary Note") or "Competitive salary language on page"
+        d["Salary Placeholder"] = d.get("Salary Placeholder") or "[💲 SALARY]"
 
-    location = best_location_for_display(ld, location_chips, scraped_loc)
-
-    # Posted date
-    posted_match = re.search(r"(Posted|Date posted|Published)\s*[:\-]?\s*([A-Za-z0-9, \-]+)", text_all, re.I)
-    if posted_match:
-        posted_raw = posted_match.group(2).strip()
-        try:
-            posted = dateparser.parse(posted_raw, fuzzy=True).date().isoformat()
-        except Exception:
-            posted = posted_raw
-
-    if not posting_date and posted:
-        pd = compute_posting_date_from_relative(posted)
-        if pd:
-            posting_date = pd
-
-    # Description
-    for sel in ("article", ".job-description", ".description", ".job-body", ".posting", ".job-posting"):
-        node = soup.select_one(sel)
-        if node:
-            description = normalize_text(node)
-            break
-    if not description:
-        best = ""
-        for d in soup.find_all("div"):
-            txt = normalize_text(d)
-            if len(txt) > len(best):
-                best = txt
-        description = best[:5000]
-
-    # Apply URL
-    for a in soup.find_all("a", href=True):
-        t = a.get_text(" ", strip=True).lower()
-        if "apply" in t or "submit" in t or "apply now" in t:
-            apply_url = urljoin(job_url, a["href"])
-            break
-
-    # Final polish
-    Title = _best_title(soup, job_url, Title)
-    Title = normalize_title(Title)
-    desc_snippet = " ".join((description or "").split())[:DESCRIPTION_PREVIEW_CHARS]
-    desc_snippet = _refine_remotive_snippet(host_slim, soup, desc_snippet, Title)
-
-    return {
-        "Title": Title,
-        "Company": company,
-        "Location": location,
-        "Posted": posted,
-        "Posting Date": posting_date or "",
-        "Valid Through": valid_through,
-        "Description Snippet": desc_snippet,
-        "Job URL": job_url,
-        "Apply URL": apply_url,
-        "Career Board": career_board_name(job_url),
-        "Location Chips": location_chips,
-        "Remote Rule": remote_rule,
-    }
+    # ---- write fields back ----
+    d["Salary Max Detected"] = max_detected or ""
+    d["Salary Est. (Low-High)"] = f"{est_low:,}–{est_high:,}" if (est_low and est_high) else ""
+    d["Salary Near Min"] = max_detected if status == "near_min" else ""
+    d["Salary Status"] = status
+    d["Salary Rule"] = rule
+    d["Salary Range Text"] = blob[:300]  # optional for debug
+    return d
 
 
 # --- Auto-scroll helper for infinite-scroll listings (EdTech etc.) ---
@@ -1996,8 +2816,8 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
             page.goto(url, timeout=PW_GOTO_TIMEOUT, wait_until="domcontentloaded")
             
             try:
-                from urllib.parse import urlparse
-                h = urlparse(url).netloc.lower()
+                #from urllib.parse import urlparse
+                h = up.urlparse(url).netloc.lower()
 
                 if h.endswith("jobs.ashbyhq.com"):
                     # Wait until job cards/links render (Ashby uses <a href="/<org>/<slug>">)
@@ -2060,9 +2880,9 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
 
                         # Auto-scroll for EdTech listing pages (infinite scroll)
             try:
-                from urllib.parse import urlparse
-                host = urlparse(url).netloc.lower()
-                path = urlparse(url).path or "/"
+                #from urllib.parse import urlparse
+                host = up.urlparse(url).netloc.lower()
+                path = up.urlparse(url).path or "/"
 
                 needs_autoscroll = (
                     host in {"edtech.com", "www.edtech.com"}
@@ -2127,7 +2947,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
 
 
 def get_html(url):
-    domain = urlparse(url).netloc.lower()
+    domain = up.urlparse(url).netloc.lower()
     if domain in PLAYWRIGHT_DOMAINS:
         html = fetch_html_with_playwright(url)
         return html  # do not attempt requests() fallback for PW-only sites
@@ -2157,13 +2977,13 @@ def expand_career_sources():
     """Return a list of ATS job board URLs discovered on company careers pages."""
     pages = []
     for url in CAREER_PAGES:
-        _progress_clear_if_needed()
-        print(f"[CAREERS               ]...Probing {url}")
+        progress_clear_if_needed()
+        log_print(f"[CAREERS               ]...Probing {url}")
         html = get_html(url)
         if not html:
             log_event("WARN", "", right=f"Failed to GET listing page: {url}")
-            _progress_clear_if_needed()
-            print(f"[CAREERS               ]...Could not fetch {url}")
+            progress_clear_if_needed()
+            log_print(f"[CAREERS               ]...Could not fetch {url}")
             continue
 
         
@@ -2172,15 +2992,15 @@ def expand_career_sources():
 
         # Scan visible links
         for a in soup.find_all("a", href=True):
-            full = urljoin(url, a["href"])
-            host = urlparse(full).netloc.lower()
-            path = urlparse(full).path.lower()
+            full = up.urljoin(url, a["href"])
+            host = up.urlparse(full).netloc.lower()
+            path = up.urlparse(full).path.lower()
 
             # 1) Greenhouse embedded via <iframe>
             for iframe in soup.find_all("iframe", src=True):
                 src = iframe["src"]
                 if "greenhouse" in src and "for=" in src:
-                    qs = parse_qs(urlparse(src).query)
+                    qs = up.parse_qs(up.urlparse(src).query)
                     slug = qs.get("for", [None])[0]
                     if slug:
                         found.add(f"https://job-boards.greenhouse.io/embed/job_board?for={slug}")
@@ -2222,18 +3042,18 @@ def expand_career_sources():
         for s in soup.find_all("script", src=True):
             src = s["src"]
             if "greenhouse.io/embed/job_board" in src and "for=" in src:
-                qs = parse_qs(urlparse(src).query)
+                qs = up.parse_qs(up.urlparse(src).query)
                 slug = qs.get("for", [None])[0]
                 if slug:
                     found.add(f"https://job-boards.greenhouse.io/embed/job_board?for={slug}")
 
         if found:
-            _progress_clear_if_needed()
-            print(f"[CAREERS               ]...{url} -> {len(found)} board(s)")
+            progress_clear_if_needed()
+            log_print(f"[CAREERS               ]...{url} -> {len(found)} board(s)")
             pages.extend(sorted(found))
         else:
-            _progress_clear_if_needed()
-            print(f"[CAREERS               ]....No ATS links found on {url}")
+            progress_clear_if_needed()
+            log_print(f"[CAREERS               ]....No ATS links found on {url}")
 
     return pages
 
@@ -2349,17 +3169,14 @@ def parse_jobposting_ldjson(html):
                     iso = datetime.fromisoformat(vt.replace("Z", "+00:00")).date().isoformat()
                 except Exception:
                     try:
-                        iso = dateparser.parse(vt).date().isoformat()
+                        #iso = dateparser.parse(vt).date().isoformat()
+                        iso = parse_date_relaxed(vt)
                     except Exception:
                         iso = vt
                 _set_if(out, "valid_through", iso)
 
     return out
 
-
-# --- Role taxonomy & signal regexes ---
-
-# --- Role taxonomy & signal regexes ---
 
 # --- Role taxonomy: allow ONLY these families (title-first), plus close neighbors by responsibility ---
 
@@ -2371,19 +3188,38 @@ INCLUDE_TITLES_EXACT = [
     r"\bbusiness analyst\b",
     r"\bsystems analyst\b",
     r"\bbusiness systems analyst\b",
+    r"\bbusiness system analyst\b",
+    r"\bbusiness systems engineer\b",
     r"\bscrum master\b",
     r"\brelease train engineer\b", r"\brte\b",
+    
 ]
 
 # looser title hits we will allow only if responsibilities also match
 INCLUDE_TITLES_FUZZY = [
     r"\bproduct\s+operations?\b", r"\bprod\s*ops\b",
     r"\bproduct\s+analyst\b",
+    r"\bbusiness\s+analyst\b",
     r"\brequirements?\s+(?:analyst|engineer)\b",
     r"\bsolutions?\s+analyst\b",
     r"\bimplementation\s+analyst\b",
     r"\btechnical\s+program\s+manager\b",       # only with responsibilities (see _is_target_role)
+    r"\bbusiness\s+systems?\s+analyst\b",     # Business System(s) Analyst
+    r"\boperations?\s+business\s+analyst\b",  # Operations Business Analyst
+    r"(senior\s+)?business\s+(system|systems|intelligence)?\s*analyst"
+    r"|operations\s+business\s+analyst"
 ]
+#
+# Potential allied/adjacent titles that are not exact matches but should
+# contribute some score if present in the listing text.
+#POTENTIAL_ALLIED_TITLES = [
+#    r"\bproduct\s+operations?\b",
+#    r"\bprod\s*ops\b",
+#    r"\bproduct\s+analyst\b",
+#    r"\bimplementation\s+analyst\b",
+#    r"\bsolutions?\s+analyst\b",
+#    r"\btechnical\s+program\s+manager\b",
+#]
 
 # titles we explicitly do NOT want
 EXCLUDE_TITLES = [
@@ -2546,10 +3382,6 @@ LEVEL_COLOR = {
     "GS":    CYAN,
 }
 
-# Track whether a progress line is “live”
-_PROGRESS_ACTIVE = False
-_PROGRESS_WIDTH  = 0
-
 
 # unique tracking to avoid double-appends across the run
 _seen_kept_urls: set[str] = set()
@@ -2557,59 +3389,42 @@ _seen_skip_urls: set[str] = set()
 kept_count: int = 0
 skip_count: int = 0
 
-def _record_keep(row: dict) -> None:
-    """Append a KEEP row once, update counts, and write to CSV in small batches."""
-    global kept_count, kept_rows, _seen_kept_urls
-    u = (row.get("Job URL") or row.get("job_url") or "").strip()
-    if u:
-        if u in _seen_kept_urls:
-            return
-        _seen_kept_urls.add(u)
-    kept_rows.append(to_keep_sheet_row(row))
-    kept_count += 1
+def _log_keep_to_terminal(row: dict) -> None:
+    ts = now_ts()
+    title = (row.get("Title") or "").strip()
+    url   = (row.get("Job URL") or "").strip()
+    desc = (row.get("Description") or "").strip()
+    company, board = _company_and_board_for_terminal(row)
+    salary_line    = _fmt_salary_line(row)
+    
+    progress_clear_if_needed()
+    log_print(f"[{ts}] [KEEP                  ].{title}")
+    log_print(f"[{ts}] [KEEP                  ]...{board} → {company}")
+    if url:
+        log_print(f"[{ts}] [KEEP                 ].{url}")
+    if salary_line:
+        log_print(f"[{ts}] [KEEP     ] {salary_line}")
+    log_print(f"[{ts}] [✅ DONE               ].")
+
+    progress_clear_if_needed()
 
 
-def _record_skip(row: dict) -> None:
-    """Append a SKIP row once, update counts, and write to CSV in small batches."""
-    global skip_count, skipped_rows, _seen_skip_urls
-    u = (row.get("Job URL") or row.get("job_url") or "").strip()
-    if u:
-        if u in _seen_skip_urls:
-            return
-        _seen_skip_urls.add(u)
-    row = _normalize_skip_defaults(dict(row))
-    skipped_rows.append(to_skipped_sheet_row(row))
-    skip_count += 1
+#def _log_skip_terminal(row: dict, link: str, rule_reason: str) -> None:
+#    ts = now_ts()
+#    title = (row.get("Title") or "").strip() or _title_from_url(link)
+#    company, board = _company_and_board_for_terminal(row)
+#
+#    c = LEVEL_COLOR.get("SKIP", DIM)  # dim
+#    r = RESET
+#
+#    progress_clear_if_needed()
+#    log_print(f"{c}[SKIP                  ].{title}{r}")
+#    log_print(f"{c}[SKIP                  ]...{board} → {company}{r}")
+#    log_print(f"{c}[SKIP                  ]...{link}{r}")
+#    log_print(f"{c}[💭 REASON             ]... → {rule_reason}{r}")
+#    log_print(f"{c}[🚫 DONE               ].{r}")
+#    progress_clear_if_needed()
 
-def progress_heartbeat(every: float = 0.10) -> None:
-    """
-    Repaint the live progress line while we’re idle between fetches.
-    We do not advance counts here; just tick the spinner.
-    """
-    # no change to _p["processed"]; just animate
-    progress_tick()
-
-
-def _progress_clear_if_needed():
-    """If a carriage-return progress is active, erase it in-place."""
-    global _PROGRESS_ACTIVE, _PROGRESS_WIDTH
-    if _PROGRESS_ACTIVE:
-        sys.stdout.write("\r" + (" " * _PROGRESS_WIDTH) + "\r")  # erase
-        sys.stdout.flush()
-        _PROGRESS_ACTIVE = False
-        _PROGRESS_WIDTH  = 0
-
-LEVEL_WIDTH = 20  # keep this equal to your other logger's width- padding in Terminal display
-
-def _emit_lines(color_code: str, tag: str, text: str, width: int = 120):
-    """
-    Print a long message as multiple aligned rows so the terminal never wraps.
-    The timestamp is added by your overridden print(), so we just emit lines.
-    """
-    s = " ".join((text or "").split())
-    while s:
-        chunk, s = s[:width], s[width:]
-        print(f"{color_code}{tag}.{chunk}{RESET}")
 
 
 DOT1 = "...."      # 4 dots
@@ -2617,41 +3432,41 @@ DOT2 = "......"    # 6 dots
 
 def _host(u: str) -> str:
     try:
-        return urlparse(u).netloc.replace("www.", "")
+        return up.urlparse(u).netloc.replace("www.", "")
     except Exception:
         return u
 
 def log_info_processing(url: str):
-    _progress_clear_if_needed()
+    progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
     msg = "Processing listing page: " + url
     for ln in _wrap_lines(msg, width=120):
-        print(f"{c}{_info_box()}.{ln}{RESET}")
+        log_print(f"{c}{_info_box()}.{ln}{RESET}")
     # repaint the progress line if one is active
     #refresh_progress()
 
 
 def log_info_found(n: int, url: str, elapsed_s: float):
-    _progress_clear_if_needed()
+    progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
     host = _host(url)
     # Example: [🔎 FOUND 60           ].candidate job links on edtech.com in 71.7s
-    print(f"{c}{_found_box(n)}.candidate job links on {host} in {elapsed_s:.1f}s{RESET}")
+    log_print(f"{c}{_found_box(n)}.candidate job links on {host} in {elapsed_s:.1f}s{RESET}")
     # repaint the progress line if one is active
     #refresh_progress()
 
 
 def log_info_done():
-    _progress_clear_if_needed()
+    progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
     # Example: [✔ DONE                ].
-    print(f"{c}{_done_box()}" + f"{RESET}")
+    log_print(f"{c}{_done_box()}" + f"{RESET}")
     # repaint the progress line if one is active
     #refresh_progress()
 
 
 def _info_box() -> str:
-    return _box("INFO")
+    return _box("INFO ")
 
 def _found_box(n: int) -> str:
     # right-align the count to 3 spaces: 0..999
@@ -2744,7 +3559,7 @@ def _public_sanity_checks(keep_row: dict) -> tuple[str, int, str]:
 
     # If we previously fetched the company careers page HTML, you can pass it in later;
     # for now we just use the URL host as a proxy (Lever/Greenhouse/Ashby usually = public)
-    host = urlparse(url).netloc.lower()
+    host = up.urlparse(url).netloc.lower()
     listed_on_careers = any(h in host for h in ("greenhouse", "lever", "ashbyhq", "workday", "icims", "smartrecruiters"))
     has_recent_date = has_recent(text, days=45)  # you already have has_recent()
 
@@ -2758,13 +3573,56 @@ def _public_sanity_checks(keep_row: dict) -> tuple[str, int, str]:
         cache_only = False,
     )
 
+import urllib.parse as up
+
+BOARD_MAP = {
+    "themuse.com":            "The Muse",
+    "boards.greenhouse.io":   "Greenhouse",
+    "greenhouse.io":          "Greenhouse",
+    "jobs.lever.co":          "Lever",
+    "lever.co":               "Lever",
+    "workday.com":            "Workday",
+    "ashbyhq.com":            "Ashby",
+    "myworkdayjobs.com":      "Workday",
+    "icims.com":              "iCIMS",
+    "smartrecruiters.com":    "SmartRecruiters",
+    "remotive.com":           "Remotive",
+    # add others you care about…
+}
+
+def _as_str(x) -> str:
+    if isinstance(x, (bytes, bytearray)):
+        try: 
+            return x.decode("utf-8", "ignore")
+        except Exception:
+            return str(x)
+    return str(x or "")
+
+
+def infer_board_from_url(url: str) -> str:
+    return career_board_name(url or "")
+    host = up.urlparse(url or "").netloc.lower()
+    for key, name in BOARD_MAP.items():
+        if host.endswith(key):
+            return name
+    return ""
 
 def company_from_url_fallback(url):
-    p = urlparse(url); parts = [x for x in p.path.strip("/").split("/") if x]; host = p.netloc.lower()
+    url = _as_str(url)
+    p = up.urlparse(url)
+
+    # make sure path/netloc are str
+    path  = _as_str(p.path)
+    host  = _as_str(p.netloc).lower()
+    parts = [x for x in path.strip("/").split("/") if x]
+
     if "jobs.lever.co" in host and parts: return parts[0]
     if "boards.greenhouse.io" in host and parts: return parts[0]
     if "job-boards.greenhouse.io" in host:
-        q = parse_qs(p.query); return (q.get("for") or [None])[0]
+        q = up.parse_qs(p.query)
+        return (q.get("for") or [None])[0]
+    if "themuse.com" in host and len(parts) >= 2 and parts[0] == "jobs":
+        return parts[1]
     return None
 
 REL_POSTED_RE = re.compile(r"(\d+)\s*(day|days|d|hour|hours|h|minute|minutes|min)s?\s*ago", re.I)
@@ -2908,7 +3766,8 @@ def eval_salary(text: str):
         return annual_max, True
     if SALARY_CEIL and annual_max > SALARY_CEIL:
         return annual_max, True
-    return annual_max, False
+        # If we didn't parse anything, honor the global toggle
+    return annual_max, (not KEEP_UNKNOWN_SALARY)
 # ---------- end salary helper ----------
 
 def is_remote_friendly(text: str):
@@ -2981,6 +3840,7 @@ def to_skipped_sheet_row(d: dict) -> dict:
         "Confidence Mark": d.get("Confidence Mark",""),
     }
 
+# ==== Make GS lines non-timestamped (match your example format)
 def push_rows_to_google_sheet(rows, keys, tab_name=None):
     """
     Append a list of dict rows to Google Sheets in one batch.
@@ -2993,10 +3853,22 @@ def push_rows_to_google_sheet(rows, keys, tab_name=None):
 
     try:
         import gspread
+#        # Import Credentials defensively: some environments may not expose
+#        # google.oauth2.service_account directly (static analyzers can also flag it).
+#       try:
         from google.oauth2.service_account import Credentials
+#       except Exception:
+#            # Try an alternative access pattern and provide a clear fallback.
+#            try:
+#                from google.oauth2 import service_account as _sa
+#                Credentials = _sa.Credentials
+#            except Exception:
+#                progress_clear_if_needed()
+#                log_print("[GS                    ].Skipping Sheets push; missing google oauth credentials library (install 'google-auth').")
+#                return
     except Exception as e:
-        _progress_clear_if_needed()
-        print(f"[GS                    ].Skipping Sheets push; missing libs: {e}")
+        progress_clear_if_needed()
+        log_print(f"[GS                    ].Skipping Sheets push; missing libs: {e}")
         return
 
     try:
@@ -3031,20 +3903,28 @@ def push_rows_to_google_sheet(rows, keys, tab_name=None):
         for i in range(0, len(values), CHUNK):
             ws.append_rows(values[i:i+CHUNK], value_input_option="USER_ENTERED")
 
-        _progress_clear_if_needed()
-        print(f"[GS                    ].Appended {len(values)} rows to '{target_tab}'.")
+        progress_clear_if_needed()
+        log_print(f"[GS                    ].Appended {len(values)} rows to '{target_tab}'.")
     except Exception as e:
-        _progress_clear_if_needed()
-        print(f"[GSERR                 ].Failed to push to Google Sheets: {e}")
+        progress_clear_if_needed()
+        log_print(f"[GSERR                 ].Failed to push to Google Sheets: {e}")
 
 def fetch_prior_decisions():
+#    """Fetch prior Applied? and Reason values from Google Sheets."""
+#    try:
     import gspread
     from google.oauth2.service_account import Credentials
+#    except Exception as e:
+#        progress_clear_if_needed()
+#        log_print(f"[GS                    ].Skipping loading prior decisions; missing libs: {e}")
+#        return {}
 
+#    try:
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds  = Credentials.from_service_account_file(GS_KEY_PATH, scopes=scopes)
     client = gspread.authorize(creds)
     sh     = client.open_by_url(GS_SHEET_URL).worksheet(GS_TAB_NAME)
+#    ws     = sh.worksheet(GS_TAB_NAME)
 
     # get_all_records uses row 1 as header, returns list of dicts
     records = sh.get_all_records()  # respects your current headers
@@ -3054,10 +3934,10 @@ def fetch_prior_decisions():
         if url:
             prior[url] = (r.get("Applied?",""), r.get("Reason",""))
     return prior
-
-import sys
-
-_PROGRESS_ACTIVE = False  # keep it with your color/log helpers
+#    except Exception as e:
+#        progress_clear_if_needed()
+#        log_print(f"[GS                    ].Failed to fetch prior decisions: {e}")
+#        return {}
 
 import sys
 # {_stamp()}
@@ -3066,54 +3946,155 @@ import sys as _sys
 # ===== Progress line (carriage-return) =====
 import re, time, sys
 
-_SPINNER = "⠋⠙⠚⠞⠖⠦⠴⠲⠳⠓"
-_p = {"active": False, "width": 0, "processed": 0, "total": 0, "spin": 0, "last": 0.0}
 
-RESET = "\x1b[0m"          # keep or reuse your existing constant
-LEVEL_WIDTH = 20           # keep equal to your tag width
+###############################
+### KEEP THIS SECTION BELOW ###
+###############################
+# ===== unified PROGRESS helpers (single source of truth) =====
+import sys, re, time
+
+# spinner frames
+_SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+LEVEL_WIDTH = 22  # keep this equal to your other logger's width- padding in Terminal display
+_last_tick = 0.0
+_spin_i = 0
+
+
+# live progress state
+_p = {
+    "active": False,   # spinner is on screen
+    "width":  0,       # printable width of the last drawn line (no ANSI)
+    "spin":   0,       # index into _SPINNER
+    "total":  0,       # total work items (optional; for display)
+    "start":  0.0,     # start time
+}
+
+from wcwidth import wcswidth
 
 def _ansi_strip(s: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+    return re.sub(r"\x1b\[[0-9;]*m", "", s or "")
 
-def _box(tag: str) -> str:
-    t = (tag or "").upper().ljust(LEVEL_WIDTH)
-    return f"[{t[:LEVEL_WIDTH]}]"
+def _display_width(s: str) -> int:
+    # printable width for strings that may include emoji/ANSI
+    return sum(max(0, wcwidth(ch)) for ch in _ansi_strip(s))
+
+LEVEL_WIDTH = 22  # (whatever you’re using)
+
+def _box(label: str) -> str:
+    raw = (label or "")[:LEVEL_WIDTH]
+    vis = _display_width(raw)
+    pad = max(0, LEVEL_WIDTH - vis)
+    return f"[{raw}{' ' * pad}]"
+
+def _center_fit(label: str, width: int) -> str:
+    """Truncate by display width and center-pad to a fixed width."""
+    s = (label or "")
+    out, used = [], 0
+    for ch in s:
+        w = wcswidth(ch)
+        if w < 0:   # unknown width -> treat as 1
+            w = 1
+        if used + w > width:
+            break
+        out.append(ch)
+        used += w
+    pad = max(0, width - used)
+    left = pad // 2
+    right = pad - left
+    return (" " * left) + "".join(out) + (" " * right)
 
 def _progress_print(msg: str) -> None:
-    s = f"\r{_box('INFO')}.{msg}{RESET}"
-    sys.stdout.write(s)
+    """Draw/overwrite the single progress line in-place."""
+    sys.stdout.write("\r" + msg + "\r")
     sys.stdout.flush()
     _p["active"] = True
-    _p["width"] = len(_ansi_strip(s))
+    _p["width"]  = len(_ansi_strip(msg))
 
-def _progress_clear_if_needed() -> None:
+def progress_set_total(n: int) -> None:
+    global _PROGRESS_TOTAL
+    _PROGRESS_TOTAL = int(n or 0)
+    _p["total"] = _PROGRESS_TOTAL
+
+# keep this function where your logger utils live, near _p / _box / _progress_print
+def progress_clear_if_needed() -> None:
     if _p["active"]:
-        sys.stdout.write("\r" + (" " * _p["width"]) + "\r")
+        # carriage return + clear to end of line, then flush
+        sys.stdout.write("\r" + " " * _p["width"] + "\r")
         sys.stdout.flush()
         _p["active"] = False
         _p["width"] = 0
 
-def progress_set_total(n: int) -> None:
-    _p["total"] = int(n or 0)
+# public alias used by the rest of the code
+progress_clear_if_needed = progress_clear_if_needed
+atexit.register(progress_clear_if_needed)
 
-def progress_tick(processed: int | None = None) -> None:
-    if processed is not None:
-        _p["processed"] = processed
-    now = time.time()
-    if now - _p["last"] > 0.08:
-        _p["spin"] = (_p["spin"] + 1) % len(_SPINNER)
-        _p["last"] = now
+import atexit
+try:
+    atexit.register(progress_clear_if_needed)
+except NameError:
+    # if a refactor temporarily renamed the function, fail silently
+    pass
+
+progress_clear_if_needed = progress_clear_if_needed
+
+
+
+def progress_line(spin: str) -> str:
+    """
+    Compose the human-readable single-line status.
+    NOTE: This uses your existing globals: kept_count, skip_count, now_ts().
+    If these are not yet defined above this block, either move this block
+    below them or change this function to fetch them another way.
+    """
+    processed = kept_count + skip_count   # <-- your globals
+    total     = _p.get("total", 0) or "?"
+    ts        = now_ts()                  # <-- your helper
+    return f"{ts} {_box('PROGRESS ')} {spin} {processed}/{total} kept={kept_count} skip={skip_count}"
+
+def progress_tick(msg: str | None = None) -> None:
+    """Advance spinner one frame and repaint the sticky line."""
+    if not _p["active"]:
+        return
+    _p["spin"] = (_p["spin"] + 1) % len(_SPINNER)
     spin = _SPINNER[_p["spin"]]
-    msg = f"[{spin} PROGRESS]...{_p['processed']}/{_p['total']} kept={kept_count} skip={skip_count}"
-    _progress_print(msg)
+    line = progress_line(spin)
+    if msg:
+        line += f"  {msg}"
+    _progress_print(line)
+
+def start_spinner(total: int | None = None, msg: str | None = None) -> None:
+    """Start (or restart) the spinner."""
+    _p.update({"active": True, "spin": 0, "total": total or 0, "start": time.time()})
+    spin = _SPINNER[_p["spin"]]
+    line = progress_line(spin)
+    if msg:
+        line += f"  {msg}"
+    _progress_print(line)
+
+def stop_spinner(final_msg: str | None = None) -> None:
+    """Erase spinner line; optionally print a final 'DONE' line."""
+    if _p["active"]:
+        progress_clear_if_needed()
+    if final_msg:
+        log_print(f"{now_ts()} {_box('DONE ')} {final_msg}")
+# ===== end unified PROGRESS helpers =====
+
+###############################
+### KEEP THIS SECTION ABOVE ###
+###############################
 
 # Backward-compat wrapper so your existing calls still work
+
 def progress(i: int, total: int, kept: int, skipped: int) -> None:
-    # keep external signature but drive the new engine
-    if total != _p["total"]:
-        progress_set_total(total)
-    # do not assign kept_count/skip_count here; those come from _record_keep/_record_skip
-    progress_tick(i)
+    """Repaint the spinner at ~12fps; never prints a newline."""
+    global _spin_i, _last_tick
+    now = time.time()
+    if now - _last_tick > 0.08:  # ~12 fps
+        _spin_i = (_spin_i + 1) % len(_SPINNER)
+        _last_tick = now
+    spin = _SPINNER[_spin_i]
+    line = f"[{now_ts()}] {_box(f'{spin} PROGRESS ')}...{i}/{total} kept={kept} skip={skipped}"
+    _progress_print(line)
 
 
 # --- Background spinner heartbeat --------------------------------------------
@@ -3121,26 +4102,11 @@ from threading import Thread, Event
 _spinner_stop = Event()
 _spinner_thread = None
 
-def _spinner_loop():
-    # keep ticking the spinner while progress is active
-    while not _spinner_stop.is_set():
-        progress_heartbeat(every=0.12)
-        time.sleep(0.05)
-
-def start_spinner():
-    global _spinner_thread
-    if _spinner_thread and _spinner_thread.is_alive():
-        return
-    _spinner_stop.clear()
-    _spinner_thread = Thread(target=_spinner_loop, daemon=True)
-    _spinner_thread.start()
-
-def stop_spinner():
-    _spinner_stop.set()
 def refresh_progress() -> None:
     """Repaint the last progress line after multi-line logs."""
-    if _PROGRESS_ACTIVE and _last_progress:
-        print(_last_progress, end="\r", flush=True)
+#    global _p
+#    if _PROGRESS_ACTIVE and _last_progress:
+#        log_print(_last_progress, end="\r", flush=True)
 
 # -------------------------------------------------------------------------------
 
@@ -3150,7 +4116,7 @@ CURRENT_SOURCE = ""  # global tag used by log_event
 def set_source_tag(url: str):
     """Set a short source tag like 'remotive.com' or 'simplyhired.com'."""
     global CURRENT_SOURCE
-    host = urlparse(url).netloc.replace("www.", "")
+    host = up.urlparse(url).netloc.replace("www.", "")
     CURRENT_SOURCE = host
 
 
@@ -3168,6 +4134,9 @@ def _normalize_job_defaults(d: dict) -> dict:
     d["Posting Date"]        = d.get("Posting Date")        or d.get("posting_date", "")
     d["Valid Through"]       = d.get("Valid Through")       or d.get("valid_through", "")
     d["Job URL"]             = d.get("Job URL")             or d.get("job_url", "")
+    # If board still empty, infer from URL host
+    if not d.get("Career Board") and d.get("Job URL"):
+        d["Career Board"] = infer_board_from_url(d["Job URL"])
     d["Apply URL"]           = d.get("Apply URL")           or d.get("apply_url", "")
     d["Description Snippet"] = d.get("Description Snippet") or d.get("description_snippet", "")
     d["WA Rule"]             = d.get("WA Rule")             or d.get("wa_rule", "Default")
@@ -3186,36 +4155,18 @@ def _normalize_job_defaults(d: dict) -> dict:
     d.setdefault("Valid Through",d.get("valid_through",""))
     return d
 
-
-def _normalize_skip_defaults(d: dict) -> dict:
-    """Minimal set for the Skipped tab, using Title Case + space keys."""
-    d.setdefault("Date Scraped", now_ts())
-    d.setdefault("Title", "")
-    d.setdefault("Company", "")
-    d.setdefault("Career Board", "")
-    d.setdefault("Location", "")
-    d.setdefault("Posted", "")
-    d.setdefault("Posting Date", "")
-    d.setdefault("Job URL", "")
-    d.setdefault("Valid Through", "")
-    d.setdefault("Apply URL", "")
-    d.setdefault("Description Snippet", "")
-    d.setdefault("Reason Skipped", "")
-    d.setdefault("WA Rule", "Default")
-    d.setdefault("Remote Rule", "Default")
-    d.setdefault("US Rule", "Default")
-    d.setdefault("Salary Max Detected", "")
-    d.setdefault("Salary Rule", "")
-    d.setdefault("Location Chips", "")
-    d.setdefault("Applicant Regions", "")
-    d.setdefault("Visibility Status", "")
-    d.setdefault("Confidence Score", "")
-    d.setdefault("Confidence Mark", "")
-    return d
-
 def _title_for_log(d: dict, link: str) -> str:
     # normalize first so trailing " @Company" / "[Hiring]" etc. are removed
     t = normalize_title((d.get("Title") or "").strip())
+
+    # ensure link is a string for urlparse
+    link = _as_str(link)
+
+    # normalize first so trailing " @Company" / "[Hiring]" etc. are removed
+    t = normalize_title(
+        (d.get("Title") or "").strip(),
+        (d.get("Company") or "") or company_from_url_fallback(d.get("Job URL"))
+    )
 
     # filter out obvious non-titles that sometimes get scraped
     bad = ("remotive", "rss feeds", "public api", "my account", "log in",
@@ -3226,7 +4177,7 @@ def _title_for_log(d: dict, link: str) -> str:
             return t
 
     # strong slug fallback (kept as-is)
-    p = urlparse(link)
+    p =up.urlparse( link)
     segs = [s for s in p.path.split("/") if s]
     if segs:
         slug = segs[-1].split("?")[0]
@@ -3241,7 +4192,7 @@ def _title_for_log(d: dict, link: str) -> str:
 from wcwidth import wcswidth
 
 _COL_W      = 13                  # legacy use elsewhere; keep as-is if referenced
-_STATUS_W   = 22                  # exactly 20 visible cells inside [ … ]
+_STATUS_W   = 22                  # exactly 22 visible cells inside [ … ]
 
 def _vis_pad(s: str, width: int) -> str:
     """
@@ -3254,9 +4205,23 @@ def _vis_pad(s: str, width: int) -> str:
         return s + (" " * diff)
     return s
 
-def _box(text: str) -> str:
-    """Render a fixed-width bracket like: [🟠 QUIET  48        ] with visual padding."""
-    return f"[{_vis_pad(text, _STATUS_W)}].."
+from wcwidth import wcwidth  # add beside your existing wcswidth import
+
+def _vis_fit(s: str, width: int) -> str:
+    """Trim or pad to exactly `width` visible cells, counting emoji correctly."""
+    s = (s or "").strip()
+    out, used = [], 0
+    for ch in s:
+        cw = wcwidth(ch)
+        if cw < 0:
+            cw = 0
+        if used + cw > width:
+            break
+        out.append(ch)
+        used += cw
+    if used < width:
+        out.append(" " * (width - used))
+    return "".join(out)
 
 
 
@@ -3277,14 +4242,28 @@ def _conf_box(visibility: str | None, score: int | str | None, mark: str | None 
     return _box(label)
     
 
-def _to_int(x):
-    try:
-        return int(float(str(x).replace(",", "").strip()))
-    except Exception:
-        return None
+import re  # make sure this is available at top-of-file
 # ===== console helpers (place just above def log_event) =====
 import textwrap
 
+
+def _to_int(x):
+    t = str(x).lower()
+    # normalize thousands/nbsp and punctuation
+    t = (t.replace("\u00a0", "")  # nbsp
+           .replace(" ", "")
+           .replace(",", "")
+           .strip())
+    # ignore benefit tokens like "401k_plan" we injected above
+    if "401k_plan" in t or "403b_plan" in t or "457b_plan" in t:
+        return None
+    try:
+        # allow simple "109000", "109.000", "109k"
+        if t.endswith("k") and t[:-1].replace(".", "", 1).isdigit():
+            return int(float(t[:-1]) * 1000)
+        return int(float(t))
+    except Exception:
+        return None
 
 
 def _wrap_lines(s: str, width: int = 120) -> list[str]:
@@ -3294,12 +4273,38 @@ def _wrap_lines(s: str, width: int = 120) -> list[str]:
     return [s[i:i+width] for i in range(0, len(s), width)]
 
 
-def _salary_box(label: str, amount: int | None, plus: bool = False) -> str:
-    if not amount:
-        return ""
-    amt = f"${amount:,.0f}{'+' if plus else ''}"
-    # right-justify against a fixed target width like "$100,000+"
-    return _box(f"💲 {label:<8} {amt.rjust(len('$100,000+'))}")
+def _salary_payload_22(d: dict) -> str:
+    """
+    Terminal payload text, padded or trimmed to exactly 22 visible cells.
+    Cases:
+      [💲 SALARY $90,000  ]...Near min
+      [💲 SALARY $90,000  ]...At or above min
+      [💲 SALARY $xxx,xxx ]...Estimated
+      [💲 SALARY          ]...Missing or Unknown
+    """
+    status   = str(d.get("Salary Status","")).strip().lower()
+    est      = str(d.get("Salary Est. (Low–High)","")).strip()
+    note     = str(d.get("Salary Note","")).strip()
+    max_det  = d.get("Salary Max Detected")
+    try:
+        max_det = int(str(max_det).replace(",","")) if max_det not in (None,"") else None
+    except Exception:
+        max_det = None
+
+    if max_det:
+        amt = f"${max_det:,}"
+        tail = "At or above min" if status == "at_or_above" else "Near min"
+        return _vis_pad(f"{amt} ]... {tail}", 22)
+
+    if est:
+        amt = f"${est.replace(' – ', '–')}"  # keep tight dash
+        return _vis_pad(f"{amt} ]...Estimated", 22)
+
+    placeholder = str(d.get("Salary Placeholder") or "").strip()
+    if placeholder:
+        return _vis_pad(f"{placeholder} ]...Signal only", 22)
+
+    return _vis_pad("Missing or Unknown", 22)
 
 
 
@@ -3312,7 +4317,7 @@ def log_event(level: str,
               *, job=None, url: str | None = None,
               width: int = 120, **_):
     # NEW: make sure the spinner/progress row is erased before we print real rows
-    _progress_clear_if_needed()
+    progress_clear_if_needed()
 
     lvl   = (level or "").upper()
     color = LEVEL_COLOR.get(lvl, RESET)
@@ -3344,7 +4349,7 @@ def log_event(level: str,
     # Helper to wrap and print one block
     def _emit(txt: str):
         for ln in _wrap_lines(str(txt), width=width):
-            print(f"{color}{tag}.{ln}{RESET}")
+            log_print(f"{color}{tag}.{ln}{RESET}")
 
     # Build left text once
     left_txt = " ".join((left or "").split())
@@ -3361,8 +4366,8 @@ def log_event(level: str,
             _emit(left_txt)
         if url:
             for ln in _wrap_lines(url, width=width):
-                print(f"{color}{tag}.{DOT1}{ln}{RESET}")
-        refresh_progress()
+                log_print(f"{color}{tag}.{DOT1}{ln}{RESET}")
+        #refresh_progress()
         return
 
     # Detailed KEEP / SKIP layout
@@ -3370,62 +4375,66 @@ def log_event(level: str,
 
     if lvl == "KEEP":
         progress_clear_if_needed()
-        print(f"{color}{_box('KEEP')}.{title}{RESET}")
+        # --- Title (first line) ---
+        title_txt = (job_dict.get("Title") or "").strip()
+        if title_txt:
+            for ln in _wrap_lines(title_txt, width=width):
+                log_print(f"{color}{_box('KEEP ')}.{ln}{RESET}")
 
-        if career_board or company:
-            progress_clear_if_needed()
-            print(f"{color}{_box('KEEP')}....{career_board}.....{company}{RESET}")
+        company = (job_dict.get("Company") or "").strip() or "Missing Company"
+        board   = ((job_dict.get("Career Board") or job_dict.get("career_board") or "").strip()
+                or "Missing Board")
 
+        # --- Company / Board (friendly fallbacks) ---
+        #company = (job_dict.get("Company") or "Missing Company").strip()
+        #board   = (job_dict.get("Career Board") or "Missing Board").strip()
+        progress_clear_if_needed()
+        log_print(f"{color}{_box('KEEP ')}....{board}.....{company}{RESET}")
+        
+        # --- URL line ---
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                print(f"{color}{_box('KEEP')}....{ln}{RESET}")
+                log_print(f"{color}{_box('KEEP ')}....{ln}{RESET}")
 
-        # Salary line
-        det = _to_int(job_dict.get("Salary Max Detected"))
-        est = (job_dict.get("Salary Est. (Low-High)") or "").strip()
-        if det:
-            print(f"{color}{_salary_box('Max', det, plus=(str(job_dict.get('Salary Status','')).lower()=='at_or_above'))}{RESET}")
-        elif est:
-            # show estimates when no detected max
-            for ln in _wrap_lines(f"💲 Estimated {est}", width=width):
-                progress_clear_if_needed()
-                print(f"{color}{_box('KEEP')}....{ln}{RESET}")
+        # --- Always show Salary line with fixed 22-cell width ---
+        log_print(f"{color}{_box('💲 SALARY ')}....{_salary_payload_22(job_dict)}{RESET}")
+        
+
 
         if vis or score or mark:
-            print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
+            log_print(f"{color}{_conf_box(vis, score, mark)}.{RESET}")
 
-        print(f"{color}{_box('✅ DONE')}.{RESET}")
-        refresh_progress()
+        log_print(f"{color}{_box('✅ DONE ')}.{RESET}")
+        #refresh_progress()
         return
 
     if lvl == "SKIP":
         progress_clear_if_needed()
-        print(f"{color}{_box('SKIP')}.{title}{RESET}")
+        log_print(f"{color}{_box('SKIP ')}.{title}{RESET}")
 
         if career_board or company:
             progress_clear_if_needed()
-            print(f"{color}{_box('SKIP')}....{career_board}.....{company}{RESET}")
+            log_print(f"{color}{_box('SKIP ')}....{career_board}.....{company}{RESET}")
 
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                print(f"{color}{_box('SKIP')}....{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}....{ln}{RESET}")
 
         reason = job_dict.get("Reason Skipped") or ""
         if reason:
             for ln in _wrap_lines(reason, width=width):
                 progress_clear_if_needed()
-                print(f"{color}{_box('SKIP')}....{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}....{ln}{RESET}")
 
         if vis or score or mark:
-            print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
+            log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
         progress_clear_if_needed()
-        print(f"{color}{_box('🚫 DONE')}.{RESET}")
-        refresh_progress()
+        log_print(f"{color}{_box('🚫 DONE ')}.{RESET}")
+        #refresh_progress()
         return
-    # repaint the progress line if one is active
-    refresh_progress()
+
 
 
 def _rule(details: dict, key: str, default="default"):
@@ -3438,17 +4447,18 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
     # ensure fields like chips/regions/salary are present if we have snippet/title
     if d:
         d = _normalize_job_defaults(d)
-        d = _enrich_salary_fields(d)
+        d = enrich_salary_fields(d)
 
     base = {
-        "Job URL": link,
+        "Job URL": details.get("job_url", link),
         "Career Board": career_board_name(link),
         "Reason Skipped": reason or "Filtered by rules",
+        "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
     }
 
     # copy nice-to-have fields if present
     for k in (
-        "Title","Company","Location","Posted","Posting Date","Valid Through",
+        "Company","Location","Posted","Posting Date","Valid Through",
         "Apply URL","Description Snippet","Location Chips","Applicant Regions",
         "Salary Max Detected","Salary Rule","Salary Status","Salary Note","Salary Est. (Low-High)"
     ):
@@ -3456,26 +4466,127 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
             base[k] = d[k]
 
     return _normalize_skip_defaults(base)
+    
+def _log_and_record_skip(link: str, rule_reason: str, row: dict) -> None:
+    """
+    Normalize + record a skipped job and emit SKIP logs to the terminal.
 
-def _log_and_record_skip(link: str, reason: str, details: dict | None = None) -> dict:
-    """Normalize details, record the SKIP row (increments skip_count), and log one clean line."""
-    row = _make_skip_row(link, reason, details)
-    _record_skip(row)  # <-- this increments skip_count and batches to CSV
+    This centralizes:
+      * ensuring the row has the fields the CSV/Sheets expect
+      * tracking skip counts / de-dupe via `_record_skip`
+      * the multi-line SKIP logging you were using before
+    """
+    # --- normalize the row and make sure core fields are present ---
+    if row is None:
+        row = {}
+
+    # make sure these are filled even if the caller forgot
+    row.setdefault("Job URL", link)
+    row.setdefault(
+        "Reason Skipped",
+        rule_reason or row.get("Reason Skipped", "Filtered by rules"),
+    )
+
+    row = _normalize_skip_defaults(row)
+
+        # --- record the skip once (updates `skipped_rows` + `skip_count`) ---
+    _record_skip(row, reason=rule_reason)
+
+    # --- pretty terminal logging (restored from your old helper) ---
+    c = LEVEL_COLOR.get("SKIP", RESET)
+    r = RESET
+    ts = now_ts()  # keeps the same signature/behavior as other log helpers
+
+    # title logic: prefer explicit title, fall back to URL-derived title
+    title_in = (row.get("Title") or "").strip()
+    t_from_url = _title_from_url(link)
+    title = title_in or t_from_url or "<missing title>"
+
+    # board/company for display
+    company, board = _company_and_board_for_terminal(row)
+
     progress_clear_if_needed()
-    log_event("SKIP", _title_for_log(row, link), right=row["Reason Skipped"], job=row)
+    log_print(f"{c}[SKIP                  ].{title}{r}")
+    log_print(f"{c}[SKIP                  ]...{board} → {company}{r}")
+    log_print(f"{c}[SKIP                  ]...{link}{r}")
+    log_print(f"{c}[💭 REASON             ]... → {rule_reason}{r}")
+    log_print(f"{c}[🚫 DONE               ].{r}")
+    progress_clear_if_needed()
+
+
+# alias so older call sites without the underscore still work
+def log_and_record_skip(link: str, rule_reason: str, keep_row: dict) -> None:
+    _log_and_record_skip(link, rule_reason, keep_row)
+
+
+# ── Keep/Skip recorders (no recursion; stable counters; de-dupe) ──
+#kept_rows: list[dict] = []
+#skipped_rows: list[dict] = []
+#_seen_kept_urls: set[str] = set()
+#_seen_skip_urls: set[str] = set()
+#kept_count: int = 0
+#skip_count: int = 0
+
+def _normalize_skip_defaults(row: dict) -> dict:
+    # ensure required keys exist for SKIPPED CSV
+    row = dict(row or {})
+    row.setdefault("Date Scraped", now_ts())
+    row.setdefault("Title", "")
+    row.setdefault("Company", "")
+    row.setdefault("Career Board", row.get("Board","") or "")
+    row.setdefault("Location", "")
+    row.setdefault("Posted", "")
+    row.setdefault("Posting Date", "")
+    row.setdefault("Valid Through", "")
+    row.setdefault("Job URL", row.get("job_url","") or row.get("Job URL","") or "")
+    row.setdefault("Reason Skipped", row.get("Reason","") or "Filtered by rules")
+    row.setdefault("WA Rule", row.get("WA Rule",""))
+    row.setdefault("Remote Rule", row.get("Remote Rule",""))
+    row.setdefault("US Rule", row.get("US Rule",""))
+    row.setdefault("Salary Max Detected", row.get("Salary Max Detected",""))
+    row.setdefault("Salary Rule", row.get("Salary Rule",""))
+    row.setdefault("Salary Status", row.get("Salary Status",""))
+    row.setdefault("Salary Note", row.get("Salary Note",""))
+    row.setdefault("Salary Est. (Low-High)", row.get("Salary Est. (Low-High)",""))
+    row.setdefault("Location Chips", row.get("Location Chips",""))
+    row.setdefault("Applicant Regions", row.get("Applicant Regions",""))
+    row.setdefault("Apply URL", row.get("Apply URL","") or row.get("job_url",""))
+    row.setdefault("Description Snippet", row.get("Description Snippet",""))
+    row.setdefault("Visibility Status", row.get("Visibility Status",""))
+    row.setdefault("Confidence Score", row.get("Confidence Score",""))
+    row.setdefault("Confidence Mark", row.get("Confidence Mark",""))
     return row
 
+def _record_keep(row: dict) -> None:
+    global kept_count
+    url = (row.get("Job URL") or row.get("job_url") or "").strip()
+    if url:
+        if url in _seen_kept_urls:
+            return
+        _seen_kept_urls.add(url)
 
-# ===== Results storage and counters =====
-kept_count = 0
-skip_count = 0
-kept_rows: list[dict] = []
-skipped_rows: list[dict] = []
-_seen_kept_urls: set[str] = set()
-_seen_skip_urls: set[str] = set()
+    row.setdefault("Reason", row.get("Reason Skipped", ""))
+    kept_rows.append(to_keep_sheet_row(row))
+    kept_count += 1
+    progress_clear_if_needed()
 
-def _canonical_url(row: dict) -> str:
-    return (row.get("Job URL") or row.get("job_url") or "").strip()
+def _record_skip(row: dict, reason: str) -> None:
+    global skip_count
+    url = (row.get("Job URL") or row.get("job_url") or "").strip()
+    if url:
+        if url in _seen_skip_urls:
+            return
+        _seen_skip_urls.add(url)
+
+    if reason:
+        row["Reason Skipped"] = reason
+
+    skipped_rows.append(to_skipped_sheet_row(row))
+    skip_count += 1
+
+    # Clear the progress line so the next block starts clean
+    progress_clear_if_needed()
+
 
 
 ##########################################################
@@ -3487,16 +4598,20 @@ def _canonical_url(row: dict) -> str:
 kept_rows = []       # the “keep” rows in internal-key form
 skipped_rows = []    # the “skip” rows in internal-key form
 
+#start_ts = None  # define at module level
 
 def main():
-    global kept_count, skip_count
+#    global raw_print
+    global kept_count, skip_count#, start_ts  # add start_ts to globals
+#    start_ts = datetime.now()
     args = _parse_args()
 
-    # make these globals visible outside main()
-    global SMOKE, SALARY_FLOOR, SALARY_CEIL
+    # Optional SMOKE presets
+#    # make these globals visible outside main()
+#    global SMOKE, SALARY_FLOOR, SALARY_CEIL
     SMOKE = args.smoke or os.getenv("SMOKE") == "1"
-    PAGE_CAP = args.limit_pages or (3 if SMOKE else 0)
-    LINK_CAP = args.limit_links or (40 if SMOKE else 0)
+    PAGE_CAP = args.limit_pages or (3 if SMOKE else 0)       # visit ≤ 3 listing pages
+    LINK_CAP = args.limit_links or (40 if SMOKE else 0)      # visit ≤ 40 job links
     ONLY_KEYS = [s.strip().lower() for s in args.only.split(",") if s.strip()]
 
     SALARY_FLOOR = args.floor
@@ -3509,17 +4624,21 @@ def main():
     global kept_count, skip_count
     start_ts = datetime.now()
     progress_clear_if_needed()
-    print("[INFO                  ].Starting run")
+    log_print("[INFO                  ].Starting run")
+#    start_ts = datetime.now()
 
     # Carry-forward map from Google Sheets: url -> (Applied?, Reason)
+#    global prior_decisions
     prior_decisions = {}
     try:
         prior_decisions = fetch_prior_decisions()
-        _progress_clear_if_needed()
-        print(f"[GS                    ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
+        progress_clear_if_needed()
+        log_print(f"[GS                    ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
+#        log_print(f"[{now_ts()}] [GS                    ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
     except Exception as e:
-        _progress_clear_if_needed()
-        print(f"[GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
+        progress_clear_if_needed()
+        log_print(f"[GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
+#        log_print(f"[{now_ts()}] [GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
 
     # 1) Build the final set of listing pages
     pages = STARTING_PAGES + expand_career_sources()
@@ -3535,6 +4654,8 @@ def main():
         pages = pages[:1]  # keep one source in smoke runs
 
     total_pages = len(pages)
+    # ⬇️ inside main(), before any board-specific if/else that gathers links
+#    all_detail_links: list[str] = []
 
     # 3) Collect detail links from each listing page (your existing loop stays here)
     all_detail_links = []
@@ -3556,22 +4677,95 @@ def main():
         pages = pages[:1]          # one listing source only
         total_pages = len(pages)
 
+    # --- Normalize & dedupe all collected job URLs ---
+    def _norm_url(u: str) -> str:
+        from urllib.parse import urlparse, urlunparse, parse_qsl
+
+        if not u:
+            return ""
+
+        # Ensure it's a clean string
+        u = str(u).strip().replace(" ", "")
+
+        p = urlparse(u)
+
+        # Lowercase host and path, remove trailing slashes, fragments, query params
+        clean_path = p.path.strip().rstrip("/").lower()
+
+        # Strip all query params (utm_, ref, etc.)
+        clean = urlunparse((
+            p.scheme.lower(),
+            p.netloc.lower(),
+            clean_path,
+            "", "", ""
+        ))
+
+        return clean
+
+    from urllib.parse import urlparse, parse_qsl, urlencode  # (at top of file if not already imported)
+
+    def link_key(u: str) -> str:
+        """
+        Produce a stable key so duplicate listing/detail URLs collapse across boards.
+        - lowercases host and path
+        - strips 'www.' and trailing slashes
+        - drops tracking/pagination query params (utm_*, ref, source, page, p, start)
+        - ignores fragments
+        """
+        p = urlparse(str(u))
+        host = p.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = p.path.rstrip("/").lower()
+
+        # keep only meaningful query params
+        drop = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                "ref", "source", "src", "page", "p", "start"}
+        kept = []
+        for k, v in parse_qsl(p.query, keep_blank_values=False):
+            if k.lower() in drop:
+                continue
+            kept.append((k.lower(), v))
+        q = urlencode(kept, doseq=True)
+
+        return f"{host}{path}?{q}" if q else f"{host}{path}"
+
+    # De-duplicate by normalized link key
+    _seen = set()
+    deduped_links = []
+    for u in all_detail_links:
+        k = _link_key(u)
+        if not k or k in _seen:
+            continue
+        _seen.add(k)
+        deduped_links.append(u)
+
+    if len(deduped_links) != len(all_detail_links):
+        log_print(f"[ DE-DUPE ] Reduced {len(all_detail_links)} -> {len(deduped_links)} unique URLs")
+        
+
+    all_detail_links = deduped_links
+
+
+    processed_keys: set[str] = set()
+
     # 1) Gather job detail links from each listing page
     for i, listing_url in enumerate(pages, start=1):
         t0 = time.time()
         if "hubspot.com/careers/jobs" not in listing_url:
             progress_clear_if_needed()
-            log_info_processing(listing_url)
         set_source_tag(listing_url)
         html = get_html(listing_url)
         if not html:
             log_event("WARN", "", right=f"Failed to fetch listing page: {listing_url}")
             progress_clear_if_needed()
-            log_info_done()
+            #log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
             continue
 
-        host = urlparse(listing_url).netloc.lower()
+        # derive host safely from the listing URL
+        p = up.urlparse(listing_url if isinstance(listing_url, str) else str(listing_url))
+        host = p.netloc.lower().replace("www.", "")
 
         # HubSpot listing → handle pagination here and continue
         if "hubspot.com" in host and "/careers/jobs" in listing_url:
@@ -3581,8 +4775,8 @@ def main():
             # NEW: show "[🔎 FOUND XX ]....candidate job links on hubspot.com in Ys"
             elapsed = time.time() - t0
             progress_clear_if_needed()
-            log_info_found(len(links), listing_url, elapsed)
-            log_info_done()
+            #log_info_found(len(links), listing_url, elapsed)
+            #log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
             continue
 
@@ -3596,8 +4790,8 @@ def main():
                     # NEW: print a FOUND line for Workday expansions too
                     elapsed = time.time() - t0
                     progress_clear_if_needed()
-                    log_info_found(len(wd_detail_links), listing_url, elapsed)
-                    log_info_done()
+                    #log_info_found(len(wd_detail_links), listing_url, elapsed)
+                    #log_info_done()
                     #progress(i, total_pages, kept_count, skip_count)
                     continue
             except Exception as e:
@@ -3629,7 +4823,6 @@ def main():
                     else (listing_url + ("&" if "?" in listing_url else "?") + f"page={page_num}")
                 )
                 progress_clear_if_needed()
-                log_info_processing(page_url)
                 set_source_tag(listing_url)
                 html = get_html(page_url)
                 links = parse_hubspot_list_page(html or "", base="https://www.hubspot.com")
@@ -3643,7 +4836,7 @@ def main():
             log_event("INFO", f"Found {len(hubspot_links)}.candidate job links on hubspot.com")
             all_detail_links.extend(hubspot_links)
             progress_clear_if_needed()
-            log_info_done()
+            #log_info_done()
             #progress(i, total_pages, kept_count, skip_count)
             continue
 
@@ -3653,358 +4846,438 @@ def main():
         else:
             links = find_job_links(html, listing_url)
         progress_clear_if_needed()
-        log_info_found(len(links), listing_url, time.time() - t0)
+        #log_info_found(len(links), listing_url, time.time() - t0)
         all_detail_links.extend(links)
-        log_info_done()
-        #progress(i, total_pages, kept_count, skip_count)
 
-    # De-dup links
-    all_detail_links = list(dict.fromkeys(all_detail_links))
-    print(f"[INFO ].Collected {len(all_detail_links)} unique job links]")
-
-    # Cap detail links for smoke runs or explicit --limit-links
+    # Optional caps (leave both; LINK_CAP takes precedence if you set it)
+    # SMOKE keeps the shorter cap if you’re using it
+    # Cap detail links for smoke runs
+    # Optional caps
     if LINK_CAP:
         all_detail_links = all_detail_links[:LINK_CAP]
-        progress_set_total(len(all_detail_links))   # keep progress line correct
 
+    if SMOKE:
+        all_detail_links = all_detail_links[:20]  # exact 20 for smoke
 
-    # Proper INFO row (keeps the old look)
-    progress_clear_if_needed()
-    print(f"[INFO ].Collected {len(all_detail_links)} unique job links")
-    # set total for progress line
-    #progress_set_total(len(all_detail_links))
-    # start spinner heartbeat
-    #start_spinner()
+    # --- Final normalization & deduplication ---
+    from urllib.parse import urlparse, urlunparse
+    import re
 
-    #progress_set_total(len(all_detail_links))
-    _seen_kept_urls.clear()
-    _seen_skip_urls.clear()
-    # reset run counters so progress = kept + skip = j
+    def _normalize_link(url: str) -> str:
+        if not url:
+            return ""
+        u = str(url).strip()
+        p = urlparse(u)
+        path = p.path.rstrip("/").lower()
+        query = re.sub(r"(utm_[^=&]+|gh_src|ref|referrer|source)=.*?(&|$)", "", p.query, flags=re.I)
+        query = re.sub(r"&{2,}", "&", query).strip("&?")
+        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", query, ""))
+
+    deduped, seen = [], set()
+    for link in all_detail_links:
+        norm = _normalize_link(link)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        deduped.append(link)
+
+    log_print(f"[🧹 DE-DUPE            ] Reduced {len(all_detail_links)} → {len(deduped)} unique URLs")
+    all_detail_links = deduped
+
+    # Cap after dedupe
+    if SMOKE:
+        all_detail_links = all_detail_links[:20]
+
+    # === HARD DEDUPE AFTER EXPANSIONS, BEFORE PROGRESS TOTALS ===
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+    def _norm_url(u: str) -> str:
+        """Lowercase host, strip tracking params and trailing slash, keep stable path."""
+        p = urlparse(u)
+        # strip common trackers everywhere
+        q = [(k, v) for k, v in parse_qsl(p.query, keep_blank_values=True)
+            if k.lower() not in {"utm_source","utm_medium","utm_campaign","utm_term","utm_content",
+                                "ref","source","_hsmi","_hsenc"}]
+        clean = urlunparse((
+            p.scheme,
+            p.netloc.lower(),
+            p.path.rstrip("/"),
+            "",  # params
+            urlencode(q, doseq=True),
+            ""   # fragment
+        ))
+        return clean
+
+    _seen, deduped = set(), []
+    for u in all_detail_links:
+        nu = _norm_url(u)
+        if nu in _seen:
+            continue
+        _seen.add(nu)
+        deduped.append(nu)
+    all_detail_links = deduped
+    log_print("[: DE-DUPE ] Reduced {} → {} unique URLs".format(
+        len(deduped) + (len(_seen)-len(deduped)), len(all_detail_links)))
+    # =============================================================
+
+    # now set your totals AFTER dedupe (and AFTER any smoke cap)
+    if SMOKE:
+        all_detail_links = all_detail_links[:20]
+    progress_set_total(len(all_detail_links))  # <- total comes from the deduped list
     kept_count = 0
     skip_count = 0
 
+    progress_set_total(len(all_detail_links))
+    progress_clear_if_needed()
+    _seen_kept_urls.clear()
+    _seen_skip_urls.clear()
+    kept_count = 0
+    skip_count = 0
 
     # 2) Visit each job link and extract details
-    start_spinner()
+#    start_spinner()
     # Cap the number of job links in smoke runs
     if SMOKE:
-        all_detail_links = all_detail_links[:40]   # ~40 jobs max
-        progress_set_total(len(all_detail_links))  # reset the total to match the cap
+        all_detail_links = all_detail_links[:20]
+        progress_set_total(len(all_detail_links))   # set the total after caps
+        start_ts = datetime.now()
+        start_spinner()
 
-    for j, link in enumerate(all_detail_links, start=1):
-        progress_tick(j)  # advance spinner one frame
-        progress(j, len(all_detail_links), kept_count, skip_count)  # paint counts text
+    try:
+        for j, link in enumerate(all_detail_links, start=1):
+            # advance spinner and repaint the live line
+            progress_tick(j)                                   # move spinner to next frame
+            progress(i, len(all_detail_links), kept_count, skip_count)  # update counts text
 
-        set_source_tag(listing_url)
-        html = get_html(link)
-
-
-        # A) Could not fetch detail page → record a minimal SKIP and continue
-        if not html:
-            default_reason = "Failed to fetch job detail page"
-            board = career_board_name(link)
-            title_for_log = _title_for_log({"Title": ""}, link)
-
-            skip_row = _normalize_skip_defaults({
-                "Job URL": link,
-                "Apply URL": link,
-                "Title": title_for_log,
-                "Company": "",
-                "Career Board": board,
-                "Valid Through": "",
-                "Reason Skipped": choose_skip_reason({"Job URL": link}, technical_fallback=default_reason),
-                "WA Rule": "default",
-                "Remote Rule": "unknown_or_onsite",
-                "US Rule": "default",
-                "Salary Max Detected": "",
-                "Salary Rule": "",
-                "Salary Near Min": "",
-                "Salary Status": "",
-                "Salary Note": "",
-                "Salary Est. (Low-High)": "",
-                "Location Chips": "",
-                "Applicant Regions": "",
-            })
-
-            _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-            # skip_count increment handled by _record_skip()
-            progress(j, len(all_detail_links), kept_count, skip_count)
-            continue
-
-        # B) We have HTML → parse details and enrich salary
-        details = extract_job_details(html, link)
-        details = _enrich_salary_fields(details)  # fills Salary Near Min, Status, Note, Est. (Low-High)
-
-        # always normalize and enrich before rules/decisions
-        details = _normalize_job_defaults(details)
-        details = _enrich_salary_fields(details)
-
-        # compute derived fields once
-        details["WA Rule"] = details.get("WA Rule", "default")
-        details["Remote Rule"] = details.get("Remote Rule", "default")
-        details["US Rule"] = details.get("US Rule", "default")
-        details["Reason"] = details.get("Reason","")  # leave as-is unless you set it
-        vis, score, mark = compute_visibility_and_confidence(details)
-        details["Visibility Status"] = vis
-        details["Confidence Score"]  = score
-        details["Confidence Mark"]   = mark
-
-        _record_keep(to_keep_sheet_row(details))
+            set_source_tag(listing_url)
+            # 1) fetch html (or however you already do it)
+            html = get_html(link)  # <-- make sure this exists in your code
 
 
-        # choose a specific reason (uses title/snippet/regions after enrich)
-        reason = choose_skip_reason(details, technical_fallback="Filtered by rules")
+            # A) Could not fetch detail page → record a minimal SKIP and continue
+            if not html:
+                default_reason = "Failed to fetch job detail page"
+                board = career_board_name(link)
+                title_for_log = _title_for_log({"Title": ""}, link)
 
-        # C) If extractor itself marked as removed/archived → SKIP with details
-        if details.get("Reason Skipped"):
-            row = _normalize_skip_defaults({
-                "Title": details.get("Title", ""),
-                "Company": details.get("Company", ""),
-                "Career Board": details.get("career_board",""),
-                "Location": details.get("Location", ""),
-                "Description Snippet": details.get("description_snippet", ""),
-                "Posted": details.get("Posted", ""),
-                "Posting Date": details.get("posting_date",""),
-                "Valid Through": details.get("valid_through",""),
-                "Job URL": link,
-                "Apply URL": details.get("apply_url", ""),
-                "Reason Skipped": details["Reason Skipped"],
-                "WA Rule": details.get("wa_rule") or details.get("WA Rule") or "default",
-                "Remote Rule": details.get("remote_rule", "unknown_or_onsite"),
-                "US Rule": "default",  # placeholder until you add stricter US checks
-                "Salary Max Detected": "",
-                "Salary Rule": "",
-                "Location Chips": details.get("location_chips", ""),
-                "Applicant Regions": details.get("applicant_regions", ""),
-            })
-            _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-            # skip_count increment handled by _record_skip()
-            progress(j, len(all_detail_links), kept_count, skip_count)
-            continue
-
-        # D) Ascensus (Workday) post-filter: only keep Product/BA/Scrum family roles
-        host = urlparse(link).netloc.lower()
-        if "ascensushr.wd1.myworkdayjobs.com/ascensuscareers" in host:
-            # reuse your intent/role test
-            if not _is_target_role(details):
                 skip_row = _normalize_skip_defaults({
                     "Job URL": link,
-                    "Title": _title_for_log(details, link),
-                    "Company": details.get("Company", ""),
-                    "Career Board": career_board_name(link),
-                    "Valid Through": details.get("Valid Through", ""),
-                    "Reason Skipped": "Not target role (Ascensus filter)",
+                    "Apply URL": link,
+                    "Title": title_for_log,
+                    "Company": "",
+                    "Career Board": board,
+                    "Valid Through": "",
+                    "Reason Skipped": choose_skip_reason({"Job URL": link}, technical_fallback=default_reason),
+                    "WA Rule": "default",
+                    "Remote Rule": "unknown_or_onsite",
+                    "US Rule": "default",
+                    "Salary Max Detected": "",
+                    "Salary Rule": "",
+                    "Salary Near Min": "",
+                    "Salary Status": "",
+                    "Salary Note": "",
+                    "Salary Est. (Low-High)": "",
+                    "Location Chips": "",
+                    "Applicant Regions": "",
                 })
-                _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-                # skip_count increment handled by _record_skip()
-                progress(j, len(all_detail_links), kept_count, skip_count)
+
+                progress_clear_if_needed()
+                _log_and_record_skip(link, rule_reason, skip_row)
+                progress(i, len(all_detail_links), kept_count, skip_count)
+                progress_clear_if_needed()
                 continue
 
-        # ...continue with KEEP decision and recording below...
+            # B) We have HTML → parse details and enrich salary
+            details = extract_job_details(html, link)
+            details = enrich_salary_fields(details, page_host=up.urlparse(link).netloc)
+            details["Career Board"] = details.get("Career Board") or infer_board_from_url(details.get("Job URL") or link)
+
+            # always normalize and enrich before rules/decisions
+            details = _normalize_job_defaults(details)
+
+            # ---- hard de-dupe by job key (prevents double writes to Sheet/CSV) ----
+            jk = _job_key(details, link)
+            if jk in processed_keys:
+                skip_row = _normalize_skip_defaults({
+                    "Job URL": link,
+                    "Title": title_for_log,
+                    "Company": details.get("Company","") or company_from_url_fallback(details.get("Job URL") or link),
+                    "Career Board": details.get("Career Board",""),
+                    "Reason": "DE-DUPE",
+                    "WA Rule": "default",
+                    "US Rule": "default",
+                    "Remote Rule": "unknown_or_onsite",
+                })
+                _log_and_record_skip(link, "DE-DUPE", skip_row)   # uses your counter increment
+                # skip path (we skipped the job)
+                skip_count += 1
+                progress(i, len(all_detail_links), kept_count, skip_count)
+                progress_clear_if_needed()
+                continue
+            else:
+                processed_keys.add(jk)
+            # ----------------------------------------------------------------------
 
 
-        # --- Salary: detect and label (goes just before keep_row = {...}) ---
-        # Build a single text blob to scan for pay figures
-        _text_for_salary = " ".join([
-            details.get("description_snippet", ""),
-            details.get("Location Chips", ""),
-            details.get("Location", "")
-        ])
+            # compute derived fields once
+            details["WA Rule"] = details.get("WA Rule", "default")
+            details["Remote Rule"] = details.get("Remote Rule", "default")
+            details["US Rule"] = details.get("US Rule", "default")
+            details["Reason"] = details.get("Reason","")  # leave as-is unless you set it
+            vis, score, mark = compute_visibility_and_confidence(details)
+            details["Visibility Status"] = vis
+            details["Confidence Score"]  = score
+            details["Confidence Mark"]   = mark
 
-        # --- Salary evaluation based on description text ---
-        annual_max, salary_out_of_bounds = eval_salary(details.get("description_snippet", "") or "")
-        status, badge = _salary_status(annual_max, None, None)
+            #_record_keep(to_keep_sheet_row(details))
+            #progress(i, len(all_detail_links), kept_count, skip_count)
 
-        keep_row_extra = {
-            "Salary Status": status,                        # at_or_above | near_min | low | below_floor | unknown
-            "Salary Note": badge,                           # e.g., "$105,000"
-            "Salary Max Detected": annual_max or "",
-            "Salary Rule": ("out_of_bounds" if (salary_out_of_bounds or status == "below_floor") else "in_range_or_missing"),
-            "Salary Near Min": (annual_max if status == "near_min" else ""),
-        }
+            # choose a specific reason (uses title/snippet/regions after enrich)
+            reason = choose_skip_reason(details, technical_fallback="Filtered by rules")
 
-        # Basic remote/US rules (lightweight; you can expand later)
-        remote_flag = details.get("is_remote_flag", "unknown_or_onsite")
-        remote_rule = "default" if remote_flag == "remote" else "no_remote_signal"
-        us_rule = "default"  # placeholder until you add stricter US checks
-        wa_rule = "default"  # placeholder for WA logic
+            # C) If extractor itself marked as removed/archived → SKIP with details
+            if details.get("Reason Skipped"):
+                company_out = details.get("Muse Company") or details.get("Company", "")
+                row = _normalize_skip_defaults({
+                    "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
+                    "Company": details.get("Company", "") or "Missing Company",
+                    "Career Board": details.get("Career Board", "") or "Missing Board",
+                    "Location": details.get("Location", ""),
+                    "Description Snippet": details.get("description_snippet", ""),
+                    "Posted": details.get("Posted", ""),
+                    "Posting Date": details.get("posting_date",""),
+                    "Valid Through": details.get("valid_through",""),
+                    "Job URL": job_url,
+                    "Apply URL": details.get("apply_url", job_url),
+                    "Reason Skipped": details.get("Reason Skipped",""),
+                })
+                progress_clear_if_needed()
+                _log_and_record_skip(link, rule_reason, skip_row)
+                progress(i, len(all_detail_links), kept_count, skip_count)
+                progress_clear_if_needed()
+                continue
 
-        # Build a normalized “keep” row
-        keep_row = {
-            "Applied?": "",
-            "Reason": "",
-            "Date Scraped": now_ts(),
-            "Title": normalize_title(details.get("Title", "")),
-            "Company": details.get("Company", ""),
-            "Career Board": details.get("career_board", ""),
-            "Location": details.get("Location", ""),
-            "Posted": details.get("Posted", ""),
-            "Posting Date": details.get("posting_date", ""),
-            "Valid Through": details.get("valid_through", ""),
-            "Job URL": details.get("job_url", link),
-            "Apply URL": details.get("apply_url", link),
-            "Description Snippet": details.get("description_snippet", ""),
-            "WA Rule": "default",
-            "Remote Rule": details.get("is_remote_flag", "unknown_or_onsite"),
-            "US Rule": "default",
-            "Location Chips": details.get("location_chips", ""),
-            "Applicant Regions": details.get("applicant_regions", ""),
-        }
-        keep_row.update(keep_row_extra)  # <-- bring in Salary Status/Note/Max/Rule/Near Min
+            # D) Ascensus (Workday) post-filter: only keep Product/BA/Scrum family roles
+            #host = up.urlparse(listing_url).netloc.lower()
+            host = up.urlparse(link).netloc.lower()
+            details = enrich_salary_fields(details, page_host=host)
+            if "ascensushr.wd1.myworkdayjobs.com/ascensuscareers" in host:
+                # reuse your intent/role test
+                if not _is_target_role(details):
+                    skip_row = _normalize_skip_defaults({
+                        "Job URL": details.get("job_url", link),
+                        "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
+                        "Company": company_from_url_fallback(link), 
+                        "Career Board": career_board_name(link),
+                        "Valid Through": details.get("Valid Through", ""),
+                        "Reason Skipped": "Not target role (Ascensus filter)",
+                    })
+                    progress_clear_if_needed()
+                    _log_and_record_skip(link, rule_reason, skip_row)
+                    progress(i, len(all_detail_links), kept_count, skip_count)
+                    progress_clear_if_needed()
+                    continue
 
-        # --- PUBLIC sanity pass (light network ping + heuristics) ---
-        vis2, score2, mark2 = _public_sanity_checks(keep_row)
-        # One pass, trust the sanity checks
-        vis, score, mark = _public_sanity_checks(keep_row)
-        keep_row["Visibility Status"] = vis
-        keep_row["Confidence Score"]  = score
-        keep_row["Confidence Mark"]   = mark
 
-        # Carry forward Applied? and Reason from prior runs, if present
-        prev = prior_decisions.get(keep_row["Job URL"])
-        prev_decisions = prior_decisions.get(keep_row["Job URL"])
+            # add this line so the enricher knows we are on themuse.com
+            details = enrich_salary_fields(details, page_host=up.urlparse(link).netloc)
 
-        if prev:
-            applied_prev, reason_prev = prev
-            if applied_prev and not keep_row.get("Applied?"):
-                keep_row["Applied?"] = applied_prev
-            if reason_prev and not keep_row.get("Reason"):
-                keep_row["Reason"] = reason_prev
+            keep_row_extra = {
+                "Salary Status": details.get("Salary Status", ""),
+                "Salary Note": details.get("Salary Note", ""),
+                "Salary Max Detected": details.get("Salary Max Detected", ""),
+                "Salary Rule": details.get("Salary Rule", ""),
+                "Salary Near Min": details.get("Salary Near Min", ""),
+                "Salary Est. (Low-High)": details.get("Salary Est. (Low-High)", ""),
+                "Salary": details.get("Salary", "") or details.get("Salary Placeholder", ""),
+            } 
+            # Basic remote/US rules (lightweight; you can expand later)
+            remote_flag = details.get("is_remote_flag", "unknown_or_onsite")
+            remote_rule = "default" if remote_flag == "remote" else "no_remote_signal"
+            us_rule = "default"  # placeholder until you add stricter US checks
+            wa_rule = "default"  # placeholder for WA logic
+            
+            # Normalize company and title before we build keep_row
+            details = _derive_company_and_title(details)
 
-        # --- Rule-based skip gate: title / remote / US-Canada eligibility ---
-        rule_reason = build_rule_reason({
-            "Title": keep_row["Title"],
-            "Remote Rule": keep_row["Remote Rule"],
-            "Location Chips": keep_row["Location Chips"],
-            "Applicant Regions": keep_row["Applicant Regions"],
-            "Location": keep_row["Location"],
-            "Description Snippet": keep_row["Description Snippet"],
-            "Job URL": keep_row["Job URL"],
-        })
+            # Build a normalized “keep” row
+            keep_row = {
+                "Applied?": "",
+                "Reason": "",
+                "Date Scraped": now_ts(),
+                "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
+                "Job ID (Vendor)": details.get("job_id_vendor",""),
+                "Job ID (Numeric)": details.get("job_id_numeric",""),
+                "Company": details.get("Company", "") or "Missing Company",
+                "Career Board": details.get("Career Board", "") or "Missing Board",
+                "Location": details.get("Location", ""),
+                "Posted": details.get("Posted", ""),
+                "Posting Date": details.get("posting_date", ""),
+                "Valid Through": details.get("valid_through", ""),
+                "Job URL": details.get("job_url", link),
+                "Apply URL": details.get("apply_url", link),
+                "Description Snippet": details.get("description_snippet", ""),
+                "WA Rule": "default",
+                "Remote Rule": details.get("is_remote_flag", "unknown_or_onsite"),
+                "US Rule": "default",
+                "Location Chips": details.get("location_chips", ""),
+                "Applicant Regions": details.get("applicant_regions", ""),
+            }
+            keep_row.update(keep_row_extra)   # <-- brings in Salary Status/Note/Rule/Max/etc.
 
-        if rule_reason and rule_reason != "Filtered by rules":
-            # Build a SKIPPED row with the same fields you would have kept
-            skip_row = _normalize_skip_defaults({
-                "Job URL": keep_row["Job URL"],
-                "Title": keep_row["Title"],
-                "Company": keep_row["Company"],
-                "Career Board": keep_row["Career Board"],
-                "Location": keep_row["Location"],
-                "Posted": keep_row["Posted"],
-                "Posting Date": keep_row["Posting Date"],
-                "Valid Through": keep_row["Valid Through"],
-                "Reason Skipped": rule_reason,
-                "Apply URL": keep_row["Apply URL"],
-                "Description Snippet": keep_row["Description Snippet"],
-                "WA Rule": wa_rule,
-                "Remote Rule": remote_rule,
-                "US Rule": us_rule,
-                "Salary Max Detected": keep_row_extra["Salary Max Detected"],
-                "Salary Rule":         keep_row_extra["Salary Rule"],
-                "Salary Status":       keep_row_extra["Salary Status"],
-                "Salary Note":         keep_row_extra["Salary Note"],
-                "Salary Near Min":     keep_row_extra["Salary Near Min"],
-                "Location Chips": keep_row["Location Chips"],
-                "Applicant Regions": keep_row["Applicant Regions"],
+            # Build the bracketed SALARY line for Terminal output
+            salary_line = _fmt_salary_line(keep_row)
+
+            # (optional) stash it on the row for any later printers
+            keep_row["__salary_line"] = salary_line
+
+            # --- PUBLIC sanity pass (light network ping + heuristics) ---
+            vis2, score2, mark2 = _public_sanity_checks(keep_row)
+            # One pass, trust the sanity checks
+            vis, score, mark = _public_sanity_checks(keep_row)
+            keep_row["Visibility Status"] = vis
+            keep_row["Confidence Score"]  = score
+            keep_row["Confidence Mark"]   = mark
+
+            # Carry forward Applied? and Reason from prior runs, if present
+            prev = prior_decisions.get(keep_row["Job URL"])
+            prev_decisions = prior_decisions.get(keep_row["Job URL"])
+
+            if prev:
+                applied_prev, reason_prev = prev
+                if applied_prev and not keep_row.get("Applied?"):
+                    keep_row["Applied?"] = applied_prev
+                if reason_prev and not keep_row.get("Reason"):
+                    keep_row["Reason"] = reason_prev
+
+            # --- Rule-based skip gate: title / remote / US-Canada eligibility ---
+            rule_reason = build_rule_reason({
+                "Title":                keep_row["Title"],
+                "Remote Rule":          keep_row["Remote Rule"],
+                "Location Chips":       keep_row["Location Chips"],
+                "Applicant Regions":    keep_row["Applicant Regions"],
+                "Location":             keep_row["Location"],
+                "Description Snippet":  keep_row["Description Snippet"],
+                "Job URL":              keep_row["Job URL"],
             })
 
-            _log_and_record_skip(link, rule_reason, keep_row)
-            continue
+            if rule_reason and rule_reason != "Filtered by rules":
+                # Build a SKIPPED row with the same fields you would have kept
+                skip_row = _normalize_skip_defaults({
+                    "Job URL":              keep_row["Job URL"],
+                    "Title":                keep_row["Title"],
+                    "Company":              keep_row["Company"],
+                    "Career Board":         keep_row["Career Board"],
+                    "Location":             keep_row["Location"],
+                    "Posted":               keep_row["Posted"],
+                    "Posting Date":         keep_row["Posting Date"],
+                    "Valid Through":        keep_row["Valid Through"],
+                    "Reason Skipped":       keep_row.get("Reason Skipped", ""),
+                    "Apply URL":            keep_row["Apply URL"],
+                    "Description Snippet":  keep_row["Description Snippet"],
+                    "WA Rule": wa_rule,
+                    "Remote Rule": remote_rule,
+                    "US Rule": us_rule,
+                    "Salary Max Detected":  keep_row_extra["Salary Max Detected"],
+                    "Salary Rule":          keep_row_extra["Salary Rule"],
+                    "Salary Status":        keep_row_extra["Salary Status"],
+                    "Salary Note":          keep_row_extra["Salary Note"],
+                    "Salary Near Min":      keep_row_extra["Salary Near Min"],
+                    "Location Chips":       keep_row["Location Chips"],
+                    "Applicant Regions":    keep_row["Applicant Regions"],
+                })
+
+                progress_clear_if_needed()
+                _log_and_record_skip(link, rule_reason, details)
+                progress(i, len(all_detail_links), kept_count, skip_count)
+                progress_clear_if_needed()
+                continue
 
 
-        # --- End rule-based skip gate ---
+            # --- End rule-based skip gate ---
 
 
-        # Compute visibility + confidence for the export
-        vis, score, mark = compute_visibility_and_confidence({
-            "Job URL": keep_row["Job URL"],
-            "Company": keep_row["Company"],
-            "Posting Date": keep_row["Posting Date"],
-            "Salary Max Detected": keep_row["Salary Max Detected"],
-            "Description Snippet": keep_row["Description Snippet"],
-            "Location": keep_row["Location"],
-            "remote_rule": remote_rule,
-            "us_rule": us_rule,
-            "Title": keep_row["Title"],
-        })
+            # Compute visibility + confidence for the export
+            vis, score, mark = compute_visibility_and_confidence({
+                "Job URL": keep_row["Job URL"],
+                "Company": keep_row["Company"],
+                "Posting Date": keep_row["Posting Date"],
+                "Salary Max Detected": keep_row["Salary Max Detected"],
+                "Description Snippet": keep_row["Description Snippet"],
+                "Location": keep_row["Location"],
+                "remote_rule": remote_rule,
+                "us_rule": us_rule,
+                "Title": keep_row["Title"],
+            })
 
-        # One pass, trust the sanity checks
-        vis, score, mark = _public_sanity_checks(keep_row)
-        keep_row["Visibility Status"] = vis
-        keep_row["Confidence Score"]  = score
-        keep_row["Confidence Mark"]   = mark
+            # One pass, trust the sanity checks
+            vis, score, mark = _public_sanity_checks(keep_row)
+            keep_row["Visibility Status"] = vis
+            keep_row["Confidence Score"]  = score
+            keep_row["Confidence Mark"]   = mark
 
-        # --- Salary gate with soft-keep band ---------------------------------
-        if salary_out_of_bounds:
-            # Robustly detect the salary max we already parsed for this job
-            # Adjust the lhs if your variable name differs
-            detected_max = None
-            if 'annual_max' in locals() and annual_max:
-                detected_max = _to_int(annual_max)
-            elif keep_row.get("Salary Max Detected"):
-                detected_max = _to_int(keep_row.get("Salary Max Detected"))
+            # --- Salary gate driven by enrich_salary_fields ----------------------
+            sal_status    = (details.get("Salary Status") or "").strip().lower()
+            detected_max  = details.get("Salary Max Detected")
+            detected_max  = _to_int(detected_max) if detected_max not in (None, "") else None
 
-            if detected_max and detected_max >= SOFT_SALARY_FLOOR:
-                # SOFT-KEEP: under target, but close enough to keep quietly
-                keep_row["Salary Rule"] = "soft_keep"
-                keep_row["Salary Near Min"] = detected_max        # <-- shows in Table1
-                keep_row["Visibility Status"] = "quiet"            # your existing quiet flag
-                keep_row["Confidence Mark"] = "🟠"
+            if sal_status in ("near_min", "below_floor"):
+                if sal_status == "near_min" and detected_max and detected_max >= SOFT_SALARY_FLOOR:
+                    # SOFT-KEEP: under target, but close enough to keep quietly
+                    keep_row["Salary Rule"]        = "soft_keep"
+                    keep_row["Salary Near Min"]    = detected_max
+                    keep_row["Visibility Status"]  = "quiet"
+                    keep_row["Confidence Mark"]    = "🟠"
+                elif sal_status == "below_floor":
+                    # Convert to SKIP with a clear reason
+                    rule_label = keep_row_extra.get("Salary Rule", "below_floor")
+                    row = {
+                        "Title":                keep_row["Title"],
+                        "Company":              keep_row["Company"],
+                        "Career Board":         keep_row["Career Board"],
+                        "Location":             keep_row["Location"],
+                        "Posted":               keep_row["Posted"],
+                        "Posting Date":         keep_row["Posting Date"],
+                        "Valid Through":        keep_row["Valid Through"],
+                        "Reason Skipped":       "Salary out of target range",
+                        "Apply URL":            keep_row["Apply URL"],
+                        "Description Snippet":  keep_row["Description Snippet"],
+                        "WA Rule":              wa_rule,
+                        "Remote Rule":          remote_rule,
+                        "US Rule":              us_rule,
+                        "Salary Max Detected":  keep_row_extra.get("Salary Max Detected", ""),
+                        "Salary Rule":          rule_label,
+                        "Salary Status":        keep_row_extra.get("Salary Status", ""),
+                        "Salary Note":          keep_row_extra.get("Salary Note", ""),
+                        "Salary Near Min":      keep_row_extra.get("Salary Near Min", ""),
+                        "Location Chips":       keep_row.get("Location Chips", ""),
+                        "Applicant Regions":    keep_row.get("Applicant Regions", ""),
+                    }
+                    _log_and_record_skip(link, rule_reason, skip_row)
+                    kept_count += 1
+                    progress_clear_if_needed()
+                    continue
 
-                _record_keep(keep_row)
-                log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
-                progress(j, len(all_detail_links), kept_count, skip_count)
-
-                job = keep_row  # for any downstream usage
 
 
             else:
-                # Hard SKIP: salary too low or unknown below soft floor
-                reason = f"Salary below floor (max={detected_max:,.0f})" if detected_max else "Salary below floor (unknown max)"
-                skip_row = _normalize_skip_defaults({
-                "Job URL": keep_row["Job URL"],
-                "Title": keep_row["Title"],
-                "Company": keep_row["Company"],
-                "Career Board": keep_row["Career Board"],
-                "Location": keep_row["Location"],
-                "Posted": keep_row["Posted"],
-                "Posting Date": keep_row["Posting Date"],
-                "Valid Through": keep_row["Valid Through"],
-                "Reason Skipped": rule_reason,
-                "Apply URL": keep_row["Apply URL"],
-                "Description Snippet": keep_row["Description Snippet"],
-                "WA Rule": wa_rule,
-                "Remote Rule": remote_rule,
-                "US Rule": us_rule,
-                "Salary Max Detected": keep_row_extra["Salary Max Detected"],
-                "Salary Rule":         keep_row_extra["Salary Rule"],
-                "Salary Status":       keep_row_extra["Salary Status"],
-                "Salary Note":         keep_row_extra["Salary Note"],
-                "Salary Near Min":     keep_row_extra["Salary Near Min"],
-                "Location Chips": keep_row["Location Chips"],
-                "Applicant Regions": keep_row["Applicant Regions"],
-                })
-                skip_row["Reason Skipped"] = reason
+                # Normal KEEP (salary OK or not limiting)
+                #keep_row.pop("Salary Near Min", None)   # keep clean
+                _record_keep(keep_row)
+                progress(i, len(all_detail_links), kept_count, skip_count)
+                log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
 
-                _log_and_record_skip(link, skip_row["Reason Skipped"], details=skip_row)
-                progress(j, len(all_detail_links), kept_count, skip_count)
-                continue
+                job = keep_row
+            # ---------------------------------------------------------------------
+        # stop spinner and clear sticky line once we finish
+        stop_spinner()
+        progress_done(kept_count + skip_count, len(all_detail_links), kept_count, skip_count)
+        progress_clear_if_needed()
 
-
-        else:
-            # Normal KEEP (salary OK or not limiting)
-            keep_row.pop("Salary Near Min", None)   # keep clean
-            _record_keep(keep_row)
-            log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
-            progress(j, len(all_detail_links), kept_count, skip_count)
-
-
-            job = keep_row
-        # ---------------------------------------------------------------------
-    # stop spinner and clear sticky line once we finish
-    stop_spinner()
-    _progress_clear_if_needed()
-
+    finally:
+        #refresh_progress()
+        pass
+#    total = len(all_detail_links)  # safe: list exists, even if empty
 
     # 3) Write CSVs
     write_rows_csv(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
@@ -4015,13 +5288,15 @@ def main():
     push_rows_to_google_sheet([to_skipped_sheet_row(r) for r in skipped_rows], SKIPPED_KEYS, tab_name="Skipped")
 
 
-    _progress_clear_if_needed()
-    print(f"[DONE                  ].Kept {kept_count}, skipped {skip_count} "
+    progress_clear_if_needed()
+    log_print(f"[DONE                  ].Kept {kept_count}, skipped {skip_count} "
           f"in {(datetime.now() - start_ts).seconds}s")
-    _progress_clear_if_needed()
-    print(f"[DONE                  ].CSV: {OUTPUT_CSV}")
-    _progress_clear_if_needed()
-    print(f"[DONE                  ].CSV: {SKIPPED_CSV}")
+    progress_clear_if_needed()
+    log_print(f"[🧹 DE-DUPE            ].Reduced {len(seen)} unique out of {len(all_detail_links)} total URLs")
+    progress_clear_if_needed()
+    log_print(f"[DONE                  ].CSV: {OUTPUT_CSV}")
+    progress_clear_if_needed()
+    log_print(f"[DONE                  ].CSV: {SKIPPED_CSV}")
 
     # Final flush
     if kept_rows:
@@ -4033,6 +5308,7 @@ def main():
 
 
     # ---- Optional GitHub push (one place, at the end) ----
+#    if (kept_count + skip_count) > 0:
     commit_msg = f"job-scraper: {RUN_TS} kept={kept_count}, skipped={skip_count}"
     if PUSH_MODE == "auto":
         maybe_push_to_git(prompt=False, auto_msg=commit_msg)
@@ -4044,6 +5320,7 @@ def main():
 
     # ---- Optional Git push (controlled by GIT_PUSH_MODE) ----
     commit_msg = f"scraper: {RUN_TS} kept={kept_count} skipped={skip_count}"
+#    commit_msg = f"job-scraper: {RUN_TS} kept={kept_count} skipped={skip_count}"
     if GIT_PUSH_MODE == "auto":
         git_commit_and_push(commit_msg)
     elif GIT_PUSH_MODE == "prompt":
@@ -4062,7 +5339,8 @@ def main():
 ########################################################################
 
 # ===== GitHub push control (toggle: "off" | "ask" | "auto") =====
-PUSH_MODE = "ask"   # change to "auto" later, or "off" to disable
+#GIT_PUSH_MODE = "auto" | "prompt" | "off")   # change to "auto" later, or "off" to disable
+PUSH_MODE = "off"   # change to "auto" later, or "off" to disable
 
 
 """     # --- Optional GitHub push (last thing printed) ---
@@ -4093,25 +5371,34 @@ def _git_has_changes(root: str) -> bool:
 def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     root = _git_root()
     if not root:
+        # just display and return (NO input here)
         progress_clear_if_needed()
-        print("[INFO                  ].Not a Git repo. Skipping push.")
-        refresh_progress()
+#        log_print(f"[{now_ts()}] [GIT                   ].Not a Git repo. Skipping push.")
+        log_print("[INFO                  ].Not a Git repo. Skipping push.")
+        #refresh_progress()
         return
     if not _git_has_changes(root):
+        # just display and return (NO input here)
         progress_clear_if_needed()
-        print("[INFO                  ].No file changes to commit.")
-        refresh_progress()
+#        log_print(f"[{now_ts()}] [GIT                   ].No file changes to commit.")
+        log_print("[INFO                  ].No file changes to commit.")
+        #refresh_progress()
         return
 
+    # The ONLY interactive prompt
     if prompt:
+#        ans = input(f"[{now_ts()}] [GIT                   ].Push code update to GitHub now? (y/n) ").strip().lower()
         ans = input("Push code updates to GitHub now? [y/n] ").strip().lower()
         if ans != "y":
+            # display a one-liner and exit (NO second input)
             progress_clear_if_needed()
-            print("[INFO                  ].Skipped push.")
-            refresh_progress()
+#            log_print(f"[{now_ts()}] [GIT                   ].Skipped push.")
+            log_print("[INFO                  ].Skipped push.")
+            #refresh_progress()
 
             return
 
+    # do the push
     _git_run("git add -A", cwd=root)
     msg = auto_msg or f"job-scraper: update @ {_t.strftime('%Y-%m-%d %H:%M:%S')}"
     _git_run(f'git commit -m "{msg}"', cwd=root)
@@ -4119,12 +5406,47 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     code, out = _git_run("git push", cwd=root)
     if code == 0:
         progress_clear_if_needed()
-        print("[INFO                  ].Pushed to GitHub.")
+        log_print("[INFO                  ].Pushed to GitHub.")
     else:
         progress_clear_if_needed()
-        print("[WARN                  ].Push failed:\n" + out)
-
+        log_print("[WARN                  ].Push failed:\n" + out)
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Product/PO job scraper"
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="Run a quick test: cap to 20 links and show progress."
+    )
+    parser.add_argument(
+        "--link-cap",
+        type=int,
+        default=None,
+        help="Hard-cap number of detail links to process (overrides discovery count)."
+    )
+    parser.add_argument(
+        "--push",
+        choices=["auto", "ask", "off"],
+        default=None,
+        help="Git push mode at the end (auto=commit+push, ask=prompt, off=skip)."
+    )
+
+    args = parser.parse_args()
+    SMOKE = getattr(args, "smoke", False) or bool(os.environ.get("SMOKE"))
+
+
+    # Expose flags to the rest of the module (your code reads these globals)
+    if args.smoke:
+        SMOKE = True
+    if args.link_cap is not None:
+        LINK_CAP = int(args.link_cap)
+    if args.push is not None:
+        PUSH_MODE = args.push
+
+    # run
     main()

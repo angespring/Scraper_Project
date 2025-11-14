@@ -8,6 +8,13 @@ import subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
+import textwrap, builtins
+
+
+DOT3 = "..."        # 3 dots
+DOT4 = "...."       # 4 dots
+DOT5 = "....."      # 5 dots
+DOT6 = "......"     # 6 dots
 
 
 import builtins  # use real print here, not the later override
@@ -19,6 +26,244 @@ import threading
 
 # --- Unified CLI args & run configuration (single parse, early) ---
 import argparse
+
+
+
+# keep this function where your logger utils live, near _p / _box / _progress_print
+# ================= PROGRESS LINE =================
+_P = {"active_len": 0, "start": None, "total": 0}
+
+# ---- live progress helpers (single line) ----
+import sys, time
+
+_PROGRESS_ACTIVE = False
+_PROGRESS_TOTAL = 0
+_PROGRESS_NOW = 0
+_PROGRESS_START_TS = 0.0
+
+
+
+PUSH_MODE = "ask"   # "auto" | "ask" | "off"
+
+
+
+
+
+def _ansi_ok() -> bool:
+    try:
+        import sys, os
+        return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    except Exception:
+        return False
+
+def log(section: str, msg: str) -> None:
+    # clear any active progress line if your progress system uses it
+    try:
+        progress_clear_if_needed()
+    except NameError:
+        pass
+    _bk_log_wrap(_paint(section), msg)
+
+
+def _bkts() -> str:
+    from datetime import datetime
+    return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+
+
+
+# width used by wrapped logger
+_LOG_WRAP_WIDTH = 120  # or detect terminal width if you prefer  (hard wrap)
+
+def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = None) -> None:
+    """Timestamped, wrapped logger that plays nice with progress lines."""
+    import shutil, textwrap, builtins, datetime as _dt
+    ts = _dt.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
+    head = f"{ts} {section:<22}"  # 22 keeps your label column tidy
+    width = width or shutil.get_terminal_size(fallback=(120, 22)).columns
+    body = textwrap.fill(
+        str(msg),
+        width=width,
+        subsequent_indent=" " * len(head),
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+    builtins.print(f"{head}{body}")
+
+# colors + painter
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"
+def _ansi_ok() -> bool:
+    import sys, os
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+LEVEL_COLOR = {
+    "ERROR": RED, "WARN": YELLOW, "INFO": CYAN,
+    "KEEP": GREEN, "SKIP": DIM, "SETUP": RESET,
+    "ENV": RESET, "BACKUP": RESET, "DONE": RESET, "GS": CYAN,
+}
+
+def _paint(label: str) -> str:
+    color = LEVEL_COLOR.get(label.upper(), RESET)
+    if not _ansi_ok():
+        return f"[{label:<22}]"
+    return f"{color}[{label:<22}]{RESET}"
+
+def log_line(label: str, msg: str, width: int | None = None) -> None:
+    _bk_log_wrap(_paint(label), msg, width=width or _LOG_WRAP_WIDTH)
+
+# convenient shorthands (use these everywhere)
+def env(msg: str) -> None:      log_line("ENV", msg)
+def info(msg: str) -> None:     log_line("INFO", msg)
+def warn(msg: str) -> None:     log_line("⚠️  WARN ", msg)
+def setup(msg: str) -> None:    log_line("SETUP", msg)
+def debug(msg: str) -> None:    log_line("DEBUG", msg)
+def backup(msg: str) -> None:   log_line("BACKUP", msg)
+def keep_log(msg: str) -> None: log_line("KEEP", msg)
+def skip_log(msg: str) -> None: log_line("SKIP", msg)
+def done_log(msg: str) -> None: log_line("DONE", msg)
+
+
+
+import logging
+
+def log_line(label: str, msg: str) -> None:
+    try:
+        progress_clear_if_needed()
+    except NameError:
+        pass
+    _bk_log_wrap(_paint(label), msg, width=_LOG_WRAP_WIDTH)
+
+# Only create the short alias `log` if it’s safe to do so
+if 'log' not in globals() or isinstance(globals()['log'], logging.Logger):
+    log = log_line
+
+
+
+
+
+
+def _progress_render():
+    # one line, no newline; carriage return keeps it "live"
+    if _PROGRESS_TOTAL:
+        rate = _PROGRESS_NOW / max(1, time.time() - _PROGRESS_START_TS)
+    else:
+        rate = 0.0
+    line = f"[PROGRESS] {(_PROGRESS_NOW):>3}/{_PROGRESS_TOTAL:<3}  {rate:.1f}/s"
+    sys.stdout.write("\r" + line)
+    sys.stdout.flush()
+
+# --- live progress state + helpers (single place, top-level) ---
+_PROGRESS = {
+    "on": False,          # live progress line currently visible
+    "line": "",           # last drawn line
+    "i": 0,               # current index
+    "total": 0,           # total items
+    "kept": 0,
+    "skipped": 0,
+    "start": None,        # start time (datetime)
+}
+
+# ---- progress state ----
+_PROGRESS = {"on": False, "now": "", "total": 0, "start": None}
+kept_count = 0
+skip_count = 0
+
+def progress_set_total(n: int) -> None:
+    _PROGRESS["total"] = int(n)
+
+def start_spinner(n: int) -> None:
+    progress_set_total(n)
+    _PROGRESS["on"] = True
+    _PROGRESS["start"] = time.time()
+    _PROGRESS["now"] = ""
+
+def _progress_line(i: int) -> str:
+    # i is 1-based
+    k = kept_count
+    s = skip_count
+    t = _PROGRESS.get("total", 0)
+    rate = 0.0
+    if _PROGRESS.get("start"):
+        dt = max(time.time() - _PROGRESS["start"], 0.0001)
+        rate = i / dt
+    return f"[PROGRESS] {i}/{t} kept {k}  skip {s}  {rate:0.1f}/s"
+
+def progress_tick_old(i: int) -> None:
+    if not _PROGRESS.get("on"):
+        return
+    line = _progress_line(i)
+    sys.stdout.write("\r" + line)
+    sys.stdout.flush()
+    _PROGRESS["now"] = line
+
+# simple shared counter/state
+PROGRESS = {"on": True, "i": 0, "kept": 0, "skip": 0}
+
+def progress_tick(i=None, kept=None, skip=None):
+    """
+    Update progress counters.
+    - i: current item count (int) or None to auto-increment
+    - kept/skip: optional counts to display or store
+    """
+    # defaults / auto-inc
+    if i is None:
+        PROGRESS["i"] += 1
+    else:
+        PROGRESS["i"] = i
+
+    if kept is not None:
+        PROGRESS["kept"] = kept
+    if skip is not None:
+        PROGRESS["skip"] = skip
+
+    # draw one compact progress line (no wrapping)
+    # feel free to colorize KEEP/SKIP with your LEVEL_COLOR map
+    head = f"[PROGRESS]"
+    body = f"{PROGRESS['i']} kept {PROGRESS['kept']}  skip {PROGRESS['skip']}"
+    # if you’re using your new logger:
+    log_line("PROGRESS", body)
+    # or, if you want a transient spinner line, you can print with '\r' and no newline
+    # print(f"{_bkts()} [{head:<22}] {body}", end="\r")
+
+
+
+def progress_clear_if_needed() -> None:
+    if _PROGRESS.get("on") and _PROGRESS.get("now"):
+        sys.stdout.write("\r" + " " * len(_PROGRESS["now"]) + "\r")
+        sys.stdout.flush()
+        _PROGRESS["now"] = ""
+
+def progress_done() -> None:
+    if not _PROGRESS.get("on"):
+        return
+    progress_clear_if_needed()
+    # final line
+    line = _progress_line(_PROGRESS.get("total", 0))
+    print(line)
+    _PROGRESS["on"] = False
+
+# timestamped print that respects the progress line
+_builtin_print = print
+def log_print(msg: str) -> None:
+    progress_clear_if_needed()
+    _builtin_print(msg)
+
+def _progress_draw() -> None:
+    if not _PROGRESS.get("on"):
+        return
+    import datetime as _dt
+    i = _PROGRESS["i"]
+    total = max(1, _PROGRESS["total"])
+    kept = _PROGRESS["kept"]
+    skipped = _PROGRESS["skipped"]
+    elapsed = (_dt.datetime.now() - (_PROGRESS["start"] or _dt.datetime.now())).total_seconds()
+    rate = 0 if elapsed <= 0 else i / elapsed
+    line = f"[PROGRESS] {i}/{total}  kept {kept}  skip {skipped}  {rate:.1f}/s"
+    _PROGRESS["line"] = line
+    print("\r" + line, end="", flush=True)
+
+# =================================================
+
 
 def _parse_args():
     p = argparse.ArgumentParser(
@@ -34,7 +279,12 @@ def _parse_args():
                    help="Hard cap on listing pages visited (0 = unlimited)")
     p.add_argument("--limit-links", type=int, default=0,
                    help="Hard cap on job detail links visited (0 = unlimited)")
-
+    p.add_argument(
+        "--test-url",
+        type=str,
+        default="",
+        help="Fetch and parse a single job detail URL, print fields, then exit."
+    )
     # salary knobs
     p.add_argument("--floor", type=int, default=110_000,
                    help="Minimum target salary filter")
@@ -58,16 +308,32 @@ SALARY_CEIL  = (int(ARGS.ceil) or None)
 # Push control (leave as-is if you prefer to be prompted)
 PUSH_MODE = "ask"     # "auto" | "ask" | "off"
 
-# ensure logs and progress render immediately
+# ---------- I/O + logging setup ----------
+import os, sys, time, shutil, logging
+
+# help the terminal show progress updates promptly
 try:
     os.environ["PYTHONUNBUFFERED"] = "1"
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(line_buffering=True)
 except Exception:
     pass
 
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)  # one call is enough
+except Exception:
+    pass
+
+# send logs to stderr so they do not step on the progress line (stdout)
+logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
+log = logging.getLogger("scraper")
+# ---------- end setup ----------
+
+
+
+
 # ---- fixed-width, wrapped logger for long lines ----
 _LOG_WRAP_WIDTH = 120
+width = _LOG_WRAP_WIDTH
 
 from urllib.parse import urlparse, urlunparse
 
@@ -86,33 +352,18 @@ def _link_key(u: str) -> str:
         return (u or "").strip().rstrip("/")
 
 
-def _bkts() -> str:
-    return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-
-def _bk_log_wrap(section: str, msg: str, indent: int = 3, width: int = _LOG_WRAP_WIDTH):
-    """Timestamped, wrapped logger that does NOT rely on the later print() override."""
-    ts   = _bkts()
-    head = f"{ts} [{section:22}]."
-    text = " ".join(str(msg or "").split())
-    if not text:
-        builtins.print(head)
-        return
-    first, rest = text[:width], text[width:]
-    builtins.print(f"{head}{first}")
-    prefix = "." * indent
-    while rest:
-        chunk, rest = rest[:width], rest[width:]
-        builtins.print(f"{ts} [{section:<22}].{prefix}{chunk}")
-
-# put near your custom print() (right after _builtin_print = builtins.print)
-#def raw_print(*args, **kwargs):
-#    """Bypass the timestamping print for system lines (progress, GS)."""
-#    return _builtin_print(*args, **kwargs)
-# Modes:
-#   "manual"  = do nothing
-#   "prompt"  = ask at the end of the run
-#   "auto"    = commit and push automatically at the end
 GIT_PUSH_MODE = "prompt"    # change to "prompt" or "auto" when you want
+
+def _is_interactive() -> bool:
+    import os, sys
+    if os.environ.get("CI"):
+        return False
+    try:
+        return sys.stdin.isatty() and sys.stdout.isatty()
+    except Exception:
+        return False
+
+
 
 def git_commit_and_push(message: str) -> None:
     repo_dir = Path(__file__).resolve().parent
@@ -124,25 +375,33 @@ def git_commit_and_push(message: str) -> None:
     # commit (no-op if nothing to commit)
     commit = _run(["git", "commit", "-m", message])
     if "nothing to commit" in commit.stdout.lower():
-        log_print("[GIT                   ].No changes to commit.")
+        log_print("[GIT", "].No changes to commit.")
         return
+
     # push
     push = _run(["git", "push"])
     if push.returncode == 0:
-        log_print("[GIT                   ].Pushed to remote.")
+        log_print("GIT", "].Pushed to remote.")
     else:
-        log_print("[GITERR                ].Push failed:")
+        log_print("GITERR", ".Push failed:")
         for ln in (push.stdout or "").splitlines():
-            log_print(f"[GITERR                ].{ln}")
+            log_print("GITERR", ".{ln}")
 
 def git_prompt_then_push(default_msg: str) -> None:
+    if PUSH_MODE != "ask" or not _is_interactive():
+        return
+    try:
+        progress_clear_if_needed()
+    except NameError:
+        pass
     try:
         ans = input("[GIT] Push changes to GitHub now? (y/n) ").strip().lower()
-        if ans == "y":
-            git_commit_and_push(default_msg)
-    except Exception:
-        # non-interactive environment
-        pass
+    except EOFError:
+        return
+    if ans in ("y", "yes"):
+        git_commit_and_push(default_msg)
+    else:
+        log_print("GIT", "Skipped push.")
 
 # If True, keep jobs even when no salary is detected; if False, treat as SKIP.
 KEEP_UNKNOWN_SALARY = False
@@ -165,7 +424,8 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
     """
     here = Path(__file__).resolve().parent
     if "Code Archive" in str(here):
-        _bk_log_wrap("BACKUP", "Skipped (running inside Code Archive)")
+        #_bk_log_wrap("[BACKUP", "].Skipped (running inside Code Archive)")
+        backup(f"{DOT3}.Skipped (running inside Code Archive)")
         return
 
     archive_dir = here / "Code Archive"
@@ -180,7 +440,8 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
         stem = src.stem
         dest = archive_dir / f"{stem}_backup_{ts}{src.suffix}"
         shutil.copy2(src, dest)
-        _bk_log_wrap("BACKUP", f"Saved {dest}")
+        #_bk_log_wrap("[BACKUP", f"].Saved {dest}")
+        backup(f".Saved to: {dest}")
 
         # Collect backups for this file
         pattern = f"{stem}_backup_*{src.suffix}"
@@ -195,7 +456,8 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                     b_dt = datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
                     if b_dt < cutoff:
                         b.unlink()
-                        _bk_log_wrap("BACKUP", f"Pruned by age {b.name}")
+                        #_bk_log_wrap("[BACKUP", f"].Pruned by age {b.name}")
+                        backup(f"{DOT3}Pruned by age {b.name}")
                 except Exception:
                     # ignore filenames that don’t match the pattern
                     pass
@@ -207,10 +469,11 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                 old = backups.pop(0)
                 try:
                     old.unlink()
-                    _bk_log_wrap("BACKUP", f"Pruned by count {old.name}")
+                    #_bk_log_wrap("[BACKUP", f"].Pruned by count {old.name}")
+                    backup(f"{DOT3}Pruned by count {old.name}")
                 except OSError as e:
                     progress_clear_if_needed()
-                    builtins.print(f"{_bkts()} [WARN                ].Could not remove {old.name}: {e}")
+                    builtins.print(f"{_bkts()} [⚠️ WARN               ].Could not remove {old.name}: {e}")
 
 # --- HOW TO USE (uncomment exactly one) ---
 backup_all_py_to_archive()                  # 1) keep ALL backups
@@ -227,13 +490,8 @@ from datetime import datetime
 import builtins, datetime as _dt
 _builtin_print = builtins.print
 
-def log_printf(msg: str, ts: str) -> None:
-    """Print one line using the provided timestamp (bypass the wrapper)."""
-    progress_clear_if_needed()
-    _builtin_print(f"{ts} {msg}")
 
-
-def print(*args, **kwargs):
+def ts_pprint(*args, **kwargs):
     ts = _dt.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
     if args:
         args = (f"{ts} {args[0]}",) + args[1:]
@@ -266,16 +524,13 @@ IN_VENV = (sys.prefix != sys.base_prefix)
 def _stamp() -> str:
     return datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
 
-def log(section: str, msg: str) -> None:
-    print(f"[{section:<22}].{msg}")   # padding in Terminal display
-
 def _ensure(pkg: str):
     """Import if available; otherwise pip install and stream output with timestamps."""
     try:
         __import__(pkg.replace("-", "_"))
-        _bk_log_wrap("SETUP", f"Requirement already satisfied: {pkg}")
+        setup(f".Requirement already satisfied: {pkg}")
     except ImportError:
-        _bk_log_wrap("SETUP", f"Installing missing dependency: {pkg} ...")
+        setup(f".Installing missing dependency: {pkg}")
         cmd = [sys.executable, "-m", "pip", "install", pkg]
         # If not in a venv, fallback to --user to avoid Homebrew's externally-managed error
         if not IN_VENV:
@@ -289,18 +544,12 @@ def _ensure(pkg: str):
         )
         for line in proc.stdout.splitlines():
             if line.strip():
-                _bk_log_wrap("SETUP", line.strip())   # was: log("SETUP", line.strip())
+                setup(f".{line.strip()}")
 
 
 for _p in REQUIRED_PACKAGES:
     _ensure(_p)
 
-# --- Environment banner ---
-log("ENV", f"Using Python from: {sys.executable}")
-log("ENV", f"Virtual environment: {'Yes' if IN_VENV else 'No'}")
-log("ENV", f"Working directory: {os.getcwd()}")
-
-DEBUG_REMOTE = False  # flip to True only when tuning remote rules
 
 
 """
@@ -394,11 +643,12 @@ def parse_date_relaxed(s):
     Returns ISO date string when possible, else the original string.
     """
     try:
-        dt = dateparse_date_relaxed(str(s), fuzzy=True,
-                              tzinfos=lambda name, offset: tzoffset(name, 0))
+        dt = parser.parse(str(s), fuzzy=True, ignoretz=True)
         return dt.date().isoformat()
     except Exception:
         return s
+
+
 from urllib import robotparser
 from playwright.sync_api import sync_playwright
 
@@ -411,49 +661,46 @@ import urllib.parse as up
 # ── Single-line progress indicator (safe; no title contamination) ──
 import sys, time
 
-_PROGRESS_ACTIVE = False
-
-#def _progress_print(line: str) -> None:
-#    """Draw/refresh the live, single-line progress row (no newline)."""
-#    global _PROGRESS_ACTIVE, _PROGRESS_WIDTH
-#    sys.stdout.write("\r" + line)
-#    sys.stdout.flush()
-#    _PROGRESS_ACTIVE = True
-#    _PROGRESS_WIDTH = len(line)
-
 
 def progress(i: int, total: int, kept: int, skipped: int) -> None:
-    """Repaint the spinner at ~12fps; never prints a newline."""
-    global _spin_i, _last_tick
-    now = time.time()
-    if now - _last_tick > 0.08:  # ~12 fps
-        _spin_i = (_spin_i + 1) % len(_SPINNER)
-        _last_tick = now
-    spin = _SPINNER[_spin_i]
-    _progress_print(f"[{spin} PROGRESS           ]...{i}/{total} kept={kept} skip={skipped}")
+    """
+    Legacy wrapper.
+
+    We now let the unified spinner (progress_tick / start_spinner) handle
+    drawing. This function just updates the shared counters so the line text
+    stays accurate.
+    """
+    global kept_count, skip_count
+    kept_count = kept
+    skip_count = skipped
+    _p["total"] = total
+    # no printing here on purpose
+
+PROGRESS = {"total": 0, "start": 0.0, "last": 0, "on": False}
 
 
-
-def progress_done(i: int, total: int, kept: int, skipped: int) -> None:
-    """Finalize the live row with a newline so the cursor returns to a fresh line."""
-    progress(i, total, kept, skipped)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
-
-# Always clear the live line if the process exits unexpectedly
-import atexit
-#atexit.register(progress_clear_if_needed)
-
-def log_printf(msg: str, ts: str) -> None:
-    """Print exactly one line using the provided timestamp, bypassing the wrapper."""
-    progress_clear_if_needed()
-    _builtin_print(f"{ts} {msg}")
-
-
-# --- Safe log print: always clear the live progress line first ---
+# --- unified logging helpers (timestamped; safe with progress line) ---
 def log_print(msg: str) -> None:
-    progress_clear_if_needed()
-    print(msg)  # your timestamped print wrapper
+    """Print a single line with a timestamp. No wrapping or section label."""
+    try:
+        progress_clear_if_needed()
+    except NameError:
+        # ok during early boot
+        pass
+    builtins.print(f"{_bkts()} {msg}")
+
+#defined in a different place
+#def log(section: str, msg: str) -> None:
+#    """Timestamped, width-wrapped log line with a left-hand section label."""
+#    _bk_log_wrap(section, msg)
+
+# --- Environment banner ---
+env(f".Using Python from: {sys.executable}")
+env(f".Virtual environment: {'Yes' if IN_VENV else 'No'}")
+env(f".Working directory: {os.getcwd()}")
+
+DEBUG_REMOTE = False  # flip to True only when tuning remote rules
+
 
 # --- Company helpers (JSON-LD first) -----------------------------------------
 
@@ -588,6 +835,88 @@ def _set_qp(url: str, **updates) -> str:
 # BeautifulSoup is available already in your file
 from bs4 import BeautifulSoup
 
+def _extract_json_ld(soup):
+    """Return parsed JSON-LD objects found on the page as a list."""
+    out = []
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            raw = script.string or ""
+            data = json.loads(raw)
+            # some pages put an array at top-level
+            if isinstance(data, list):
+                out.extend(data)
+            else:
+                out.append(data)
+        except Exception:
+            # ignore parse errors
+            continue
+    return out
+
+def parse_remotive(soup, job_url):
+    """
+    Remotive parser returns dict keys: posting_date, valid_through, Posted (optional)
+    """
+    out = {}
+    # JSON-LD first
+    for obj in _extract_json_ld(soup):
+        if obj.get("@type") in ("JobPosting", "JobPostingContract", "Job"):
+            # job posting JSON-LD
+            dt = obj.get("datePosted") or obj.get("datePublished")
+            if dt:
+                # prefer ISO, strip time to YYYY-MM-DD
+                out["posting_date"] = dt.split("T", 1)[0]
+            vt = obj.get("validThrough")
+            if vt:
+                out["valid_through"] = vt.split("T", 1)[0]
+            # sometimes they provide a relative label
+            posted_label = obj.get("publishedLabel") or obj.get("datePostedLabel")
+            if posted_label:
+                out["Posted"] = posted_label
+            return out
+
+    # Fallback to meta tags
+    meta_pub = soup.find("meta", {"property": "article:published_time"}) or soup.find("meta", {"name": "publication_date"})
+    if meta_pub and meta_pub.get("content"):
+        out["posting_date"] = meta_pub["content"].split("T", 1)[0]
+
+    # Some Remotive pages include data in a script block under window.__INITIAL_STATE__ or a global variable.
+    # Attempt a simple search for ISO datestamps in page text if above not found
+    text = soup.get_text(" ", strip=True)
+    import re
+    m = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})', text)
+    if m and not out.get("posting_date"):
+        out["posting_date"] = m.group(1).split("T", 1)[0]
+
+    return out
+
+def parse_dice(soup, job_url):
+    out = {}
+    for obj in _extract_json_ld(soup):
+        # Dice typically uses JobPosting
+        if obj.get("@type") == "JobPosting":
+            dt = obj.get("datePosted") or obj.get("datePublished")
+            if dt:
+                out["posting_date"] = dt.split("T", 1)[0]
+            vt = obj.get("validThrough")
+            if vt:
+                out["valid_through"] = vt.split("T", 1)[0]
+            posted_label = obj.get("publishedLabel")
+            if posted_label:
+                out["Posted"] = posted_label
+            # company info
+            org = obj.get("hiringOrganization") or obj.get("hiringOrganization", {})
+            if isinstance(org, dict):
+                if org.get("name"):
+                    out["Company"] = org.get("name")
+            return out
+
+    # fallback: meta tags
+    meta_pub = soup.find("meta", {"name": "date"})
+    if meta_pub and meta_pub.get("content"):
+        out["posting_date"] = meta_pub["content"].split("T", 1)[0]
+    return out
+
+
 def muse_company_from_header(html: str) -> str:
     """
     The Muse: <a class="job-header_jobHeaderCompanyNameProgrammatic ...">Equinix, Inc</a>
@@ -600,6 +929,74 @@ def muse_company_from_header(html: str) -> str:
     except Exception:
         pass
     return ""
+
+MUSE_DATE_POSTED_RX = re.compile(r'"datePosted"\s*:\s*"([^"]+)"')
+MUSE_VALID_THROUGH_RX = re.compile(r'"validThrough"\s*:\s*"([^"]+)"')
+
+def _extract_muse_dates_from_html(html: str) -> dict:
+    """Pull datePosted / validThrough from The Muse job pages using regex."""
+    out: dict = {}
+    if not html:
+        return out
+
+    def _norm(raw: str) -> str:
+        raw = str(raw)
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", raw)
+        return m.group(1) if m else raw
+
+    m = MUSE_DATE_POSTED_RX.search(html)
+    if m:
+        iso = _norm(m.group(1))
+        out["date_posted"] = iso
+        out["posting_date"] = iso
+
+    m = MUSE_VALID_THROUGH_RX.search(html)
+    if m:
+        iso = _norm(m.group(1))
+        out["valid_through"] = iso
+
+    return out
+
+
+# -------- Generic HTML fallback for dates (board-agnostic) --------
+
+# Common schema.org style key names used across many boards
+GENERIC_DATE_PATTERNS = [
+    # Posting date variants
+    (re.compile(r'"datePosted"\s*:\s*"([^"]+)"', re.IGNORECASE), "posting_date"),
+    (re.compile(r'"date_posted"\s*:\s*"([^"]+)"', re.IGNORECASE), "posting_date"),
+    (re.compile(r'"postingDate"\s*:\s*"([^"]+)"', re.IGNORECASE), "posting_date"),
+    # Valid through / expiration date variants
+    (re.compile(r'"validThrough"\s*:\s*"([^"]+)"', re.IGNORECASE), "valid_through"),
+    (re.compile(r'"valid_through"\s*:\s*"([^"]+)"', re.IGNORECASE), "valid_through"),
+]
+
+def extract_generic_dates(html: str) -> dict:
+    """Board-agnostic fallback that pulls posting / valid dates out of raw HTML."""
+    out: dict = {}
+    if not html:
+        return out
+
+    text = html
+    for rx, key in GENERIC_DATE_PATTERNS:
+        m = rx.search(text)
+        if not m:
+            continue
+
+        raw = m.group(1)
+        try:
+            iso = parse_date_relaxed(raw)
+        except Exception:
+            iso = raw
+
+        if key == "posting_date":
+            # Keep both aliases consistent for the normalizer
+            out.setdefault("date_posted", iso)
+            out.setdefault("posting_date", iso)
+        elif key == "valid_through":
+            out.setdefault("valid_through", iso)
+
+    return out
 
 
 import re
@@ -621,15 +1018,13 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
 
         html = get_html(url)
         if not html:
-            log_event("WARN", "", right=f"Failed to GET listing page: {url}")
+            log_event("⚠️  WARN", "  ", right=f"Failed to GET listing page: {listing_url}")
             progress_clear_if_needed()
-            #log_info_done()
             break
 
         links = parse_hubspot_list_page(html, url)
         elapsed = time.time() - t0
         progress_clear_if_needed()
-        #log_info_found(len(links), url, elapsed)
 
         # de-dupe across pages
         added = 0
@@ -640,7 +1035,6 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
                 added += 1
 
         progress_clear_if_needed()
-        #log_info_done()
 
         # stop when a page contributes nothing new
         if added == 0:
@@ -835,7 +1229,7 @@ def collect_simplyhired_links(listing_url: str) -> list[str]:
         set_source_tag(listing_url)
         html = get_html(page_url)
         if not html:
-            log_event("WARN", "", right=f"Failed to GET listing page: {page_url}")
+            log_event("⚠️  WARN", "  ", right=f"Failed to GET listing page: {page_url}")
             break
 
         soup = BeautifulSoup(html, "html.parser")
@@ -865,15 +1259,154 @@ ID_LIKE_RX = re.compile(r"^[\d._-]{5,}$")
 from bs4 import BeautifulSoup
 import urllib.parse as up
 
+def _prune_non_job_sections(soup, host: str) -> None:
+    # generic sidebars and recommendation blocks
+    generic = [
+        "aside",
+        ".sidebar",
+        '*:contains("Similar Jobs")',
+        '*:contains("Recommended jobs")',
+        '*:contains("People also viewed")',
+        '[aria-label*="Similar"]',
+    ]
+    for sel in generic:
+        try:
+            for n in soup.select(sel):
+                n.decompose()
+        except Exception:
+            pass
+
+    # site specific cleanups
+    if "edtech.com" in host:
+        for sel in [
+            '*:contains("Here are some similar Product Development jobs")',
+            'div:has(h2:contains("Similar Product Development jobs"))',
+        ]:
+            try:
+                for n in soup.select(sel):
+                    n.decompose()
+            except Exception:
+                pass
+
+    if "themuse.com" in host:
+        for sel in ['[role="complementary"]']:
+            try:
+                for n in soup.select(sel):
+                    n.decompose()
+            except Exception:
+                pass
+
 def extract_job_details(html: str, job_url: str) -> dict:
     """
     Generic page detail parser used by many boards.
     Safe and defensive: never raises, returns a dict with the keys our pipeline expects.
     """
-    soup = BeautifulSoup(html or "", "html.parser")
-    host = up.urlparse(job_url).netloc
     company_from_header = None
     board_from_header = None
+    soup = BeautifulSoup(html or "", "html.parser")
+    host = up.urlparse(job_url).netloc.lower()
+
+    # strip sidebars / similar jobs so their numbers don't leak
+    _prune_non_job_sections(soup, host)
+
+    # prefer the main article area for any text-based parsing (salary, dates, etc.)
+    main = (
+        soup.select_one("main")
+        or soup.select_one("article")
+        or soup.find("div", role="main")
+        or soup.body
+    )
+    page_text = main.get_text(" ", strip=True) if main else soup.get_text(" ", strip=True)
+
+    # make this available to all downstream checks
+    details["page_text"] = page_text
+
+
+    # --- remove “similar/related” blocks before any parsing ---
+    def _strip_recommendations(soup, host: str) -> None:
+        """
+        Drop sidebars and 'similar jobs' sections so salary parsing cannot
+        pick up numbers from unrelated listings or ads.
+        """
+        # generic selectors first
+        selectors = [
+            "aside",
+            ".sidebar",
+            '*:contains("Similar Jobs")',
+            '*:contains("You might be interested in")',
+            '*:contains("Recommended jobs")',
+            '*:contains("People also viewed")',
+        ]
+
+        # site-specific cleanup
+        if "edtech.com" in host:
+            # The page shows: “Here are some similar Product Development jobs…”
+            selectors += [
+                '*:contains("Here are some similar Product Development jobs")',
+                'div:has(h2:contains("Similar Product Development jobs"))',
+            ]
+        if "themuse.com" in host:
+            # Muse often nests the right rail in an aside or a div with role=“complementary”
+            selectors += ['[role="complementary"]']
+
+        # try to drop each matched container
+        for sel in selectors:
+            try:
+                for node in soup.select(sel):
+                    # remove a reasonably large container, not just the heading text
+                    # go up one or two levels if we only hit a header
+                    container = node
+                    for _ in range(2):
+                        if container.parent and container.parent.name not in ("html", "body"):
+                            container = container.parent
+                    container.decompose()
+            except Exception:
+                # selectors are best-effort; ignore if Soupsieve cannot match
+                pass
+
+    # call it right after creating soup + host
+    _strip_recommendations(soup, host)
+    # --- end strip block ---
+
+
+    # initialize once so JSON-LD block can safely update it
+    details: dict = {}
+
+    # --- Extract JobPosting JSON-LD if present ---
+    try:
+        ld_data = parse_jobposting_ldjson(html)
+        if ld_data:
+            details.update({k: v for k, v in ld_data.items() if v})
+    except Exception as e:
+        warn("⚠️ WARN","].JSON-LD parse failed: {e}")
+
+    # --- Extract JSON-LD metadata (Remotive, Muse, etc.) ---
+    ld_node = None
+    ld_tag = soup.find("script", type="application/ld+json")
+    log_print(f"[{ts}][🟡 DEBUG              ].ld_tag found: " + str(bool(ld_tag)))
+    if ld_tag:
+        log_print(f"[{ts}][🟡 DEBUG              ].ld_tag content (first 300 chars): " +
+                (ld_tag.string[:300] if ld_tag and ld_tag.string else "No string"))
+
+    if ld_tag:
+        try:
+            ld_node = json.loads(ld_tag.string.strip())
+        except Exception:
+            ld_node = None
+
+    # Handle both dict and list formats
+    if isinstance(ld_node, list):
+        for node in ld_node:
+            if isinstance(node, dict) and node.get("@type") == "JobPosting":
+                if "datePosted" in node:
+                    details["Posting Date"] = parse_date_relaxed(node["datePosted"])
+                if "validThrough" in node:
+                    details["Valid Through"] = parse_date_relaxed(node["validThrough"])
+    elif isinstance(ld_node, dict):
+        if "datePosted" in ld_node:
+            details["Posting Date"] = parse_date_relaxed(ld_node["datePosted"])
+        if "validThrough" in ld_node:
+            details["Valid Through"] = parse_date_relaxed(ld_node["validThrough"])
 
 
     # ---- Title
@@ -887,6 +1420,51 @@ def extract_job_details(html: str, job_url: str) -> dict:
             title = og["content"].strip()
     if not title and soup.title and soup.title.get_text():
         title = soup.title.get_text(strip=True)
+
+    
+    host = up.urlparse(job_url).netloc.lower()
+    board_extractors = {
+        "remotive.com": parse_remotive,
+        "www.remotive.com": parse_remotive,
+        "dice.com": parse_dice,
+        "www.dice.com": parse_dice,
+        # add other hostnames as needed
+    }
+
+    # Strip sidebars and “similar jobs” before any parsing
+    _prune_non_job_sections(soup, host)
+
+    # Prefer content from the main article area
+    main = (
+        soup.select_one("main")
+        or soup.select_one("article")
+        or soup.find("div", role="main")
+        or soup.body
+    )
+    page_text = main.get_text(" ", strip=True) if main else soup.get_text(" ", strip=True)
+
+
+    details = {}  # your existing details dict you build
+    # <-- your existing parsing for title/company etc continues here -->
+
+    # call board-specific extractor if present
+    parser = board_extractors.get(host)
+    if parser:
+        try:
+            board_data = parser(soup, job_url) or {}
+            # merge board_data into details only for keys we want to override/populate
+            details.update({k: v for k, v in board_data.items() if v})
+        except Exception as e:
+            # log an error but keep going
+            log_print(f"[{ts}][⚠️ WARN               ] board parser failed for {host}: {e}")
+
+
+    # --- Fallback: look for visible "x days/weeks/months ago" text (e.g., Remotive)
+    if not details.get("Posted"):
+        rel_span = soup.find("span", string=re.compile(r"\d+\s*(day|week|month)s?\s*ago", re.I))
+        if rel_span:
+            details["Posted"] = rel_span.get_text(strip=True)
+
 
     # ---- Company (try header, JSON-LD, or obvious labels)
     company = ""
@@ -917,10 +1495,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         break
         except Exception:
             pass
-    
-    #from bs4 import BeautifulSoup
-    from urllib.parse import urlparse
 
+    
     def company_from_header_meta(host: str, html: str) -> str | None:
         soup = BeautifulSoup(html or "", "html.parser")
 
@@ -981,17 +1557,16 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
 
     # ---- Build details and normalize
-    details = {
+    details.update({
         "Title": title,
         "Company": company,
         "Career Board": infer_board_from_url(job_url),
         "Location": loc,
         "Description": desc,
-        "Description Snippet": desc,     # if you keep a shorter one
+        "Description Snippet": desc,
         "Job URL": job_url,
-        "job_url": job_url,              # legacy key you already use
-    }
-
+        "job_url": job_url,
+    })
     # normalize title/company first
     #details = _derive_company_and_title(details, html)
 
@@ -1134,6 +1709,17 @@ def extract_job_details(html: str, job_url: str) -> dict:
     # Now enrich salary with host + full text available
     details = enrich_salary_fields(details, page_host=host)
 
+    # Salary fallback: use page_text if JSON-LD didn't provide baseSalary
+    if not details.get("salary_min") and not details.get("salary_max"):
+        lo, hi = extract_salary_from_text(details.get("page_text", ""))
+        if lo or hi:
+            details["salary_min"] = lo
+            details["salary_max"] = hi or lo
+            # optional: a raw string you can show in logs/CSV
+            details["salary_raw"] = (
+                f"${lo:,}" if hi in (None, lo) else f"${lo:,}-${hi:,}"
+            )
+
     return details
 
 def _looks_like_id(s: str | None) -> bool:
@@ -1252,7 +1838,7 @@ def _is_target_role(d: dict) -> bool:
         return True
 
     # fuzzy titles need responsibility corroboration
-    fuzzy_hit = any(re.search(p, title, re.I) for p in INCLUDE_TITLES_FUZZY)
+    fuzzy_hit = any(re.search(re.escape(p), title, re.I) for p in INCLUDE_TITLES_FUZZY)
     if fuzzy_hit:
         resp_hits = len(set(m.group(0) for m in RESP_SIG_RX.finditer(full)))
         return resp_hits >= 2
@@ -1283,7 +1869,7 @@ def _is_us_canada_eligible(d: dict) -> bool:
     Liberal when unknown, stricter when explicit non-NA regions appear.
     Accept any strong US/Canada mentions. Reject on strong non-NA signals.
     """
-    # Country chips
+    # Country chips (rarely set, but keep the logic)
     country_chips = d.get("Country Chips")
     countries = set()
     if isinstance(country_chips, (list, tuple)):
@@ -1294,30 +1880,36 @@ def _is_us_canada_eligible(d: dict) -> bool:
             if t:
                 countries.add(t)
 
-    # Location chips (can be list)
+    # Location chips
     loc_chips = d.get("Location Chips")
     if isinstance(loc_chips, (list, tuple)):
         loc_chips_txt = " ".join(map(str, loc_chips)).lower()
     else:
         loc_chips_txt = str(loc_chips or "").lower()
 
+    # Pull out all the text we care about
+    location_txt = str(d.get("Location") or "").lower()
+    snippet_txt  = str(d.get("Description Snippet") or "").lower()
+    page_txt     = str(d.get("page_text") or "").lower()
+
     txt = " ".join([
         str(d.get("Location") or "").lower(),
         str(d.get("Description Snippet") or "").lower(),
         loc_chips_txt,
+        str(d.get("page_text") or "").lower(),
     ])
-
-    # Strong positives
-    if countries & {"us", "usa", "united states", "canada", "ca"}:
+    # Strong positives – clearly US / Canada
+    if countries & {"us", "usa", "united states", "united states of america", "canada", "ca"}:
         return True
     if any(p in txt for p in [
         "us only", "usa only", "anywhere in the us", "anywhere in the united states",
-        "eligible to work in the us", "canada"
+        "eligible to work in the us",
+        "canada", "north america", "us or canada",
     ]):
         return True
 
-    # Strong non-NA negatives
-    if any(n in txt for n in ["europe", "emea", "apac", "latam", "australia", "new zealand", "uk only"]):
+    # Strong non-NA negatives – uses big NON_US_HINTS regex (which includes "finland")
+    if NON_US_HINTS.search(txt):
         return False
 
     # Default allow if we can't tell
@@ -1337,7 +1929,8 @@ def build_rule_reason(d: dict) -> str:
     if status == "below_floor":
         reasons.append("Salary below floor")
 
-    return ", ".join(reasons) or "Filtered by rules"
+    # If no rules failed, return "" and let technical_fallback speak
+    return ", ".join(reasons)
 
 AUTO_SKIP_IF_APPLIED = False  # change to True if you want auto-skip on applied
 def choose_skip_reason(d: dict, technical_fallback: str) -> str:
@@ -1346,9 +1939,7 @@ def choose_skip_reason(d: dict, technical_fallback: str) -> str:
         if applied:
             return f"Already applied on {applied}"
     rule = build_rule_reason(d)
-    return rule if rule else technical_fallback
-
-
+    return rule or (technical_fallback or "Filtered by rules")
 
 # --- URL helpers used throughout ---
 #from urllib.parse import urlparse, urljoin, parse_qs, unquote
@@ -1414,6 +2005,71 @@ TRIGGER_PHRASES = (
 # catches “competitive … base … salary” even with words in between
 SALARY_SIGNAL_RX = re.compile(r"\b(very|highly)?\s*competitive\b.*\bbase\b.*\bsalary\b", re.I | re.S)
 
+_SALARY_RANGE_RE = re.compile(
+    r"""\$?\s*
+        (?P<a>\d{2,3}(?:,\d{3})?)(?P<ak>[kK])?
+        \s*[-–]\s*
+        \$?\s*(?P<b>\d{2,3}(?:,\d{3})?)(?P<bk>[kK])?
+        (?!\s*(users?|user|alumni|students?|views?|employees?))
+    """,
+    re.VERBOSE,
+)
+
+_SALARY_ONE_RE = re.compile(
+    r"""\$?\s*(?P<a>\d{2,3}(?:,\d{3})?)(?P<ak>[kK])?
+        \s*(?:per\s*year|/year|yr|annual|annually|salary)
+        (?!\s*(users?|user|alumni|students?|views?|employees?))
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+#  New
+def _to_int(n: str, kflag: str | None) -> int:
+    x = int(n.replace(",", ""))
+    return x * 1000 if kflag else x
+
+#  Original
+def _to_int_token(t: str) -> int | None:
+    t = (t or "").lower() \
+        .replace("\u00a0", " ") \
+        .replace(" ", "") \
+        .replace(",", "")
+    if not t:
+        return None
+
+    # accept 123, 123k, 1m
+    kflag = None
+    if t.endswith("k"):
+        kflag = "k"
+        t = t[:-1]
+    elif t.endswith("m"):
+        kflag = "m"
+        t = t[:-1]
+
+    if not t.isdigit():
+        return None
+
+    val = int(t)
+    if kflag == "k":
+        val *= 1000
+    elif kflag == "m":
+        val *= 1_000_000
+    return val
+
+def extract_salary_from_text(txt: str) -> tuple[int|None, int|None]:
+    m = _SALARY_RANGE_RE.search(text)
+    if m:
+        lo = _to_int(m.group("a"), m.group("ak"))
+        hi = _to_int(m.group("b"), m.group("bk"))
+        return lo, hi
+
+    m = _SALARY_ONE_RE.search(text)
+    if m:
+        val = _to_int(m.group("a"), m.group("ak"))
+        return val, val
+
+
+
 def _contains_any(text: str, phrases: tuple[str, ...]) -> bool:
     t = (text or "").lower()
     return any(p in t for p in phrases)
@@ -1465,6 +2121,7 @@ def _fmt_salary_line(row: dict) -> str:
 
     It is intentionally forgiving: it will show *something* if we have any of:
     - an estimated range
+    - a human salary text (e.g. "Competitive salary")
     - a detected max value
     - a status / note
     - a placeholder (e.g. "Competitive salary")
@@ -1473,9 +2130,10 @@ def _fmt_salary_line(row: dict) -> str:
     status      = (row.get("Salary Status") or "").strip()
     placeholder = (row.get("Salary Placeholder") or "").strip()
     est_str     = (row.get("Salary Est. (Low-High)") or "").strip()
+    salary_txt  = (row.get("Salary") or "").strip()     # <-- NEW
 
-    max_raw     = row.get("Salary Max Detected") or ""
-    near_min    = bool(row.get("Salary Near Min"))
+    max_raw  = row.get("Salary Max Detected") or ""
+    near_min = bool(row.get("Salary Near Min"))
 
     parts: list[str] = []
 
@@ -1483,8 +2141,12 @@ def _fmt_salary_line(row: dict) -> str:
     if est_str:
         parts.append(est_str)
 
-    # 2) Fallback: just show the max we saw
-    if not est_str and max_raw:
+    # 2) Next best: any explicit Salary text ("Competitive salary", etc.)
+    if not parts and salary_txt:
+        parts.append(salary_txt)
+
+    # 3) Fallback: just show the max we saw
+    if not parts and max_raw:
         try:
             max_int = int(str(max_raw).replace(",", "").strip())
             parts.append(f"max ≈ ${max_int:,}")
@@ -1492,17 +2154,20 @@ def _fmt_salary_line(row: dict) -> str:
             # Couldn't parse as int – just show whatever text we have
             parts.append(str(max_raw))
 
-    # 3) If we’re near your configured floor, add a warning tag
+    # 4) If we’re near your configured floor, add a warning tag
     if near_min:
         parts.append("⚠ near floor")
 
-    # 4) Status / note can give extra context (e.g. “estimated”, “signal-only”)
+    # 5) Status / note can give extra context (e.g. “estimated”, “signal_only”)
     if status:
         parts.append(f"({status})")
 
-    # 5) Placeholder is things like “Competitive salary”, when no numbers exist
+    # 6) Placeholder is things like “Competitive salary”, when no numbers exist
     if placeholder:
         parts.append(placeholder)
+    
+    if status == "signal_only":
+        parts[0] = "signal-only"
 
     # If we assembled anything at all, join with separators
     if parts:
@@ -1510,6 +2175,7 @@ def _fmt_salary_line(row: dict) -> str:
 
     # Absolute fallback – nothing detected anywhere
     return "Missing or Unknown"
+
 
 def _company_and_board_for_terminal(row: dict) -> tuple[str, str]:
     company = (row.get("Company") or "").strip()
@@ -2064,6 +2730,7 @@ def career_board_name(url: str) -> str:
         "myworkdaysite.com": "Workday",
         "edtech.com": "EdTech",
         "edtechjobs.io": "EdTech Jobs",
+        "gitlab.com": "GitLab",
 
     }
     for k, v in KNOWN.items():
@@ -2363,6 +3030,18 @@ _TAG_PREFIX_RX = re.compile(
 _AT_TAIL_RX = re.compile(r"\s*@\s*[\w.&'()\- ]+\s*$", re.I)
 _TRAILING_COMPANY_RX = re.compile(r"\s*[–—\-|:]\s*@?\s*[\w.&'()\- ]+\s*$", re.I)
 
+REMOTE_SUFFIX_RX = re.compile(
+    r"""
+    \s*
+    (?:
+        # " - Remote", "– Remote", "/ Remote"
+        (?:[-–—/]\s*)?remote
+      | \(\s*remote\s*\)           # "(Remote)"
+    )
+    \s*$
+    """,
+    re.I | re.X,
+)
 
 # strip gender/schedule/formatting suffixes often seen in EU postings
 _GENDER_MARKER_RX   = re.compile(r"\(\s*(?:m\s*/\s*f\s*/\s*d|m\s*/\s*w\s*/\s*d|w\s*/\s*m\s*/\s*d)\s*\)", re.I)
@@ -2384,10 +3063,33 @@ def normalize_title(t: str, company: str | None = None) -> str:
     import re, html
     if not t:
         return ""
-    t = html.unescape(str(t)).strip()
-    # light cleanup only
-    #t = re.sub(r"\s+", " ", t)
 
+    # Basic unescape + strip
+    t = html.unescape(str(t)).strip()
+
+    # 1) Strip leading taggy noise like "[Hiring]" / "Hiring:" etc.
+    t = _TAG_PREFIX_RX.sub("", t)
+
+    # 2) Strip common emoji noise
+    t = _EMOJI_RX.sub("", t)
+
+    # 3) Strip gender / schedule suffixes and trailing Remote markers
+    t = _GENDER_MARKER_RX.sub("", t)
+    t = _GENDER_WORDS_RX.sub("", t)
+    t = _SCHEDULE_SUFFIX_RX.sub("", t)
+    t = REMOTE_SUFFIX_RX.sub("", t)
+
+    # 4) Strip generic trailing "(…)" blobs
+    t = _PARENS_TRAILER_RX.sub("", t)
+
+    # 5) Strip trailing " @Company" or " – Company" regardless of whether
+    #    we got an explicit company name from the board.
+    t = _AT_TAIL_RX.sub("", t)
+
+    # Normalize whitespace after all the chopping
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # If we *don't* have a trusted company string, stop here.
     if not company:
         return t
 
@@ -2395,7 +3097,9 @@ def normalize_title(t: str, company: str | None = None) -> str:
     if not comp_norm:
         return t
 
-    # Try strip trailing “… – Company”
+    # Now, with a known company, we can also strip patterns like
+    # "Company – Title" or "Title – Company" using the hyphen logic.
+
     parts = re.split(rf"\s*{HYPHEN_CHARS_RX}\s*", t)
     if len(parts) >= 2:
         tail_norm = _norm_company_for_compare(parts[-1])
@@ -2492,272 +3196,156 @@ def _company_from_common_selectors(soup) -> str:
     return ""
 
 
+from bs4 import BeautifulSoup  # keep this where it already is
+
 def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     """
-    Single source of truth for salary parsing + classification.
+    Populate our derived salary columns from any mix of fields that might exist.
 
-    Produces:
-      - Salary Max Detected (int or "")
-      - Salary Est. (Low-High) (str)
-      - Salary Near Min (int or "")
-      - Salary Status: at_or_above | near_min | below_floor | estimated | unknown
-      - Salary Placeholder: e.g., "Competitive base salary" when phrases present but no numbers
-      - Salary Rule: compact label for Sheets filtering
-      - Salary Range Text: raw text we scanned (debugging)
+    - Detects numeric salaries anywhere in the text.
+    - Ignores obvious non-salary numbers such as Job IDs and 401k/403k.
+    - Special-cases The Muse & Remotive so footer ZIP codes / job-count banners
+      (e.g. "Unlock 69,133 Remote Jobs") do not look like pay.
+    - Classifies vs SALARY_FLOOR / SOFT_SALARY_FLOOR.
+    - If there are no usable numbers but we see salary trigger phrases,
+      sets a Salary Placeholder and marks the row as signal-only.
     """
     import re
+    global SALARY_FLOOR, SOFT_SALARY_FLOOR
 
-    # ---- Config (uses your global floors if present) ----
-    SALARY_FLOOR = 100_000  # your floor
-    SOFT_SALARY_FLOOR = 85_000
-
-    # --- init (prevents UnboundLocalError) ---
-    est_low = None
-    est_high = None
-    nums = []
-    max_detected = None
-    salary_signal = False
-
-    try:
-        floor = SALARY_FLOOR
-    except NameError:
-        floor = 120_000
-    try:
-        soft = SOFT_SALARY_FLOOR
-    except NameError:
-        soft = max(0, floor - 15_000)
-
-    TRIGGER_PHRASES = (
-        "competitive base", "competitive salary", "competitive compensation",
-        "very competitive", "highly competitive", "market competitive",
-        "salary commensurate", "commensurate with experience",
-        "market rate", "salary doe", "doe", "compensation package",
-    )
-    # ---- Build a single blob from fields we already have ----
+    # 1) Normalize Salary Range to plain text
     sr = d.get("Salary Range", "")
-    sr_text = sr.get("Text") if isinstance(sr, dict) else (sr or "")
-    parts = [
-        d.get("Title", ""),
-        d.get("Company", ""),
-        d.get("Location", ""),
-        d.get("Description") or d.get("Description Snippet") or "",
-        (d.get("page_text", "") or "")[:4000],  # new
-    ]
-    # ---- build/cleanup text for salary scan ----
-    # (keep your existing joins above)
-    blob = " ".join([
-        str(d.get("Title","")),
-        str(d.get("Company","")),
-        str(d.get("Description Snippet","") or d.get("Description","") or ""),
-        str(d.get("page_text",""))  # <-- ensure this is included
-    ]).lower()
-    blob_clean = re.sub(r"\s+", " ", blob).strip()
-    
-    import re
+    if isinstance(sr, dict):
+        sr_text = str(sr.get("Text", ""))
+    else:
+        sr_text = str(sr or "")
 
-    # 1) Remove anything on / after a “Job ID:” line (Muse puts a huge numeric tail here)
-    blob = re.sub(r"(?mi)^\s*job\s*id\s*:.*$", "", blob)
+       # 2) Build a text blob we can search for salary hints
+    full_desc = d.get("Description") or ""
+    snippet   = d.get("Description Snippet") or ""
+    title     = d.get("Title", "")
+    page_txt  = d.get("page_text") or ""
+    phost     = (page_host or "").lower()
 
-    # 2) Remove very long naked digit blobs (7+ digits) that are almost never salaries
-    blob = re.sub(r"\b\d{7,}\b", "", blob)
+    # EdTech specific: page_text includes "Similar Jobs" with other jobs and salaries
+    # For this host we trust the main description fields and drop page_text
+    if "edtech.com" in phost:
+        page_txt = ""
 
-    # 3) Kill URLs and querystrings (often pack long digits)
-    blob = re.sub(r"https?://\S+", "", blob)
+    blob = " ".join(str(p or "") for p in (sr_text, full_desc, snippet, title, page_txt))
+    blob_lower = blob.lower()
 
-    # --- harden against benefit numbers like 401(k) / 403(b) / 457(b) etc. ---
-    # operate on the current working text: 'blob'
-    blob = re.sub(r"\b401\s*\(\s*k\s*\)|\b401k\b", "401k_plan", blob, flags=re.I)
-    blob = re.sub(r"\b403\s*\(\s*b\s*\)|\b403b\b", "403b_plan", blob, flags=re.I)
-    blob = re.sub(r"\b457\s*\(\s*b\s*\)|\b457b\b", "457b_plan", blob, flags=re.I)
-
-    # neutralize retirement-plan strings so they can't be misread as $401,000 etc.
-    blob_clean = re.sub(r"\b401\s*[\(\-\s]*k\)?\b", "retirement_plan", blob_clean, flags=re.I)
-    blob_clean = re.sub(r"\b401k\b", "retirement_plan", blob_clean, flags=re.I)
-    blob_clean = re.sub(r"\b457\s*b\b", "retirement_plan", blob_clean, flags=re.I)
-
-    # neutralize retirement-plan tokens so they can't look like money
-    blob_clean = re.sub(r"\b401\s*\(?k\)?\b", "401k plan", blob_clean, flags=re.I)
-    blob_clean = re.sub(r"\b457\s*b\b", "457b plan", blob_clean, flags=re.I)
-
-
-    # ---- helpers for number normalization ----
-    def _to_money_int(s: str | None) -> int | None:
-        if not s:
-            return None
-        t = str(s).strip().lower()
-        # keep a memory of whether 'k' was present
-        has_k = t.endswith("k")
-        # strip all non-digits
-        digits = re.sub(r"[^\d]", "", t)
-        if not digits:
-            return None
-        try:
-            n = int(digits)
-        except Exception:
-            return None
-        if has_k:
-            n *= 1000
-        return n
-
-    # ---- money patterns ----
-    # We ONLY count numbers that carry a salary signal:
-    #  - currency symbol/word near number, OR
-    #  - explicit 'k' suffix (e.g., 160k), OR
-    #  - '/year', 'per year', 'annual', 'yr'
-    MONEY_RX = re.compile(r"""
-    (?:
-        (?P<cur>\$|usd|eur|gbp)\s*               # currency (required if no 'k' or per-year words)
-    )?
-    (?P<num>
-        \d{1,3}(?:[ ,]\d{3})+ |                  # 120,000  or  1 200 000
-        \d{2,3}                                  # 80 .. 999 (with optional k)
-    )
-    (?P<ksuf>\s*[kK])?                            # 120k
-    (?:
-        \s*(?:/year|per\s*year|per\s*annum|annual|yr) # optional per-year words
-    )?
-    """, re.X)
-
-    TRIGGER_PHRASES = (
-        "competitive base", "competitive salary", "competitive compensation",
-        "very competitive", "highly competitive", "market competitive",
-        "salary commensurate", "commensurate with experience",
-        "market rate", "salary doe", "doe", "compensation package",
-    )
-    # ---- region-preferring extraction (Washington first) ----
-    def _find_range_for(region: str, text: str):
-        """
-        Matches a sentence like:
-        "In Washington, the expected compensation ... between $90,000.00 and $120,000.00"
-        Returns (lo, hi) as ints or None.
-        """
-        rx = re.compile(
-            rf"{region}[^$]{{0,160}}\$?\s*([0-9][\d,\.]+)\s*(?:to|-|–|—|and)\s*\$?\s*([0-9][\d,\.]+)",
-            re.I | re.S
+    # 3) Salary-language signal, even if there are no numbers
+    signal_blob = blob_lower
+    has_signal = any(
+        phrase in signal_blob
+        for phrase in (
+            "competitive base salary",
+            "competitive salary",
+            "highly competitive base salary",
+            "very competitive base salary",
+            "base salary",
+            "salary range",
+            "pay range",
+            "compensation",
         )
-        m = rx.search(text)
-        if m:
-            lo = _to_int(m.group(1))
-            hi = _to_int(m.group(2))
-            if lo and hi:
-                return lo, hi
-        return None
+    )
 
-    # Prefer Washington first (also catches "California and Washington")
-    est_low = est_high = None
-    max_detected = None  # ensure this is initialized before we may reference it
+    # 4) Numeric candidates
+    dollar_candidates: list[int] = []
+    k_candidates: list[int] = []
 
-    wa_hit = _find_range_for("washington", blob_clean)
-    if wa_hit:
-        est_low, est_high = wa_hit
-        max_detected = est_high  # seed with WA high end
-        status = "at_or_above" if max_detected >= floor else ("near_min" if max_detected >= soft else "below_floor")
-        rule = "At/above min" if status=="at_or_above" else ("Near min" if status=="near_min" else "Below floor")
+    # Pattern like "$120,000" or "120,000".
+    # On The Muse *and* Remotive we require an actual "$" so footer ZIPs
+    # and "Unlock 69,133 Remote Jobs" do not get picked up.
+    force_dollar = ("themuse.com" in phost) or ("remotive.com" in phost)
+    if force_dollar:
+        dollar_pattern = r"\$\s*([\d][\d,]{2,})"   # require '$' for Muse + Remotive
+    else:
+        dollar_pattern = r"\$?\s*([\d][\d,]{2,})"  # keep old behavior elsewhere
 
-        d["Salary Max Detected"] = max_detected
-        d["Salary Est. (Low-High)"] = f"{est_low:,}–{est_high:,}"
-        d["Salary Near Min"] = max_detected if status=="near_min" else ""
-        d["Salary Status"] = status
-        d["Salary Rule"] = rule
-        d["Salary Range Text"] = sr_text or ""
-        d["Salary Note"] = d.get("Salary Note","")
-        d["Salary Placeholder"] = d.get("Salary Placeholder","")
-        # We still continue into the generic scan below, but WA values are already set.
-        return d
-
-        # ---- scan (collect span-aware hits) ----
-    nums = []
-    status = ""
-    est_low = est_high = None
-
-    # --- scan (collect span-aware hits) ---
-    hits = []           # (value, local_span_text)
-    for m in MONEY_RX.finditer(blob_clean):
-        full = m.group(0).lower()
-
-        if "401k" in full or "401(k)" in full or "457b" in full or "457(b)" in full:
-            continue  # skip retirement plan numbers
-
-        # require a clear per-year cue so 401(k)/457(b) etc. don’t look like salaries
-        has_per_year = any(w in full for w in ("/year", " per year", " per annum", " annual", " yr"))
-        if not has_per_year:
+    for m in re.finditer(dollar_pattern, blob):
+        try:
+            val = int(m.group(1).replace(",", ""))
+            # filter out tiny things like "401(k)" -> 401
+            if val >= 20_000:
+                dollar_candidates.append(val)
+        except Exception:
             continue
 
-        val  = _to_money_int(full)  # or your (num + k-suffix) handling as you have it
-        if val is None or val < 20_000 or val > 1_000_000:
+    # Pattern like "120k", "120 k", "120k+"
+    for m in re.finditer(r"(\d{2,3})\s*k\b", blob_lower):
+        try:
+            digits = int(m.group(1))
+            # Ignore classic retirement-plan references like 401k, 403k, 404k, 457k
+            if digits in (401, 403, 404, 457):
+                continue
+            val = digits * 1_000
+            if val >= 20_000:
+                k_candidates.append(val)
+        except Exception:
             continue
 
-        # keep nearby text so we can detect “washington” proximity later
-        span = blob_clean[max(0, m.start()-120): m.end()+120]
-        hits.append((val, span))
+    # If we saw any dollar based salaries, trust those and ignore plain "120k" style counts
+    if dollar_candidates:
+        candidates = dollar_candidates
+    else:
+        candidates = k_candidates
 
-    # prefer any hit whose nearby text mentions Washington; otherwise take the overall max
-    wa_hits = [h for h in hits if "washington" in h[1]]
-    pick = (max(wa_hits, key=lambda h: h[0]) if wa_hits
-            else (max(hits, key=lambda h: h[0]) if hits else None))
-
-    max_detected = pick[0] if pick else (max(nums) if nums else None)
-    if nums:
-        est_low, est_high = min(nums), max(nums)
-
-
-    max_detected = max(nums) if nums else None
-    if nums:
-        lo = min(nums)
-        hi = max(nums)
-        est_low, est_high = lo, hi
-
-    # ---- phrase signal even when no numbers ----
-    phrase_hit = any(p in blob for p in TRIGGER_PHRASES)
-    if phrase_hit:
-        d["Salary Status"] = d.get("Salary Status") or "estimated"
-        d["Salary Rule"] = d.get("Salary Rule") or "Signal"
-        d["Salary Note"] = d.get("Salary Note") or "Competitive salary language on page"
-        d["Salary Placeholder"] = d.get("Salary Placeholder") or "Competitive base salary"
-        return d
-
-    # ---- classify ----
+    # Drop known Job ID numbers from the candidate list
+    job_id_raw = d.get("job_id_numeric")
     try:
-        floor = SALARY_FLOOR
-    except NameError:
-        floor = 100_000
+        job_id_val = int(str(job_id_raw).strip()) if job_id_raw not in (None, "") else None
+    except Exception:
+        job_id_val = None
 
-    try:
-        soft = SOFT_SALARY_FLOOR
-    except NameError:
-        soft = max(0, floor - 15_000)
+    if job_id_val is not None:
+        candidates = [c for c in candidates if c != job_id_val]
+
+    max_detected = max(candidates) if candidates else None
+
+    # 5) Derive flags/columns
+    status       = ""
+    note         = ""
+    near_min_val = ""
+    placeholder  = (d.get("Salary Placeholder") or "").strip()
 
     if max_detected is not None:
-        if max_detected >= floor:
-            status = "at_or_above"
-        elif max_detected >= soft:
-            status = "near_min"
-        else:
+        # We have a plausible numeric salary
+        if SOFT_SALARY_FLOOR and max_detected < SOFT_SALARY_FLOOR:
             status = "below_floor"
+            note   = f"Detected max ${max_detected:,} below soft floor"
+        elif SALARY_FLOOR and max_detected < SALARY_FLOOR:
+            status       = "near_min"
+            near_min_val = max_detected
+            note         = f"Detected max ${max_detected:,} between soft floor and floor"
+        else:
+            status = "at_or_above"
+            note   = f"Detected max ${max_detected:,} at or above floor"
+
+        d["Salary Max Detected"] = max_detected or ""
+        d["Salary Near Min"]     = near_min_val
+        d["Salary Status"]       = status
+        d["Salary Note"]         = note
+        d["Salary Placeholder"]  = ""  # real number beats placeholder
+        return d
+
+    # 6) No usable numeric salary: fall back to signal-only / missing
+    if has_signal:
+        status      = "signal_only"
+        placeholder = placeholder or "Competitive salary"
+        note        = "Salary language present but no concrete numbers"
     else:
-        status = "estimated" if phrase_hit else "unknown"
+        status      = "missing"
+        placeholder = ""
+        note        = "No salary information detected"
 
-    rule = (
-        "At/above min" if status == "at_or_above" else
-        "Near min"     if status == "near_min"     else
-        "Below floor"  if status == "below_floor"  else
-        "Estimated"    if status == "estimated"    else
-        "Unknown"
-    )
+    d["Salary Max Detected"] = ""
+    d["Salary Near Min"]     = ""
+    d["Salary Status"]       = status
+    d["Salary Note"]         = note
+    d["Salary Placeholder"]  = placeholder
 
-    # Optional human notes
-    if any(p in blob for p in TRIGGER_PHRASES):
-        d["Salary Status"] = d.get("Salary Status") or "Signal"
-        d["Salary Note"] = d.get("Salary Note") or "Competitive salary language on page"
-        d["Salary Placeholder"] = d.get("Salary Placeholder") or "[💲 SALARY]"
-
-    # ---- write fields back ----
-    d["Salary Max Detected"] = max_detected or ""
-    d["Salary Est. (Low-High)"] = f"{est_low:,}–{est_high:,}" if (est_low and est_high) else ""
-    d["Salary Near Min"] = max_detected if status == "near_min" else ""
-    d["Salary Status"] = status
-    d["Salary Rule"] = rule
-    d["Salary Range Text"] = blob[:300]  # optional for debug
     return d
 
 
@@ -2978,12 +3566,12 @@ def expand_career_sources():
     pages = []
     for url in CAREER_PAGES:
         progress_clear_if_needed()
-        log_print(f"[CAREERS               ]...Probing {url}")
+        _bk_log_wrap("[CAREERS", f" ]{DOT3}Probing {url}")
         html = get_html(url)
         if not html:
-            log_event("WARN", "", right=f"Failed to GET listing page: {url}")
+            _bk_log_wrap("[⚠️  WARN", "  ]", right=f"...Failed to GET listing page: {url}")
             progress_clear_if_needed()
-            log_print(f"[CAREERS               ]...Could not fetch {url}")
+            _bk_log_wrap("[CAREERS", " ]{DOT3}Could not fetch {url}")
             continue
 
         
@@ -3049,11 +3637,11 @@ def expand_career_sources():
 
         if found:
             progress_clear_if_needed()
-            log_print(f"[CAREERS               ]...{url} -> {len(found)} board(s)")
+            _bk_log_wrap("[CAREERS", f" ]{DOT6}-> {len(found)} board(s) found on {url}")
             pages.extend(sorted(found))
         else:
             progress_clear_if_needed()
-            log_print(f"[CAREERS               ]....No ATS links found on {url}")
+            _bk_log_wrap("[CAREERS", f" ]{DOT6}No ATS links found on {url}")
 
     return pages
 
@@ -3067,19 +3655,20 @@ def now_ts() -> str:
 
 def _coerce_list(x): return x if isinstance(x, list) else ([] if x is None else [x])
 
-def _short(s, width=125):
+def _short(s, width=100):
     s = " ".join((s or "").split())
     return (s[: width - 1] + "…") if len(s) > width else s
 
-def parse_jobposting_ldjson(html):
-    """Parse schema.org JobPosting blocks from inline JSON-LD."""
+def parse_jobposting_ldjson(html: str) -> dict:
+    """Parse schema.org JobPosting JSON-LD and pull out title, company, locations, dates."""
     soup = BeautifulSoup(html, "html.parser")
 
     def _set_if(d: dict, key: str, val):
         if val not in (None, "", []):
             d[key] = val
 
-    out = {}
+    out: dict = {}
+
     for s in soup.find_all("script", type="application/ld+json"):
         raw = s.string or s.text or ""
         if not raw.strip():
@@ -3089,33 +3678,47 @@ def parse_jobposting_ldjson(html):
         except Exception:
             continue
 
-        items = data if isinstance(data, list) else [data]
+        # Handle list and @graph wrappers (The Muse style)
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            graph = data.get("@graph") or data.get("graph")
+            if isinstance(graph, list):
+                items = graph
+            else:
+                items = [data]
+        else:
+            continue
+
         for it in items:
             if not isinstance(it, dict):
                 continue
+
             t = it.get("@type") or it.get("@type".lower())
-            # Accept JobPosting in any casing or list form
             if isinstance(t, list):
                 t = t[0] if t else None
             if not t or "jobposting" not in str(t).lower():
                 continue
 
-            # Title (handle both 'title' and 'Title')
+            # ----- Title -----
             raw_title = it.get("title") or it.get("Title")
             if raw_title:
                 _set_if(out, "Title", normalize_title(raw_title))
 
-            # Company
+            # ----- Company -----
             org = it.get("hiringOrganization") or it.get("hiringorganization")
             if isinstance(org, dict):
                 _set_if(out, "Company", org.get("name"))
 
-            # Job location type
-            _set_if(out, "job_location_type",
-                    it.get("jobLocationType") or it.get("joblocationtype") or "")
+            # ----- Job location type -----
+            _set_if(
+                out,
+                "job_location_type",
+                it.get("jobLocationType") or it.get("joblocationtype") or "",
+            )
 
-            # Locations (stringify address)
-            locs = []
+            # ----- Locations -----
+            locs: list[str] = []
             jl = it.get("jobLocation") or it.get("joblocation")
             if isinstance(jl, list):
                 src = jl
@@ -3123,6 +3726,7 @@ def parse_jobposting_ldjson(html):
                 src = [jl]
             else:
                 src = []
+
             for loc in src:
                 addr = loc.get("address") if isinstance(loc, dict) else None
                 if isinstance(addr, dict):
@@ -3132,48 +3736,126 @@ def parse_jobposting_ldjson(html):
                     locs.append(", ".join([x for x in [city, region, country] if x]))
                 elif isinstance(addr, str) and addr.strip():
                     locs.append(addr.strip())
-            if (it.get("jobLocationType") in ("TELECOMMUTE", "https://schema.org/Telecommute")
-                and "Remote" not in locs):
+
+            if (
+                it.get("jobLocationType")
+                in ("TELECOMMUTE", "https://schema.org/Telecommute")
+                and "Remote" not in locs
+            ):
                 locs.append("Remote")
+
             if locs:
                 _set_if(out, "locations", [l for l in locs if l])
 
-            # Applicant location requirements -> applicant_regions
-            apps = it.get("applicantLocationRequirements") or it.get("applicantlocationrequirements")
-            regions = []
-            def _as_list(x): return x if isinstance(x, list) else ([x] if x else [])
+            # ----- Applicant location requirements -> applicant_regions -----
+            apps = (
+                it.get("applicantLocationRequirements")
+                or it.get("applicantlocationrequirements")
+            )
+            regions: list[str] = []
+
+            def _as_list(x):
+                return x if isinstance(x, list) else ([x] if x else [])
+
             for a in _as_list(apps):
                 if isinstance(a, dict):
-                    v = (a.get("name")
-                         or a.get("addressRegion") or a.get("addressregion")
-                         or a.get("addressCountry") or a.get("addresscountry"))
+                    v = (
+                        a.get("name")
+                        or a.get("addressRegion")
+                        or a.get("addressregion")
+                        or a.get("addressCountry")
+                        or a.get("addresscountry")
+                    )
                     if isinstance(v, str) and v.strip():
                         regions.append(v.strip())
                 elif isinstance(a, str) and a.strip():
                     regions.append(a.strip())
+
             if regions:
                 _set_if(out, "applicant_regions", regions)
 
-            # Dates
+            # ====== DATES: this is the part that was missing ======
+
+            # Example Muse / Remotive JSON-LD:
+            # "datePosted": "2025-10-31T19:04:01"
+            # "validThrough": "2025-12-30T19:04:01.000Z"
             dp = it.get("datePosted") or it.get("dateposted")
-            if dp:
-                try:
-                    iso = datetime.fromisoformat(dp.replace("Z", "+00:00")).date().isoformat()
-                except Exception:
-                    iso = dp
-                _set_if(out, "date_posted", iso)
+            if isinstance(dp, str) and dp.strip():
+                # keep just the date part
+                iso_date = dp.split("T")[0]
+                _set_if(out, "date_posted", iso_date)
+                _set_if(out, "posting_date", iso_date)
 
             vt = it.get("validThrough") or it.get("validthrough")
-            if vt:
-                try:
-                    iso = datetime.fromisoformat(vt.replace("Z", "+00:00")).date().isoformat()
-                except Exception:
-                    try:
-                        #iso = dateparser.parse(vt).date().isoformat()
-                        iso = parse_date_relaxed(vt)
-                    except Exception:
-                        iso = vt
-                _set_if(out, "valid_through", iso)
+            if isinstance(vt, str) and vt.strip():
+                iso_valid = vt.split("T")[0]
+                _set_if(out, "valid_through", iso_valid)
+
+            # Some boards include a relative text like "1 week ago"
+            rel = it.get("postedAge") or it.get("posted_age")
+            if isinstance(rel, str) and rel.strip():
+                _set_if(out, "posted", rel.strip())
+
+    return out
+
+
+MUSE_DATE_POSTED_RX = re.compile(r'"datePosted"\s*:\s*"([^"]+)"')
+MUSE_VALID_THROUGH_RX = re.compile(r'"validThrough"\s*:\s*"([^"]+)"')
+
+def _extract_muse_dates_from_html(html: str) -> dict:
+    """Pull datePosted / validThrough from The Muse job pages using regex."""
+    out: dict = {}
+    if not html:
+        return out
+
+    def _norm(raw: str) -> str:
+        raw = str(raw)
+        # date is always at the front of the timestamp: "YYYY-MM-DD..."
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", raw)
+        return m.group(1) if m else raw
+
+    m = MUSE_DATE_POSTED_RX.search(html)
+    if m:
+        iso = _norm(m.group(1))
+        out["date_posted"] = iso
+        out["posting_date"] = iso
+
+    m = MUSE_VALID_THROUGH_RX.search(html)
+    if m:
+        iso = _norm(m.group(1))
+        out["valid_through"] = iso
+
+    return out
+
+DATEPOSTED_HTML_RE = re.compile(r'"datePosted"\s*:\s*"([^"]+)"', re.IGNORECASE)
+VALIDTHROUGH_HTML_RE = re.compile(r'"validThrough"\s*:\s*"([^"]+)"', re.IGNORECASE)
+
+def _extract_dates_from_html(html: str) -> dict:
+    """Fallback parser that pulls datePosted / validThrough out of raw HTML.
+
+    This works even when the JobPosting JSON-LD is embedded as an escaped string
+    inside another JSON blob (the pattern The Muse uses). It returns simple
+    YYYY-MM-DD strings.
+    """
+    out: dict = {}
+    if not html:
+        return out
+
+    # Handle pages where JSON is doubly-escaped with \" sequences
+    text = html.replace('\\"', '"')
+
+    def _pick_date(raw: str) -> str:
+        # Grab the first YYYY-MM-DD we see
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", raw)
+        return m.group(1) if m else raw.strip()
+
+    m = DATEPOSTED_HTML_RE.search(text)
+    if m:
+        out["posting_date"] = _pick_date(m.group(1))
+
+    m = VALIDTHROUGH_HTML_RE.search(text)
+    if m:
+        out["valid_through"] = _pick_date(m.group(1))
 
     return out
 
@@ -3207,7 +3889,8 @@ INCLUDE_TITLES_FUZZY = [
     r"\bbusiness\s+systems?\s+analyst\b",     # Business System(s) Analyst
     r"\boperations?\s+business\s+analyst\b",  # Operations Business Analyst
     r"(senior\s+)?business\s+(system|systems|intelligence)?\s*analyst"
-    r"|operations\s+business\s+analyst"
+    r"(operations\s+business\s+analyst"
+    r"(product\s+leader|product\s+specialist|product\s+consultant)?\b",
 ]
 #
 # Potential allied/adjacent titles that are not exact matches but should
@@ -3264,6 +3947,7 @@ REMOTE_KEYWORDS = [
     r"\banywhere\b.*\b(us|u\.s\.)\b", r"\bwork from home\b",
 ]
 ONSITE_BLOCKERS = [r"\bon[-\s]?site\b", r"\boffice[-\s]?based\b"]
+
 SINGLE_CITY_PATTERNS = [
     r"\bnew york( city)?\b|\bnyc\b", r"\bsan francisco\b|\bsf\b",
     r"\bseattle\b", r"\baustin\b", r"\blondon\b", r"\bparis\b",
@@ -3365,23 +4049,6 @@ def compute_visibility_and_confidence(details):
     mark = "🟢" if score >= 75 else ("🟠" if score >= 40 else "🔴")
     return visibility, score, mark
 
-# --- ANSI color helpers ---
-RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"
-RED = "\033[31m"; YELLOW = "\033[33m"; GREEN = "\033[32m"; CYAN = "\033[36m"
-
-# Choose colors by level
-LEVEL_COLOR = {
-    "ERROR": RED,
-    "WARN":  YELLOW,
-    "INFO":  CYAN,
-    "KEEP":  GREEN,
-    "SKIP":  DIM,
-    "SETUP": RESET,
-    "ENV":   RESET,
-    "DONE":  RESET,
-    "GS":    CYAN,
-}
-
 
 # unique tracking to avoid double-appends across the run
 _seen_kept_urls: set[str] = set()
@@ -3393,42 +4060,19 @@ def _log_keep_to_terminal(row: dict) -> None:
     ts = now_ts()
     title = (row.get("Title") or "").strip()
     url   = (row.get("Job URL") or "").strip()
-    desc = (row.get("Description") or "").strip()
     company, board = _company_and_board_for_terminal(row)
-    salary_line    = _fmt_salary_line(row)
-    
+    salary_line = _fmt_salary_line(row)
+
     progress_clear_if_needed()
-    log_print(f"[{ts}] [KEEP                  ].{title}")
-    log_print(f"[{ts}] [KEEP                  ]...{board} → {company}")
+    keep_log(f"{title}")
+    log_print(f"[{ts}] {_status_box('KEEP')}{DOT3}{board} → {company}")
     if url:
-        log_print(f"[{ts}] [KEEP                 ].{url}")
+        log_print(f"[{ts}] {_status_box('KEEP')}{DOT3}{url}")
     if salary_line:
-        log_print(f"[{ts}] [KEEP     ] {salary_line}")
-    log_print(f"[{ts}] [✅ DONE               ].")
-
+        log_print(f"[{ts}] {_status_box('$ SALARY')} {salary_line}")
+    log_print(f"[{ts}] {_status_box('✅ DONE')}.")
     progress_clear_if_needed()
 
-
-#def _log_skip_terminal(row: dict, link: str, rule_reason: str) -> None:
-#    ts = now_ts()
-#    title = (row.get("Title") or "").strip() or _title_from_url(link)
-#    company, board = _company_and_board_for_terminal(row)
-#
-#    c = LEVEL_COLOR.get("SKIP", DIM)  # dim
-#    r = RESET
-#
-#    progress_clear_if_needed()
-#    log_print(f"{c}[SKIP                  ].{title}{r}")
-#    log_print(f"{c}[SKIP                  ]...{board} → {company}{r}")
-#    log_print(f"{c}[SKIP                  ]...{link}{r}")
-#    log_print(f"{c}[💭 REASON             ]... → {rule_reason}{r}")
-#    log_print(f"{c}[🚫 DONE               ].{r}")
-#    progress_clear_if_needed()
-
-
-
-DOT1 = "...."      # 4 dots
-DOT2 = "......"    # 6 dots
 
 def _host(u: str) -> str:
     try:
@@ -3439,11 +4083,12 @@ def _host(u: str) -> str:
 def log_info_processing(url: str):
     progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
+    ts = now_ts()
     msg = "Processing listing page: " + url
-    for ln in _wrap_lines(msg, width=120):
-        log_print(f"{c}{_info_box()}.{ln}{RESET}")
-    # repaint the progress line if one is active
-    #refresh_progress()
+    for ln in _wrap_lines(msg, width=120):            # 120-char wrap
+        #print(f"{c}{_info_box()}.{ln}{RESET}")
+        info(f"{_info_box()}.{ln}{RESET}")
+
 
 
 def log_info_found(n: int, url: str, elapsed_s: float):
@@ -3466,7 +4111,7 @@ def log_info_done():
 
 
 def _info_box() -> str:
-    return _box("INFO ")
+    return _box("INFO")
 
 def _found_box(n: int) -> str:
     # right-align the count to 3 spaces: 0..999
@@ -3786,58 +4431,69 @@ def is_remote_friendly(text: str):
 
 def to_keep_sheet_row(d: dict) -> dict:
     return {
-        "Applied?": d.get("Applied?",""),
-        "Reason": d.get("Reason",""),        # <— keep this
+        "Applied?": d.get("Applied?", ""),
+        "Reason": d.get("Reason", ""),
         "Date Scraped": d.get("Date Scraped") or now_ts(),
-        "Title": d.get("Title",""),
-        "Company": d.get("Company",""),
+        "Title": d.get("Title", ""),
+        "Company": d.get("Company", ""),
         "Career Board": d.get("Career Board", ""),
-        "Location": d.get("Location",""),
-        "Posted": d.get("Posted",""),
-        "Posting Date": d.get("Posting Date",""),
-        "Valid Through": d.get("Valid Through", ""),
-        "Job URL": d.get("Job URL",""),
-        "Apply URL": d.get("Apply URL",""),
-        "Description Snippet": d.get("Description Snippet",""),
-        "WA Rule": d.get("WA Rule",""),
-        "Remote Rule": d.get("Remote Rule",""),
-        "US Rule": d.get("US Rule",""),
-        "Salary Max Detected": d.get("Salary Max Detected",""),
-        "Salary Rule": d.get("Salary Rule",""),
-        "Salary Status": d.get("Salary Status",""),
-        "Salary Note": d.get("Salary Note",""),
-        "Salary Est. (Low-High)": d.get("Salary Est. (Low-High)",""),
-        "Location Chips": d.get("Location Chips",""),
-        "Applicant Regions": d.get("Applicant Regions",""),
-        "Visibility Status": d.get("Visibility Status",""),
-        "Confidence Score": d.get("Confidence Score",""),
-        "Confidence Mark": d.get("Confidence Mark",""),
+        "Location": d.get("Location", ""),
+
+        # Dates
+        "Posted": d.get("Posted", ""),
+        "Posting Date": d.get("Posting Date") or d.get("posting_date", ""),
+        "Valid Through": d.get("Valid Through") or d.get("valid_through", ""),
+
+        "Job URL": d.get("Job URL", ""),
+        "Apply URL": d.get("Apply URL", ""),
+        "Description Snippet": d.get("Description Snippet", ""),
+
+        "WA Rule": d.get("WA Rule", ""),
+        "Remote Rule": d.get("Remote Rule", ""),
+        "US Rule": d.get("US Rule", ""),
+
+        "Salary Max Detected": d.get("Salary Max Detected", ""),
+        "Salary Rule": d.get("Salary Rule", ""),
+        "Salary Status": d.get("Salary Status", ""),
+        "Salary Note": d.get("Salary Note", ""),
+        "Salary Est. (Low-High)": d.get("Salary Est. (Low-High)", ""),
+
+        "Location Chips": d.get("Location Chips", ""),
+        "Applicant Regions": d.get("Applicant Regions", ""),
+        "Visibility Status": d.get("Visibility Status", ""),
+        "Confidence Score": d.get("Confidence Score", ""),
+        "Confidence Mark": d.get("Confidence Mark", ""),
     }
+
 
 def to_skipped_sheet_row(d: dict) -> dict:
     return {
         "Date Scraped": d.get("Date Scraped") or now_ts(),
-        "Title": d.get("Title",""),
-        "Company": d.get("Company",""),
+        "Title": d.get("Title", ""),
+        "Company": d.get("Company", ""),
         "Career Board": d.get("Career Board", ""),
-        "Location": d.get("Location",""),
-        "Posted": d.get("Posted",""),
-        "Posting Date": d.get("Posting Date",""),
-        "Valid Through": d.get("Valid Through", ""),
-        "Job URL": d.get("Job URL",""),
-        "Reason Skipped": d.get("Reason Skipped",""),
-        "WA Rule": d.get("WA Rule",""),
-        "Remote Rule": d.get("Remote Rule",""),
-        "US Rule": d.get("US Rule",""),
-        "Salary Max Detected": d.get("Salary Max Detected",""),
-        "Salary Rule": d.get("Salary Rule",""),
-        "Location Chips": d.get("Location Chips",""),
-        "Applicant Regions": d.get("Applicant Regions",""),
-        "Apply URL": d.get("Apply URL",""),
-        "Description Snippet": d.get("Description Snippet",""),
-        "Visibility Status": d.get("Visibility Status",""),
-        "Confidence Score": d.get("Confidence Score",""),
-        "Confidence Mark": d.get("Confidence Mark",""),
+        "Location": d.get("Location", ""),
+
+        "Posted": d.get("Posted", ""),
+        "Posting Date": d.get("Posting Date") or d.get("posting_date", ""),
+        "Valid Through": d.get("Valid Through") or d.get("valid_through", ""),
+
+        "Job URL": d.get("Job URL", ""),
+        "Reason Skipped": d.get("Reason Skipped", ""),
+
+        "WA Rule": d.get("WA Rule", ""),
+        "Remote Rule": d.get("Remote Rule", ""),
+        "US Rule": d.get("US Rule", ""),
+
+        "Salary Max Detected": d.get("Salary Max Detected", ""),
+        "Salary Rule": d.get("Salary Rule", ""),
+        "Location Chips": d.get("Location Chips", ""),
+        "Applicant Regions": d.get("Applicant Regions", ""),
+        "Apply URL": d.get("Apply URL", ""),
+        "Description Snippet": d.get("Description Snippet", ""),
+        "Visibility Status": d.get("Visibility Status", ""),
+        "Confidence Score": d.get("Confidence Score", ""),
+        "Confidence Mark": d.get("Confidence Mark", ""),
     }
 
 # ==== Make GS lines non-timestamped (match your example format)
@@ -3868,7 +4524,7 @@ def push_rows_to_google_sheet(rows, keys, tab_name=None):
 #                return
     except Exception as e:
         progress_clear_if_needed()
-        log_print(f"[GS                    ].Skipping Sheets push; missing libs: {e}")
+        _bk_log_wrap("[ERROR", f" ].Skipping Sheets push; missing libs: {e}")
         return
 
     try:
@@ -3904,11 +4560,11 @@ def push_rows_to_google_sheet(rows, keys, tab_name=None):
             ws.append_rows(values[i:i+CHUNK], value_input_option="USER_ENTERED")
 
         progress_clear_if_needed()
-        log_print(f"[GS                    ].Appended {len(values)} rows to '{target_tab}'.")
+        _bk_log_wrap("[GS", f" ].Appended {len(values)} rows to '{target_tab}'.")
     except Exception as e:
         progress_clear_if_needed()
-        log_print(f"[GSERR                 ].Failed to push to Google Sheets: {e}")
-
+        _bk_log_wrap("[GSERR", f"].Failed to push to Google Sheets: {e}")
+       
 def fetch_prior_decisions():
 #    """Fetch prior Applied? and Reason values from Google Sheets."""
 #    try:
@@ -4010,23 +4666,15 @@ def _progress_print(msg: str) -> None:
     _p["active"] = True
     _p["width"]  = len(_ansi_strip(msg))
 
-def progress_set_total(n: int) -> None:
-    global _PROGRESS_TOTAL
-    _PROGRESS_TOTAL = int(n or 0)
-    _p["total"] = _PROGRESS_TOTAL
 
-# keep this function where your logger utils live, near _p / _box / _progress_print
-def progress_clear_if_needed() -> None:
-    if _p["active"]:
-        # carriage return + clear to end of line, then flush
-        sys.stdout.write("\r" + " " * _p["width"] + "\r")
-        sys.stdout.flush()
-        _p["active"] = False
-        _p["width"] = 0
+def progress_start() -> None:
+    # don't render the legacy [PROGRESS] line
+    _PROGRESS["start"] = time.time()
+    _PROGRESS["on"] = False                        # disable legacy
+    start_spinner(_p.get("total", 0))              # show the spinner line once
 
-# public alias used by the rest of the code
-progress_clear_if_needed = progress_clear_if_needed
-atexit.register(progress_clear_if_needed)
+
+
 
 import atexit
 try:
@@ -4036,40 +4684,9 @@ except NameError:
     pass
 
 progress_clear_if_needed = progress_clear_if_needed
+atexit.register(progress_clear_if_needed)
 
 
-
-def progress_line(spin: str) -> str:
-    """
-    Compose the human-readable single-line status.
-    NOTE: This uses your existing globals: kept_count, skip_count, now_ts().
-    If these are not yet defined above this block, either move this block
-    below them or change this function to fetch them another way.
-    """
-    processed = kept_count + skip_count   # <-- your globals
-    total     = _p.get("total", 0) or "?"
-    ts        = now_ts()                  # <-- your helper
-    return f"{ts} {_box('PROGRESS ')} {spin} {processed}/{total} kept={kept_count} skip={skip_count}"
-
-def progress_tick(msg: str | None = None) -> None:
-    """Advance spinner one frame and repaint the sticky line."""
-    if not _p["active"]:
-        return
-    _p["spin"] = (_p["spin"] + 1) % len(_SPINNER)
-    spin = _SPINNER[_p["spin"]]
-    line = progress_line(spin)
-    if msg:
-        line += f"  {msg}"
-    _progress_print(line)
-
-def start_spinner(total: int | None = None, msg: str | None = None) -> None:
-    """Start (or restart) the spinner."""
-    _p.update({"active": True, "spin": 0, "total": total or 0, "start": time.time()})
-    spin = _SPINNER[_p["spin"]]
-    line = progress_line(spin)
-    if msg:
-        line += f"  {msg}"
-    _progress_print(line)
 
 def stop_spinner(final_msg: str | None = None) -> None:
     """Erase spinner line; optionally print a final 'DONE' line."""
@@ -4078,23 +4695,6 @@ def stop_spinner(final_msg: str | None = None) -> None:
     if final_msg:
         log_print(f"{now_ts()} {_box('DONE ')} {final_msg}")
 # ===== end unified PROGRESS helpers =====
-
-###############################
-### KEEP THIS SECTION ABOVE ###
-###############################
-
-# Backward-compat wrapper so your existing calls still work
-
-def progress(i: int, total: int, kept: int, skipped: int) -> None:
-    """Repaint the spinner at ~12fps; never prints a newline."""
-    global _spin_i, _last_tick
-    now = time.time()
-    if now - _last_tick > 0.08:  # ~12 fps
-        _spin_i = (_spin_i + 1) % len(_SPINNER)
-        _last_tick = now
-    spin = _SPINNER[_spin_i]
-    line = f"[{now_ts()}] {_box(f'{spin} PROGRESS ')}...{i}/{total} kept={kept} skip={skipped}"
-    _progress_print(line)
 
 
 # --- Background spinner heartbeat --------------------------------------------
@@ -4121,38 +4721,119 @@ def set_source_tag(url: str):
 
 
 def _normalize_job_defaults(d: dict) -> dict:
-    """Ensure Title Case + space keys exist for export to CSV/Sheets."""
+    """
+    Normalize field names and basic defaults so downstream code
+    can treat every board the same.
+
+    This version also normalizes date fields:
+
+        - accepts any of:
+            * posting_date
+            * Posting Date
+            * date_posted            (ISO from JSON-LD etc.)
+            * valid_through
+            * Valid Through
+
+        - sets all of:
+            * d["posting_date"]      internal canonical date string (YYYY-MM-DD)
+            * d["valid_through"]     internal canonical date string (YYYY-MM-DD)
+            * d["Posting Date"]      value used for the CSV column
+            * d["Valid Through"]     value used for the CSV column
+            * d["Posted"]            human label like "1 week ago" if possible
+    """
+    d = dict(d or {})
+
+    # Basic fields used everywhere
     d.setdefault("Applied?", "")
-    d.setdefault("Reason", "")         # <— keep
+    d.setdefault("Reason", "")
     d.setdefault("Date Scraped", now_ts())
 
-    d["Title"]               = d.get("Title")               or d.get("title", "")
-    d["Company"]             = d.get("Company")             or d.get("company", "")
-    d["Career Board"]        = d.get("Career Board")        or d.get("career_board", "")
-    d["Location"]            = d.get("Location")            or d.get("display_location", "")
-    d["Posted"]              = d.get("Posted")              or d.get("posted", "")
-    d["Posting Date"]        = d.get("Posting Date")        or d.get("posting_date", "")
-    d["Valid Through"]       = d.get("Valid Through")       or d.get("valid_through", "")
-    d["Job URL"]             = d.get("Job URL")             or d.get("job_url", "")
-    # If board still empty, infer from URL host
-    if not d.get("Career Board") and d.get("Job URL"):
+    d["Title"]        = d.get("Title")        or d.get("title")        or ""
+    d["Company"]      = d.get("Company")      or d.get("company")      or ""
+    d["Career Board"] = d.get("Career Board") or d.get("career_board") or ""
+    d["Location"]     = d.get("Location")     or d.get("display_location") or d.get("location", "")
+
+    # ---------- dates ----------
+
+    # Raw sources from extractors / schema
+    posting_date_raw = (
+        d.get("posting_date")
+        or d.get("Posting Date")
+    )
+    date_posted_raw = d.get("date_posted")  # JSON-LD ISO string if available
+    valid_through_raw = (
+        d.get("valid_through")
+        or d.get("Valid Through")
+    )
+
+    # Prefer explicit "date_posted" ISO when present
+    if date_posted_raw and not posting_date_raw:
+        posting_date_raw = date_posted_raw
+
+    # Strip any time part, keep only YYYY-MM-DD when possible
+    def _strip_time(s: str) -> str:
+        if not s:
+            return ""
+        s = str(s)
+        for sep in ("T", " "):
+            if sep in s:
+                return s.split(sep, 1)[0].strip()
+        return s.strip()
+
+    posting_date_str = _strip_time(posting_date_raw) if posting_date_raw else ""
+    valid_through_str = _strip_time(valid_through_raw) if valid_through_raw else ""
+
+    # Store internal canonical keys
+    if posting_date_str:
+        d["posting_date"] = posting_date_str
+    if valid_through_str:
+        d["valid_through"] = valid_through_str
+
+    # Store human-facing CSV keys
+    d["Posting Date"] = posting_date_str
+    d["Valid Through"] = valid_through_str
+
+    # ---------- Posted (relative label) ----------
+
+    # If the board already gives us a label like "1 week ago" or "2wks ago", keep it.
+    posted_label = d.get("Posted") or d.get("posted")
+
+    # Otherwise derive it from the posting date
+    if not posted_label and posting_date_str:
+        try:
+            dt_posted = datetime.fromisoformat(posting_date_str)
+            days = (datetime.now().date() - dt_posted.date()).days
+
+            if days <= 0:
+                posted_label = "Today"
+            elif days == 1:
+                posted_label = "1 day ago"
+            elif days < 7:
+                posted_label = f"{days} days ago"
+            elif days < 30:
+                weeks = days // 7
+                posted_label = f"{weeks} week{'s' if weeks != 1 else ''} ago"
+            else:
+                months = days // 30
+                posted_label = f"{months} month{'s' if months != 1 else ''} ago"
+        except Exception:
+            # If parsing fails for any reason, just fall back to the raw date
+            posted_label = posting_date_str
+
+    d["Posted"] = posted_label or ""
+
+    # URLs
+    d["Job URL"] = d.get("Job URL") or d.get("job_url") or ""
+    if not d.get("Career Board") and d["Job URL"]:
         d["Career Board"] = infer_board_from_url(d["Job URL"])
-    d["Apply URL"]           = d.get("Apply URL")           or d.get("apply_url", "")
+    d["Apply URL"] = d.get("Apply URL") or d.get("apply_url") or d.get("Job URL")
+
+    # Text and rules
     d["Description Snippet"] = d.get("Description Snippet") or d.get("description_snippet", "")
     d["WA Rule"]             = d.get("WA Rule")             or d.get("wa_rule", "Default")
     d["Remote Rule"]         = d.get("Remote Rule")         or d.get("remote_rule", "Default")
     d["US Rule"]             = d.get("US Rule")             or d.get("us_rule", "Default")
-    d["Salary Max Detected"] = d.get("Salary Max Detected") or d.get("salary_max_detected", "")
-    d["Salary Rule"]         = d.get("Salary Rule")         or d.get("salary_rule", "")
 
-
-    d.setdefault("Location Chips", d.get("location_chips", ""))
-    d.setdefault("Applicant Regions", d.get("applicant_regions", ""))
-    d.setdefault("Visibility Status", d.get("visibility_status", ""))
-    d.setdefault("Confidence Score", d.get("confidence_score", ""))
-    d.setdefault("Confidence Mark", d.get("confidence_mark", ""))
-    d.setdefault("Career Board", d.get("career_board",""))
-    d.setdefault("Valid Through",d.get("valid_through",""))
     return d
 
 def _title_for_log(d: dict, link: str) -> str:
@@ -4224,6 +4905,11 @@ def _vis_fit(s: str, width: int) -> str:
     return "".join(out)
 
 
+def _status_box(label: str) -> str:
+    """Bracketed label padded to exactly _STATUS_W cells, emoji-safe."""
+    inner = _vis_pad(label.strip(), _STATUS_W - 2)  # -2 for '[' and ']'
+    return f"[{inner}]"
+
 
 def _conf_box(visibility: str | None, score: int | str | None, mark: str | None = None) -> str:
     vis = (visibility or "").upper()
@@ -4247,26 +4933,7 @@ import re  # make sure this is available at top-of-file
 import textwrap
 
 
-def _to_int(x):
-    t = str(x).lower()
-    # normalize thousands/nbsp and punctuation
-    t = (t.replace("\u00a0", "")  # nbsp
-           .replace(" ", "")
-           .replace(",", "")
-           .strip())
-    # ignore benefit tokens like "401k_plan" we injected above
-    if "401k_plan" in t or "403b_plan" in t or "457b_plan" in t:
-        return None
-    try:
-        # allow simple "109000", "109.000", "109k"
-        if t.endswith("k") and t[:-1].replace(".", "", 1).isdigit():
-            return int(float(t[:-1]) * 1000)
-        return int(float(t))
-    except Exception:
-        return None
-
-
-def _wrap_lines(s: str, width: int = 120) -> list[str]:
+def _wrap_lines(s: str, width: int = 100) -> list[str]:
     s = " ".join((s or "").split())
     if not s:
         return [""]
@@ -4276,36 +4943,57 @@ def _wrap_lines(s: str, width: int = 120) -> list[str]:
 def _salary_payload_22(d: dict) -> str:
     """
     Terminal payload text, padded or trimmed to exactly 22 visible cells.
-    Cases:
-      [💲 SALARY $90,000  ]...Near min
-      [💲 SALARY $90,000  ]...At or above min
-      [💲 SALARY $xxx,xxx ]...Estimated
-      [💲 SALARY          ]...Missing or Unknown
+
+    Handles:
+      - Real numeric salaries
+      - Estimate strings
+      - “Signal only” text like “competitive salary”
+      - True missing
     """
-    status   = str(d.get("Salary Status","")).strip().lower()
-    est      = str(d.get("Salary Est. (Low–High)","")).strip()
-    note     = str(d.get("Salary Note","")).strip()
-    max_det  = d.get("Salary Max Detected")
+    status      = (d.get("Salary Status") or "").strip().lower()
+    note        = (d.get("Salary Note") or "").strip()
+    max_det_raw = d.get("Salary Max Detected")
+    placeholder = (d.get("Salary Placeholder") or "").strip()
+    est_str     = (d.get("Salary Est. (Low-High)") or "").strip()
+
+    # --- 1) Numeric salary present -----------------------------------------
+    max_val = None
     try:
-        max_det = int(str(max_det).replace(",","")) if max_det not in (None,"") else None
+        if max_det_raw not in (None, ""):
+            max_val = int(max_det_raw)
     except Exception:
-        max_det = None
+        max_val = None
 
-    if max_det:
-        amt = f"${max_det:,}"
-        tail = "At or above min" if status == "at_or_above" else "Near min"
-        return _vis_pad(f"{amt} ]... {tail}", 22)
+    if max_val is not None:
+        core = f"${max_val:,.0f}"
 
-    if est:
-        amt = f"${est.replace(' – ', '–')}"  # keep tight dash
-        return _vis_pad(f"{amt} ]...Estimated", 22)
+        if status == "near_min":
+            core += " · near min"
+        elif status == "below_floor":
+            core += " · below floor"
+        elif status == "at_or_above":
+            core += " · at/above floor"
 
-    placeholder = str(d.get("Salary Placeholder") or "").strip()
+        if "est" in note.lower():
+            core += " (est.)"
+
+        return _vis_fit(core, 50)
+
+    # --- 2) Range/estimate string ------------------------------------------
+    if est_str:
+        return _vis_fit(f"{est_str} (est.)", 50)
+
+    # --- 3) Signal-only textual salary -------------------------------------
+    if status == "signal_only" and placeholder:
+        # e.g. “Competitive salary · signal_only”
+        return _vis_fit(f"{placeholder} · signal_only", 50)
+
+    # --- 4) Plain placeholder without explicit status ----------------------
     if placeholder:
-        return _vis_pad(f"{placeholder} ]...Signal only", 22)
+        return _vis_fit(placeholder, 50)
 
-    return _vis_pad("Missing or Unknown", 22)
-
+    # --- 5) Truly missing --------------------------------------------------
+    return _vis_fit("Missing or Unknown", 22)
 
 
 # ============================================================
@@ -4366,7 +5054,7 @@ def log_event(level: str,
             _emit(left_txt)
         if url:
             for ln in _wrap_lines(url, width=width):
-                log_print(f"{color}{tag}.{DOT1}{ln}{RESET}")
+                log_print(f"{color}{tag}{DOT4}{ln}{RESET}")
         #refresh_progress()
         return
 
@@ -4389,16 +5077,16 @@ def log_event(level: str,
         #company = (job_dict.get("Company") or "Missing Company").strip()
         #board   = (job_dict.get("Career Board") or "Missing Board").strip()
         progress_clear_if_needed()
-        log_print(f"{color}{_box('KEEP ')}....{board}.....{company}{RESET}")
+        log_print(f"{color}{_box('KEEP ')}...{board}.....{company}{RESET}")
         
         # --- URL line ---
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                log_print(f"{color}{_box('KEEP ')}....{ln}{RESET}")
+                log_print(f"{color}{_box('KEEP ')}...{ln}{RESET}")
 
         # --- Always show Salary line with fixed 22-cell width ---
-        log_print(f"{color}{_box('💲 SALARY ')}....{_salary_payload_22(job_dict)}{RESET}")
+        log_print(f"{color}{_box('💲 SALARY ')}...{_salary_payload_22(job_dict)}{RESET}")
         
 
 
@@ -4411,28 +5099,27 @@ def log_event(level: str,
 
     if lvl == "SKIP":
         progress_clear_if_needed()
-        log_print(f"{color}{_box('SKIP ')}.{title}{RESET}")
+        skip_log(f".{title}{RESET}")
 
         if career_board or company:
             progress_clear_if_needed()
-            log_print(f"{color}{_box('SKIP ')}....{career_board}.....{company}{RESET}")
+            log_print(f"{color}{_box('SKIP ')}...{career_board}.....{company}{RESET}")
 
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                log_print(f"{color}{_box('SKIP ')}....{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
 
         reason = job_dict.get("Reason Skipped") or ""
         if reason:
             for ln in _wrap_lines(reason, width=width):
                 progress_clear_if_needed()
-                log_print(f"{color}{_box('SKIP ')}....{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
 
         if vis or score or mark:
             log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
         progress_clear_if_needed()
         log_print(f"{color}{_box('🚫 DONE ')}.{RESET}")
-        #refresh_progress()
         return
 
 
@@ -4467,65 +5154,48 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
 
     return _normalize_skip_defaults(base)
     
-def _log_and_record_skip(link: str, rule_reason: str, row: dict) -> None:
+# alias so older call sites without the underscore still work
+# keep the public alias consistent
+def log_and_record_skip(link: str, rule_reason: str | None = None, keep_row: dict | None = None) -> None:
+    _log_and_record_skip(link, rule_reason, keep_row)
+
+
+def _log_and_record_skip(link: str, rule_reason: str | None = None, row: dict | None = None) -> None:
+
     """
     Normalize + record a skipped job and emit SKIP logs to the terminal.
-
-    This centralizes:
-      * ensuring the row has the fields the CSV/Sheets expect
-      * tracking skip counts / de-dupe via `_record_skip`
-      * the multi-line SKIP logging you were using before
     """
     # --- normalize the row and make sure core fields are present ---
     if row is None:
         row = {}
-
-    # make sure these are filled even if the caller forgot
+    display_reason = rule_reason or row.get("Reason Skipped") or "Filtered by rules"
     row.setdefault("Job URL", link)
-    row.setdefault(
-        "Reason Skipped",
-        rule_reason or row.get("Reason Skipped", "Filtered by rules"),
-    )
-
+    row.setdefault("Reason Skipped", display_reason)
     row = _normalize_skip_defaults(row)
 
-        # --- record the skip once (updates `skipped_rows` + `skip_count`) ---
-    _record_skip(row, reason=rule_reason)
+    # --- record the skip once (updates `skipped_rows` + `skip_count`) ---
+    _record_skip(row, reason=display_reason)
 
     # --- pretty terminal logging (restored from your old helper) ---
     c = LEVEL_COLOR.get("SKIP", RESET)
     r = RESET
-    ts = now_ts()  # keeps the same signature/behavior as other log helpers
+    ts = now_ts()
 
-    # title logic: prefer explicit title, fall back to URL-derived title
     title_in = (row.get("Title") or "").strip()
     t_from_url = _title_from_url(link)
     title = title_in or t_from_url or "<missing title>"
 
-    # board/company for display
     company, board = _company_and_board_for_terminal(row)
 
     progress_clear_if_needed()
     log_print(f"{c}[SKIP                  ].{title}{r}")
     log_print(f"{c}[SKIP                  ]...{board} → {company}{r}")
     log_print(f"{c}[SKIP                  ]...{link}{r}")
-    log_print(f"{c}[💭 REASON             ]... → {rule_reason}{r}")
-    log_print(f"{c}[🚫 DONE               ].{r}")
+    log_print(f"{c}[💭 REASON              ]... → {display_reason}{r}")
+    log_print(f"{c}[🚫 DONE                ].{r}")
     progress_clear_if_needed()
 
 
-# alias so older call sites without the underscore still work
-def log_and_record_skip(link: str, rule_reason: str, keep_row: dict) -> None:
-    _log_and_record_skip(link, rule_reason, keep_row)
-
-
-# ── Keep/Skip recorders (no recursion; stable counters; de-dupe) ──
-#kept_rows: list[dict] = []
-#skipped_rows: list[dict] = []
-#_seen_kept_urls: set[str] = set()
-#_seen_skip_urls: set[str] = set()
-#kept_count: int = 0
-#skip_count: int = 0
 
 def _normalize_skip_defaults(row: dict) -> dict:
     # ensure required keys exist for SKIPPED CSV
@@ -4578,8 +5248,9 @@ def _record_skip(row: dict, reason: str) -> None:
             return
         _seen_skip_urls.add(url)
 
-    if reason:
-        row["Reason Skipped"] = reason
+    #if reason:
+    #    row["Reason Skipped"] = f"Salary out of target range (status={_salary_status}, max={detected_max})"
+
 
     skipped_rows.append(to_skipped_sheet_row(row))
     skip_count += 1
@@ -4587,6 +5258,17 @@ def _record_skip(row: dict, reason: str) -> None:
     # Clear the progress line so the next block starts clean
     progress_clear_if_needed()
 
+def _debug_single_url(url: str):
+    html = get_html(url)
+    if not html:
+        log_print("ERROR", ".Failed to fetch {url}")
+        return
+    details = extract_job_details(html, url)
+    details = _normalize_job_defaults(details)
+    # Pretty-print the dict so you can see all fields
+    import json
+    log_print("👀 DEBUG single-url", ".Parsed details:\n" +
+              json.dumps(details, indent=2, sort_keys=True))
 
 
 ##########################################################
@@ -4601,11 +5283,16 @@ skipped_rows = []    # the “skip” rows in internal-key form
 #start_ts = None  # define at module level
 
 def main():
-#    global raw_print
+#   #global raw_print
     global kept_count, skip_count#, start_ts  # add start_ts to globals
 #    start_ts = datetime.now()
     args = _parse_args()
 
+    # If user passed a single test URL, handle it and exit early
+    if getattr(args, "test_url", ""):
+        _debug_single_url(args.test_url)
+        return
+    
     # Optional SMOKE presets
 #    # make these globals visible outside main()
 #    global SMOKE, SALARY_FLOOR, SALARY_CEIL
@@ -4617,28 +5304,21 @@ def main():
     SALARY_FLOOR = args.floor
     SALARY_CEIL  = args.ceil or None
 
-    # If you use requests, tighten timeouts on smoke runs
-    if SMOKE:
-        os.environ.setdefault("SCRAPER_TIMEOUT_SECS", "5")
 
     global kept_count, skip_count
     start_ts = datetime.now()
     progress_clear_if_needed()
-    log_print("[INFO                  ].Starting run")
-#    start_ts = datetime.now()
+    info(f".Starting run")
 
     # Carry-forward map from Google Sheets: url -> (Applied?, Reason)
-#    global prior_decisions
     prior_decisions = {}
     try:
         prior_decisions = fetch_prior_decisions()
         progress_clear_if_needed()
-        log_print(f"[GS                    ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
-#        log_print(f"[{now_ts()}] [GS                    ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
+        _bk_log_wrap("[GS", f" ].Loaded {len(prior_decisions)} prior decisions for carry-forward.")
     except Exception as e:
         progress_clear_if_needed()
-        log_print(f"[GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
-#        log_print(f"[{now_ts()}] [GS                    ].No prior decisions loaded ({e}). Continuing without carry-forward.")
+        _bk_log_wrap("[GS", f" ].No prior decisions loaded ({e}). Continuing without carry-forward.")
 
     # 1) Build the final set of listing pages
     pages = STARTING_PAGES + expand_career_sources()
@@ -4650,12 +5330,7 @@ def main():
     if PAGE_CAP:
         pages = pages[:PAGE_CAP]
 
-    if SMOKE:
-        pages = pages[:1]  # keep one source in smoke runs
-
     total_pages = len(pages)
-    # ⬇️ inside main(), before any board-specific if/else that gathers links
-#    all_detail_links: list[str] = []
 
     # 3) Collect detail links from each listing page (your existing loop stays here)
     all_detail_links = []
@@ -4673,9 +5348,9 @@ def main():
     pages = STARTING_PAGES + expand_career_sources()
     total_pages = len(pages)
 
-    if SMOKE:
-        pages = pages[:1]          # one listing source only
-        total_pages = len(pages)
+    #if SMOKE:
+    #   pages = pages[:1]          # one listing source only
+    #    total_pages = len(pages)
 
     # --- Normalize & dedupe all collected job URLs ---
     def _norm_url(u: str) -> str:
@@ -4740,13 +5415,7 @@ def main():
         _seen.add(k)
         deduped_links.append(u)
 
-    if len(deduped_links) != len(all_detail_links):
-        log_print(f"[ DE-DUPE ] Reduced {len(all_detail_links)} -> {len(deduped_links)} unique URLs")
-        
-
     all_detail_links = deduped_links
-
-
     processed_keys: set[str] = set()
 
     # 1) Gather job detail links from each listing page
@@ -4757,10 +5426,8 @@ def main():
         set_source_tag(listing_url)
         html = get_html(listing_url)
         if not html:
-            log_event("WARN", "", right=f"Failed to fetch listing page: {listing_url}")
-            progress_clear_if_needed()
-            #log_info_done()
-            #progress(i, total_pages, kept_count, skip_count)
+            #log_event("WARN", "", right=f"Failed to fetch listing page: {listing_url}")
+            warn(f"{DOT3}Probing {listing_url}")       #neutral status
             continue
 
         # derive host safely from the listing URL
@@ -4775,9 +5442,6 @@ def main():
             # NEW: show "[🔎 FOUND XX ]....candidate job links on hubspot.com in Ys"
             elapsed = time.time() - t0
             progress_clear_if_needed()
-            #log_info_found(len(links), listing_url, elapsed)
-            #log_info_done()
-            #progress(i, total_pages, kept_count, skip_count)
             continue
 
         # Workday listing → detail expansion (Ascensus and similar tenants)
@@ -4790,12 +5454,9 @@ def main():
                     # NEW: print a FOUND line for Workday expansions too
                     elapsed = time.time() - t0
                     progress_clear_if_needed()
-                    #log_info_found(len(wd_detail_links), listing_url, elapsed)
-                    #log_info_done()
-                    #progress(i, total_pages, kept_count, skip_count)
                     continue
             except Exception as e:
-                log_event("WARN", f"Workday expansion failed: {e}")
+                warn(f"{DOT3}403 Client Error (Workday expansion failed): {e} for URL: {u}")
 
         else:
             # existing branches...
@@ -4833,11 +5494,9 @@ def main():
                 if page_num > 20:  # safety cap
                     break
 
-            log_event("INFO", f"Found {len(hubspot_links)}.candidate job links on hubspot.com")
+            info(f".Found {len(hubspot_links)}.candidate job links on hubspot.com")
             all_detail_links.extend(hubspot_links)
             progress_clear_if_needed()
-            #log_info_done()
-            #progress(i, total_pages, kept_count, skip_count)
             continue
 
         # Collector: site-specific for SimplyHired, generic for others
@@ -4846,7 +5505,6 @@ def main():
         else:
             links = find_job_links(html, listing_url)
         progress_clear_if_needed()
-        #log_info_found(len(links), listing_url, time.time() - t0)
         all_detail_links.extend(links)
 
     # Optional caps (leave both; LINK_CAP takes precedence if you set it)
@@ -4855,9 +5513,6 @@ def main():
     # Optional caps
     if LINK_CAP:
         all_detail_links = all_detail_links[:LINK_CAP]
-
-    if SMOKE:
-        all_detail_links = all_detail_links[:20]  # exact 20 for smoke
 
     # --- Final normalization & deduplication ---
     from urllib.parse import urlparse, urlunparse
@@ -4881,12 +5536,7 @@ def main():
         seen.add(norm)
         deduped.append(link)
 
-    log_print(f"[🧹 DE-DUPE            ] Reduced {len(all_detail_links)} → {len(deduped)} unique URLs")
     all_detail_links = deduped
-
-    # Cap after dedupe
-    if SMOKE:
-        all_detail_links = all_detail_links[:20]
 
     # === HARD DEDUPE AFTER EXPANSIONS, BEFORE PROGRESS TOTALS ===
     from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
@@ -4908,51 +5558,47 @@ def main():
         ))
         return clean
 
-    _seen, deduped = set(), []
-    for u in all_detail_links:
-        nu = _norm_url(u)
-        if nu in _seen:
+    # before you start deduping
+    before_total = len(all_detail_links)
+
+    deduped = []
+    _seen = set()
+    for link in _normalize_link(all_detail_links):
+        if link in _seen:
             continue
-        _seen.add(nu)
-        deduped.append(nu)
+        _seen.add(link)
+        deduped.append(link)
+
+    after_unique = len(deduped)
+
+    _bk_log_wrap("[🛠️  DE-DUPE", f" ].Reduced {before_total} → {after_unique} unique URLs")
+
+    # then replace the list only after logging
     all_detail_links = deduped
-    log_print("[: DE-DUPE ] Reduced {} → {} unique URLs".format(
-        len(deduped) + (len(_seen)-len(deduped)), len(all_detail_links)))
+
+
     # =============================================================
 
-    # now set your totals AFTER dedupe (and AFTER any smoke cap)
+        # now set your totals AFTER dedupe (and AFTER any smoke cap)
     if SMOKE:
-        all_detail_links = all_detail_links[:20]
-    progress_set_total(len(all_detail_links))  # <- total comes from the deduped list
+        all_detail_links = all_detail_links[:20]  # final cap for smoke runs
+
+    # progress setup
+    total = len(all_detail_links)
+    start_spinner(total)
     kept_count = 0
     skip_count = 0
-
     progress_set_total(len(all_detail_links))
-    progress_clear_if_needed()
-    _seen_kept_urls.clear()
-    _seen_skip_urls.clear()
-    kept_count = 0
-    skip_count = 0
+    start_spinner(len(all_detail_links))
 
-    # 2) Visit each job link and extract details
-#    start_spinner()
-    # Cap the number of job links in smoke runs
-    if SMOKE:
-        all_detail_links = all_detail_links[:20]
-        progress_set_total(len(all_detail_links))   # set the total after caps
-        start_ts = datetime.now()
-        start_spinner()
+    progress_start()
 
     try:
         for j, link in enumerate(all_detail_links, start=1):
-            # advance spinner and repaint the live line
-            progress_tick(j)                                   # move spinner to next frame
-            progress(i, len(all_detail_links), kept_count, skip_count)  # update counts text
-
+            progress_tick(j + 1, kept_count, skip_count)   # tick every iteration
+        
             set_source_tag(listing_url)
-            # 1) fetch html (or however you already do it)
-            html = get_html(link)  # <-- make sure this exists in your code
-
+            html = get_html(link)
 
             # A) Could not fetch detail page → record a minimal SKIP and continue
             if not html:
@@ -4981,38 +5627,65 @@ def main():
                     "Applicant Regions": "",
                 })
 
-                progress_clear_if_needed()
-                _log_and_record_skip(link, rule_reason, skip_row)
+                _log_and_record_skip(link, None, skip_row)
                 progress(i, len(all_detail_links), kept_count, skip_count)
-                progress_clear_if_needed()
                 continue
 
-            # B) We have HTML → parse details and enrich salary
+                        # B) we have HTML -> parse details and enrich salary
             details = extract_job_details(html, link)
-            details = enrich_salary_fields(details, page_host=up.urlparse(link).netloc)
-            details["Career Board"] = details.get("Career Board") or infer_board_from_url(details.get("Job URL") or link)
 
-            # always normalize and enrich before rules/decisions
+            # 1) Try to pull structured JobPosting data (datePosted, validThrough, etc.)
+            schema_bits = parse_jobposting_ldjson(html)
+            if schema_bits:
+                # Only copy fields we care about; avoid overwriting with None
+                for key in ("Title", "Company", "date_posted", "valid_through"):
+                    val = schema_bits.get(key)
+                    if val:
+                        details[key] = val
+
+            # 2) Fallback: regex-based extraction from raw HTML (Muse, Remotive, etc.)
+            html_dates = _extract_dates_from_html(html)
+            if html_dates:
+                for k, v in html_dates.items():
+                    if v:
+                        details[k] = v
+
+            # 3) Enrich salary and board
+            details = enrich_salary_fields(details, page_host=up.urlparse(link).netloc)
+            details["Career Board"] = details.get("Career Board") or infer_board_from_url(
+                details.get("Job URL") or link
+            )
+
+            # 4) Normalize for CSV / Sheets
+            # Optional debug for Muse / Remotive to confirm dates
             details = _normalize_job_defaults(details)
 
+            if "themuse.com" in link:
+                log_print(
+                    "👀 DEBUG Muse dates",".Posting Date='{details.get('Posting Date','')}' "
+                    "| Valid Through='{details.get('Valid Through','')}' "
+                    "| Posted='{details.get('Posted','')}'"
+                )
+
             # ---- hard de-dupe by job key (prevents double writes to Sheet/CSV) ----
-            jk = _job_key(details, link)
+            jk = _job_key(details, link)     # <<< add this line
+
             if jk in processed_keys:
                 skip_row = _normalize_skip_defaults({
                     "Job URL": link,
                     "Title": title_for_log,
                     "Company": details.get("Company","") or company_from_url_fallback(details.get("Job URL") or link),
                     "Career Board": details.get("Career Board",""),
-                    "Reason": "DE-DUPE",
+                    "Reason": "🛠️  DE-DUPE",
                     "WA Rule": "default",
                     "US Rule": "default",
                     "Remote Rule": "unknown_or_onsite",
                 })
-                _log_and_record_skip(link, "DE-DUPE", skip_row)   # uses your counter increment
+                _log_and_record_skip(link, "🛠️  DE-DUPE", skip_row)   # uses your counter increment
                 # skip path (we skipped the job)
                 skip_count += 1
                 progress(i, len(all_detail_links), kept_count, skip_count)
-                progress_clear_if_needed()
+                #progress_clear_if_needed()
                 continue
             else:
                 processed_keys.add(jk)
@@ -5051,16 +5724,14 @@ def main():
                     "Apply URL": details.get("apply_url", job_url),
                     "Reason Skipped": details.get("Reason Skipped",""),
                 })
-                progress_clear_if_needed()
-                _log_and_record_skip(link, rule_reason, skip_row)
+                _log_and_record_skip(link, None, skip_row)
                 progress(i, len(all_detail_links), kept_count, skip_count)
-                progress_clear_if_needed()
                 continue
 
             # D) Ascensus (Workday) post-filter: only keep Product/BA/Scrum family roles
             #host = up.urlparse(listing_url).netloc.lower()
             host = up.urlparse(link).netloc.lower()
-            details = enrich_salary_fields(details, page_host=host)
+            #details = enrich_salary_fields(details, page_host=host)
             if "ascensushr.wd1.myworkdayjobs.com/ascensuscareers" in host:
                 # reuse your intent/role test
                 if not _is_target_role(details):
@@ -5072,10 +5743,8 @@ def main():
                         "Valid Through": details.get("Valid Through", ""),
                         "Reason Skipped": "Not target role (Ascensus filter)",
                     })
-                    progress_clear_if_needed()
-                    _log_and_record_skip(link, rule_reason, skip_row)
+                    _log_and_record_skip(link, None, skip_row)
                     progress(i, len(all_detail_links), kept_count, skip_count)
-                    progress_clear_if_needed()
                     continue
 
 
@@ -5083,13 +5752,14 @@ def main():
             details = enrich_salary_fields(details, page_host=up.urlparse(link).netloc)
 
             keep_row_extra = {
+                "Salary": details.get("Salary") or details.get("Salary Placeholder", ""),
+                "Salary Placeholder": details.get("Salary Placeholder", ""),
                 "Salary Status": details.get("Salary Status", ""),
                 "Salary Note": details.get("Salary Note", ""),
                 "Salary Max Detected": details.get("Salary Max Detected", ""),
                 "Salary Rule": details.get("Salary Rule", ""),
                 "Salary Near Min": details.get("Salary Near Min", ""),
                 "Salary Est. (Low-High)": details.get("Salary Est. (Low-High)", ""),
-                "Salary": details.get("Salary", "") or details.get("Salary Placeholder", ""),
             } 
             # Basic remote/US rules (lightweight; you can expand later)
             remote_flag = details.get("is_remote_flag", "unknown_or_onsite")
@@ -5159,8 +5829,37 @@ def main():
                 "Location":             keep_row["Location"],
                 "Description Snippet":  keep_row["Description Snippet"],
                 "Job URL":              keep_row["Job URL"],
+                "page_text":            details.get("page_text", ""),
             })
 
+            # temporary debug for US/Canada eligibility
+            debug_payload = {
+                "Title":                keep_row["Title"],
+                "Remote Rule":          keep_row["Remote Rule"],
+                "Location Chips":       keep_row["Location Chips"],
+                "Applicant Regions":    keep_row["Applicant Regions"],
+                "Location":             keep_row["Location"],
+                "Description Snippet":  keep_row["Description Snippet"],
+                "Job URL":              keep_row["Job URL"],
+                "page_text":            details.get("page_text", ""),
+                "Country Chips":        None,  # or details.get("Country Chips")
+            }
+
+            """             
+            # Commenting out now to reduce noise. Currently it is running good for the Smoke test. 20251110 1103
+            print(
+                "👀 DEBUG US/CA:",
+                debug_payload["Title"],
+                "->",
+                _is_us_canada_eligible(debug_payload),
+                "| location:", debug_payload["Location"],
+                "| snippet:", debug_payload["Description Snippet"],
+            )
+
+            rule_reason = build_rule_reason(debug_payload)
+            """
+            
+            
             if rule_reason and rule_reason != "Filtered by rules":
                 # Build a SKIPPED row with the same fields you would have kept
                 skip_row = _normalize_skip_defaults({
@@ -5187,10 +5886,7 @@ def main():
                     "Applicant Regions":    keep_row["Applicant Regions"],
                 })
 
-                progress_clear_if_needed()
-                _log_and_record_skip(link, rule_reason, details)
-                progress(i, len(all_detail_links), kept_count, skip_count)
-                progress_clear_if_needed()
+                _log_and_record_skip(link, None, skip_row)
                 continue
 
 
@@ -5239,7 +5935,7 @@ def main():
                         "Posted":               keep_row["Posted"],
                         "Posting Date":         keep_row["Posting Date"],
                         "Valid Through":        keep_row["Valid Through"],
-                        "Reason Skipped":       "Salary out of target range",
+                        "Reason Skipped":       f"Salary out of target range (status={sal_status}, max={detected_max})",
                         "Apply URL":            keep_row["Apply URL"],
                         "Description Snippet":  keep_row["Description Snippet"],
                         "WA Rule":              wa_rule,
@@ -5253,9 +5949,8 @@ def main():
                         "Location Chips":       keep_row.get("Location Chips", ""),
                         "Applicant Regions":    keep_row.get("Applicant Regions", ""),
                     }
-                    _log_and_record_skip(link, rule_reason, skip_row)
-                    kept_count += 1
-                    progress_clear_if_needed()
+
+                    _log_and_record_skip(link, None, skip_row)
                     continue
 
 
@@ -5271,13 +5966,12 @@ def main():
             # ---------------------------------------------------------------------
         # stop spinner and clear sticky line once we finish
         stop_spinner()
-        progress_done(kept_count + skip_count, len(all_detail_links), kept_count, skip_count)
         progress_clear_if_needed()
 
     finally:
         #refresh_progress()
         pass
-#    total = len(all_detail_links)  # safe: list exists, even if empty
+        progress_done()
 
     # 3) Write CSVs
     write_rows_csv(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
@@ -5288,15 +5982,13 @@ def main():
     push_rows_to_google_sheet([to_skipped_sheet_row(r) for r in skipped_rows], SKIPPED_KEYS, tab_name="Skipped")
 
 
-    progress_clear_if_needed()
-    log_print(f"[DONE                  ].Kept {kept_count}, skipped {skip_count} "
+    #progress_clear_if_needed()
+    done_log(f".Kept {kept_count}, skipped {skip_count} "
           f"in {(datetime.now() - start_ts).seconds}s")
-    progress_clear_if_needed()
-    log_print(f"[🧹 DE-DUPE            ].Reduced {len(seen)} unique out of {len(all_detail_links)} total URLs")
-    progress_clear_if_needed()
-    log_print(f"[DONE                  ].CSV: {OUTPUT_CSV}")
-    progress_clear_if_needed()
-    log_print(f"[DONE                  ].CSV: {SKIPPED_CSV}")
+    #progress_clear_if_needed()
+    done_log(f".CSV: {OUTPUT_CSV}")
+    #progress_clear_if_needed()
+    done_log(f".CSV: {SKIPPED_CSV}")
 
     # Final flush
     if kept_rows:
@@ -5307,17 +5999,6 @@ def main():
         skipped_rows.clear()
 
 
-    # ---- Optional GitHub push (one place, at the end) ----
-#    if (kept_count + skip_count) > 0:
-    commit_msg = f"job-scraper: {RUN_TS} kept={kept_count}, skipped={skip_count}"
-    if PUSH_MODE == "auto":
-        maybe_push_to_git(prompt=False, auto_msg=commit_msg)
-    elif PUSH_MODE == "ask":
-        maybe_push_to_git(prompt=True,  auto_msg=commit_msg)
-    # "off" -> do nothing
-
-
-
     # ---- Optional Git push (controlled by GIT_PUSH_MODE) ----
     commit_msg = f"scraper: {RUN_TS} kept={kept_count} skipped={skip_count}"
 #    commit_msg = f"job-scraper: {RUN_TS} kept={kept_count} skipped={skip_count}"
@@ -5326,6 +6007,8 @@ def main():
     elif GIT_PUSH_MODE == "prompt":
         git_prompt_then_push(commit_msg)
     # "manual" does nothing
+
+
 
 
 
@@ -5372,30 +6055,20 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     root = _git_root()
     if not root:
         # just display and return (NO input here)
-        progress_clear_if_needed()
-#        log_print(f"[{now_ts()}] [GIT                   ].Not a Git repo. Skipping push.")
-        log_print("[INFO                  ].Not a Git repo. Skipping push.")
-        #refresh_progress()
+        #progress_clear_if_needed()
+        info(f".Not a Git repo. Skipping push.")
         return
+    
     if not _git_has_changes(root):
-        # just display and return (NO input here)
-        progress_clear_if_needed()
-#        log_print(f"[{now_ts()}] [GIT                   ].No file changes to commit.")
-        log_print("[INFO                  ].No file changes to commit.")
-        #refresh_progress()
+        info(f".No file changes to commit.")
         return
-
+    
     # The ONLY interactive prompt
     if prompt:
-#        ans = input(f"[{now_ts()}] [GIT                   ].Push code update to GitHub now? (y/n) ").strip().lower()
         ans = input("Push code updates to GitHub now? [y/n] ").strip().lower()
         if ans != "y":
             # display a one-liner and exit (NO second input)
-            progress_clear_if_needed()
-#            log_print(f"[{now_ts()}] [GIT                   ].Skipped push.")
-            log_print("[INFO                  ].Skipped push.")
-            #refresh_progress()
-
+            info(f".Skipped push.")
             return
 
     # do the push
@@ -5405,11 +6078,28 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     _git_run("git pull --rebase", cwd=root)
     code, out = _git_run("git push", cwd=root)
     if code == 0:
-        progress_clear_if_needed()
-        log_print("[INFO                  ].Pushed to GitHub.")
+        #progress_clear_if_needed()
+        info(f".Pushed to GitHub.")
     else:
-        progress_clear_if_needed()
-        log_print("[WARN                  ].Push failed:\n" + out)
+        #progress_clear_if_needed()
+        log_print("⚠️ WARN",".Push failed:\n" + out)
+
+def _debug_single_url(url: str):
+    """Fetch and parse a single job URL, then pretty-print the details."""
+    html = get_html(url)
+    if not html:
+        _bk_log_wrap("ERROR", ".Failed to fetch {url}")
+        return
+
+    # Standard pipeline: extract → enrich salary → normalize
+    details = extract_job_details(html, url)
+    details = enrich_salary_fields(details, page_host=up.urlparse(url).netloc)
+    details = _normalize_job_defaults(details)
+
+    import json
+    log_print("👀 DEBUG single-url", ".Parsed details:\n"
+        + json.dumps(details, indent=2, sort_keys=True)
+    )
 
 
 if __name__ == "__main__":
@@ -5435,10 +6125,21 @@ if __name__ == "__main__":
         default=None,
         help="Git push mode at the end (auto=commit+push, ask=prompt, off=skip)."
     )
+    # NEW: single-URL debug argument
+    parser.add_argument(
+        "--test-url",
+        type=str,
+        default=None,
+        help="Fetch and parse a single job URL, print fields, then exit."
+    )
 
     args = parser.parse_args()
     SMOKE = getattr(args, "smoke", False) or bool(os.environ.get("SMOKE"))
 
+    # If a test URL is provided, handle that and exit early
+    if args.test_url:
+        _debug_single_url(args.test_url)
+        sys.exit(0)
 
     # Expose flags to the rest of the module (your code reads these globals)
     if args.smoke:

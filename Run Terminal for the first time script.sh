@@ -18,6 +18,14 @@ python -m playwright install chromium
 # 5) run your script
 python3 po_job_scraper.py
 
+#OR
+
+python po_job_scraper.py --smoke
+
+
+
+
+python -m pip install gspread google-auth
 
 
 

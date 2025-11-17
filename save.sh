@@ -18,3 +18,11 @@ echo ">> Pushing to remote..."
 git push
 
 echo ">> Done."
+
+
+
+
+#Run both lines together.
+#echo "alias gs='cd ~/job-scraper && ./save.sh'" >> ~/.zshrc
+#source ~/.zshrc
+

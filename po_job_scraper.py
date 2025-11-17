@@ -5329,12 +5329,13 @@ def _normalize_skip_defaults(row: dict) -> dict:
     base.update(row)
     return base
 
+
 def _record_keep(row: dict) -> None:
     global kept_count
+    # You can still track seen URLs if you want,
+    # but do not early-return on duplicates.
     url = (row.get("Job URL") or row.get("job_url") or "").strip()
     if url:
-        if url in _seen_kept_urls:
-            return
         _seen_kept_urls.add(url)
 
     row.setdefault("Reason", row.get("Reason Skipped", ""))
@@ -5342,19 +5343,17 @@ def _record_keep(row: dict) -> None:
     kept_count += 1
     progress_clear_if_needed()
 
+
 def _record_skip(row: dict, reason: str) -> None:
     global skip_count
     url = (row.get("Job URL") or row.get("job_url") or "").strip()
     if url:
-        if url in _seen_skip_urls:
-            return
         _seen_skip_urls.add(url)
 
     skipped_rows.append(to_skipped_sheet_row(row))
     skip_count += 1
-
-    # Clear the progress line so the next block starts clean
     progress_clear_if_needed()
+
 
 def _debug_single_url(url: str):
     html = get_html(url)
@@ -5804,7 +5803,7 @@ def main():
                 continue
                 _log_and_record_skip(link, "🛠️  DE-DUPE", skip_row)   # uses your counter increment
                 # skip path (we skipped the job)
-                skip_count += 1
+                #skip_count += 1
                 progress(i, len(all_detail_links), kept_count, skip_count)
                 #progress_clear_if_needed()
                 continue

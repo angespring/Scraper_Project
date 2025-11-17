@@ -16,7 +16,7 @@ DOT3 = "..."           # 3 dots
 DOT4 = "...."          # 4 dots
 DOT5 = "....."         # 5 dots
 DOT6 = "......"        # 6 dots
-DOTW = "⚠️ ⚠️ ⚠️ "      # warning dots
+DOTW = "⚠️ "      # warning dots
 DOTR = "🛠️ "      # DE-DUPE wrench
 DOTC = "💭 "      # Reason cloud
 
@@ -1079,7 +1079,7 @@ def collect_uw_links() -> list[str]:
 
     role_terms = [
         "product manager", "product owner",
-        "business analyst", "systems analyst", "business systems analyst",
+        "business analyst", "system analyst", "systems analyst", "business systems analyst",
         "scrum master"
     ]
     # We bias toward remote or Seattle in the search itself
@@ -1921,27 +1921,36 @@ def _is_us_canada_eligible(d: dict) -> bool:
     snippet_txt  = str(d.get("Description Snippet") or "").lower()
     page_txt     = str(d.get("page_text") or "").lower()
 
-    txt = " ".join([
-        str(d.get("Location") or "").lower(),
-        str(d.get("Description Snippet") or "").lower(),
-        loc_chips_txt,
-        str(d.get("page_text") or "").lower(),
-    ])
-    # Strong positives – clearly US / Canada
+    txt = " ".join([location_txt, snippet_txt, loc_chips_txt, page_txt])
+
+    # 1) Strong positives – clearly US / Canada
     if countries & {"us", "usa", "united states", "united states of america", "canada", "ca"}:
         return True
+
+    # Treat Remote/Nationwide US variants as hard positives
+    if re.search(r"remote\s*/?\s*nationwide.*\b(us|usa|united states)\b", txt):
+        return True
+
+    # General US / Canada positives
     if any(p in txt for p in [
-        "us only", "usa only", "anywhere in the us", "anywhere in the united states",
+        "us only", "usa only",
+        "anywhere in the us",
+        "anywhere in the united states",
         "eligible to work in the us",
-        "canada", "north america", "us or canada",
+        "remote - us", "remote in the us", "remote, us", "remote within the us",
+        "nationwide, us",
+        "nationwide in the us",
+        "canada",
+        "north america", "us or canada",
     ]):
         return True
 
-    # Strong non-NA negatives – uses big NON_US_HINTS regex (which includes "finland")
-    if NON_US_HINTS.search(txt):
+    # 2) Strong non-NA negatives – *only* when they appear in a region/location context
+    # (REGION_CONTEXT and NON_US_HINTS are already defined above in your file)
+    if REGION_CONTEXT.search(txt) and NON_US_HINTS.search(txt):
         return False
 
-    # Default allow if we can't tell
+    # 3) Default allow if we can't tell
     return True
 
 def build_rule_reason(d: dict) -> str:
@@ -2733,31 +2742,89 @@ SINGLE_CITY_PATTERNS = [
 # ---- Helpers ----
 # Exact column order for "keep" CSV
 KEEP_FIELDS = [
-    "Applied?","Reason","Date Scraped",
-    "Title","Company",
-    "Career Board",            # NEW (between Company and Location)
-    "Location","Posted","Posting Date",
-    "Valid Through",           # NEW (between Posting Date and Job URL)
-    "Job URL","Apply URL","Description Snippet",
-    "WA Rule","Remote Rule","US Rule",
-    "Salary Max Detected","Salary Rule","Salary Near Min",
-    "Salary Status", "Salary Note", "Salary Est. (Low-High)",
-    "Location Chips","Applicant Regions",
-    "Visibility Status","Confidence Score","Confidence Mark",
+    "Applied?",
+    "Reason",
+    "Date Scraped",
+    "Title",
+    "Job ID (Vendor)",
+    "Job ID (Numeric)",
+    "Job Key",
+    "Company",
+    "Career Board",
+    "Posted",
+    "Posting Date",
+    "Valid Through",
+    "Job URL",
+    "Apply URL",
+    "Description Snippet"
+    "WA Rule",
+    "Remote Rule",
+    "US Rule",
+    "Location (Raw)",
+    "Country",
+    "Region / State",
+    "City",
+    "Remote?",
+    "Hybrid?",
+    "Onsite?",
+    "Salary Max Detected",
+    "Salary Rule",
+    "Salary Near Min",
+    "Salary Status",
+    "Salary",
+    "Salary Reason",
+    "Salary Floor Met?",
+    "Salary Notes",
+    "Salary Est. (Low-High)",
+    "Location Notes",
+    "Location Chips",
+    "Applicant Regions",
+    "Board Type",
+    "Source Board",
+    "Source URL",
+    "Expired?",
+    "Quiet?",
+    "Visibility Status",
+    "Confidence Score",
+    "Confidence Mark",
 ]
 
 
 # Exact column order for "skip" CSV
 SKIP_FIELDS = [
-    "Date Scraped","Title","Company",
-    "Career Board",            # NEW
-    "Location","Posted","Posting Date",
-    "Valid Through",           # NEW
-    "Job URL","Reason Skipped",
-    "WA Rule","Remote Rule","US Rule",
-    "Salary Max Detected","Salary Rule","Salary Near Min",
-    "Salary Status", "Salary Note", "Salary Est. (Low-High)",
-    "Location Chips","Applicant Regions",
+    "Applied?",
+    "Reason",
+    "Date Scraped",
+    "Title",
+    "Job ID (Vendor)",
+    "Job ID (Numeric)",
+    "Job Key",
+    "Company",
+    "Career Board",
+    "Job URL",
+    "Reason Skipped",
+    "Location (Raw)",
+    "Country",
+    "Region / State",
+    "City",
+    "Remote?",
+    "Hybrid?",
+    "Onsite?",
+    "Location Notes",
+    "Salary",
+    "Salary Reason",
+    "Salary Floor Met?",
+    "Salary Notes",
+    "Board Type",
+    "Source Board",
+    "Source URL",
+    "Posting Date",
+    "Valid Through",
+    "Expired?",
+    "Quiet?",
+    "Visibility Status",
+    "Confidence Score",
+    "Confidence Mark",
 ]
 
 def can_fetch(url):
@@ -2798,7 +2865,7 @@ def polite_get(url, retries=2):
         except Exception as e:
             if attempt == retries:
                 for ln in f"{DOT3}{DOTW} Warning: Failed to GET listing page: {url}\n{e}".splitlines():
-                    log_print(f"{_box('WARN ')}{ln} {RESET}")
+                    log_print(f"{_box('WARN ')}{DOT3}{ln} {RESET}")
 
                 return None
             time.sleep(backoff * (attempt + 1))
@@ -3990,8 +4057,9 @@ INCLUDE_TITLES_FUZZY = [
     r"\bsolutions?\s+analyst\b",
     r"\bimplementation\s+analyst\b",
     r"\btechnical\s+program\s+manager\b",       # only with responsibilities (see _is_target_role)
-    r"\bbusiness\s+systems?\s+analyst\b",     # Business System(s) Analyst
-    r"\boperations?\s+business\s+analyst\b",  # Operations Business Analyst
+    r"\bbusiness\s+systems?\s+analyst\b",       # Business System(s) Analyst
+    r"\bsystem?\s+analyst\b",                   # System(s) Analyst
+    r"\boperations?\s+business\s+analyst\b",    # Operations Business Analyst
     r"(senior\s+)?business\s+(system|systems|intelligence)?\s*analyst"
     r"(operations\s+business\s+analyst"
     r"(product\s+leader|product\s+specialist|product\s+consultant)?\b",
@@ -4132,7 +4200,7 @@ def compute_visibility_and_confidence(details):
     Title = (details.get("Title") or "").lower()
     role_hits = 0
     for kw in ("product manager", "product owner", "pm",
-            "business analyst", "systems analyst", "business systems analyst",
+            "business analyst", "systems analyst", "business systems analyst", "system analyst",
             "scrum master", "release train engineer", "rte"):
         if kw in Title:
             role_hits += 1
@@ -4535,71 +4603,79 @@ def is_remote_friendly(text: str):
     return False, "no_remote_signal"
 
 
-def to_keep_sheet_row(d: dict) -> dict:
+def to_keep_sheet_row(keep_row, applied="", reason=""):
     return {
-        "Applied?": d.get("Applied?", ""),
-        "Reason": d.get("Reason", ""),
-        "Date Scraped": d.get("Date Scraped") or now_ts(),
-        "Title": d.get("Title", ""),
-        "Company": d.get("Company", ""),
-        "Career Board": d.get("Career Board", ""),
-        "Location": d.get("Location", ""),
-
-        # Dates
-        "Posted": d.get("Posted", ""),
-        "Posting Date": d.get("Posting Date") or d.get("posting_date", ""),
-        "Valid Through": d.get("Valid Through") or d.get("valid_through", ""),
-
-        "Job URL": d.get("Job URL", ""),
-        "Apply URL": d.get("Apply URL", ""),
-        "Description Snippet": d.get("Description Snippet", ""),
-
-        "WA Rule": d.get("WA Rule", ""),
-        "Remote Rule": d.get("Remote Rule", ""),
-        "US Rule": d.get("US Rule", ""),
-
-        "Salary Max Detected": d.get("Salary Max Detected", ""),
-        "Salary Rule": d.get("Salary Rule", ""),
-        "Salary Status": d.get("Salary Status", ""),
-        "Salary Note": d.get("Salary Note", ""),
-        "Salary Est. (Low-High)": d.get("Salary Est. (Low-High)", ""),
-
-        "Location Chips": d.get("Location Chips", ""),
-        "Applicant Regions": d.get("Applicant Regions", ""),
-        "Visibility Status": d.get("Visibility Status", ""),
-        "Confidence Score": d.get("Confidence Score", ""),
-        "Confidence Mark": d.get("Confidence Mark", ""),
+        "Applied?": applied or keep_row.get("Applied?", ""),
+        "Reason": reason or keep_row.get("Reason", ""),
+        "Date Scraped": keep_row.get("Date Scraped", ""),
+        "Title": keep_row.get("Title", ""),
+        "Job ID (Vendor)": keep_row.get("Job ID (Vendor)", ""),
+        "Job ID (Numeric)": keep_row.get("Job ID (Numeric)", ""),
+        "Job Key": keep_row.get("Job Key", ""),
+        "Company": keep_row.get("Company", ""),
+        "Career Board": keep_row.get("Career Board", ""),
+        "Job URL": keep_row.get("Job URL", ""),
+        "Apply URL": keep_row.get("Apply URL", ""),
+        "Location (Raw)": keep_row.get("Location (Raw)", ""),
+        "Country": keep_row.get("Country", ""),
+        "Region / State": keep_row.get("Region / State", ""),
+        "City": keep_row.get("City", ""),
+        "Remote?": keep_row.get("Remote?", ""),
+        "Hybrid?": keep_row.get("Hybrid?", ""),
+        "Onsite?": keep_row.get("Onsite?", ""),
+        "Location Notes": keep_row.get("Location Notes", ""),
+        "Salary": keep_row.get("Salary", ""),
+        "Salary Reason": keep_row.get("Salary Reason", ""),
+        "Salary Floor Met?": keep_row.get("Salary Floor Met?", ""),
+        "Salary Notes": keep_row.get("Salary Notes", ""),
+        "Board Type": keep_row.get("Board Type", ""),
+        "Source Board": keep_row.get("Source Board", ""),
+        "Source URL": keep_row.get("Source URL", ""),
+        "Posting Date": keep_row.get("Posting Date", ""),
+        "Valid Through": keep_row.get("Valid Through", ""),
+        "Expired?": keep_row.get("Expired?", ""),
+        "Quiet?": keep_row.get("Quiet?", ""),
+        "Visibility Status": keep_row.get("Visibility Status", ""),
+        "Confidence Score": keep_row.get("Confidence Score", ""),
+        "Confidence Mark": keep_row.get("Confidence Mark", ""),
     }
 
 
-def to_skipped_sheet_row(d: dict) -> dict:
+def to_skipped_sheet_row(skip_row, applied="", reason=""):
     return {
-        "Date Scraped": d.get("Date Scraped") or now_ts(),
-        "Title": d.get("Title", ""),
-        "Company": d.get("Company", ""),
-        "Career Board": d.get("Career Board", ""),
-        "Location": d.get("Location", ""),
-
-        "Posted": d.get("Posted", ""),
-        "Posting Date": d.get("Posting Date") or d.get("posting_date", ""),
-        "Valid Through": d.get("Valid Through") or d.get("valid_through", ""),
-
-        "Job URL": d.get("Job URL", ""),
-        "Reason Skipped": d.get("Reason Skipped", ""),
-
-        "WA Rule": d.get("WA Rule", ""),
-        "Remote Rule": d.get("Remote Rule", ""),
-        "US Rule": d.get("US Rule", ""),
-
-        "Salary Max Detected": d.get("Salary Max Detected", ""),
-        "Salary Rule": d.get("Salary Rule", ""),
-        "Location Chips": d.get("Location Chips", ""),
-        "Applicant Regions": d.get("Applicant Regions", ""),
-        "Apply URL": d.get("Apply URL", ""),
-        "Description Snippet": d.get("Description Snippet", ""),
-        "Visibility Status": d.get("Visibility Status", ""),
-        "Confidence Score": d.get("Confidence Score", ""),
-        "Confidence Mark": d.get("Confidence Mark", ""),
+        "Applied?": applied or skip_row.get("Applied?", ""),
+        "Reason": reason or skip_row.get("Reason", ""),
+        "Date Scraped": skip_row.get("Date Scraped", ""),
+        "Title": skip_row.get("Title", ""),
+        "Job ID (Vendor)": skip_row.get("Job ID (Vendor)", ""),
+        "Job ID (Numeric)": skip_row.get("Job ID (Numeric)", ""),
+        "Job Key": skip_row.get("Job Key", ""),
+        "Company": skip_row.get("Company", ""),
+        "Career Board": skip_row.get("Career Board", ""),
+        "Job URL": skip_row.get("Job URL", ""),
+        "Reason Skipped": skip_row.get("Reason Skipped", ""),
+        "Location (Raw)": skip_row.get("Location (Raw)", ""),
+        "Country": skip_row.get("Country", ""),
+        "Region / State": skip_row.get("Region / State", ""),
+        "City": skip_row.get("City", ""),
+        "Remote?": skip_row.get("Remote?", ""),
+        "Hybrid?": skip_row.get("Hybrid?", ""),
+        "Onsite?": skip_row.get("Onsite?", ""),
+        "Location Notes": skip_row.get("Location Notes", ""),
+        "Salary": skip_row.get("Salary", ""),
+        "Salary Reason": skip_row.get("Salary Reason", ""),
+        "Salary Floor Met?": skip_row.get("Salary Floor Met?", ""),
+        "Salary Notes": skip_row.get("Salary Notes", ""),
+        "Board Type": skip_row.get("Board Type", ""),
+        "Source Board": skip_row.get("Source Board", ""),
+        "Source URL": skip_row.get("Source URL", ""),
+        "Posting Date": skip_row.get("Posting Date", ""),
+        "Valid Through": skip_row.get("Valid Through", ""),
+        "Expired?": skip_row.get("Expired?", ""),
+        "Quiet?": skip_row.get("Quiet?", ""),
+        "Visibility Status": skip_row.get("Visibility Status", ""),
+        "Confidence Score": skip_row.get("Confidence Score", ""),
+        "Confidence Mark": skip_row.get("Confidence Mark", ""),
     }
 
 # ==== Make GS lines non-timestamped (match your example format)
@@ -4854,10 +4930,14 @@ def _normalize_job_defaults(d: dict) -> dict:
     d.setdefault("Reason", "")
     d.setdefault("Date Scraped", now_ts())
 
-    d["Title"]        = d.get("Title")        or d.get("title")        or ""
-    d["Company"]      = d.get("Company")      or d.get("company")      or ""
-    d["Career Board"] = d.get("Career Board") or d.get("career_board") or ""
-    d["Location"]     = d.get("Location")     or d.get("display_location") or d.get("location", "")
+    d["Title"]           = d.get("Title")           or d.get("title")        or ""
+    d["Job ID (Vendor)"] = d.get("Job ID (Vendor)") or ""
+    d["Job ID (Numeric)"]= d.get("Job ID (Numeric)")or ""
+    d["Job Key"]         = d.get("Job Key")         or ""
+
+    d["Company"]      = d.get("Company")            or d.get("company")      or ""
+    d["Career Board"] = d.get("Career Board")       or d.get("career_board") or ""
+    d["Location"]     = d.get("Location")           or d.get("display_location") or d.get("location", "")
 
     # ---------- dates ----------
 
@@ -5109,7 +5189,10 @@ def log_event(level: str,
               left: str = "",
               right=None,
               *, job=None, url: str | None = None,
-              width: int = 120, **_):
+              width: int = 120,
+              reason: str | None = None,
+              **_):
+
     # NEW: make sure the spinner/progress row is erased before we print real rows
     progress_clear_if_needed()
 
@@ -5216,18 +5299,19 @@ def log_event(level: str,
                 progress_clear_if_needed()
                 log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
 
-        reason = job_dict.get("Reason Skipped") or ""
-        if reason:
-            for ln in _wrap_lines(reason, width=width):
+        # use the explicit reason parameter if provided, otherwise the dict
+        # prefer explicit reason argument, fall back to dict field
+        reason_text = (reason or "").strip() or job_dict.get("Reason Skipped") or ""
+        if reason_text:
+            for ln in _wrap_lines(reason_text, width=width):
                 progress_clear_if_needed()
-                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
 
         if vis or score or mark:
             log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
         progress_clear_if_needed()
         log_print(f"{color}{_box('DONE ')}.🚫{RESET}")
         return
-
 
 
 def _rule(details: dict, key: str, default="default"):
@@ -5295,10 +5379,14 @@ def _log_and_record_skip(link: str, rule_reason: str | None = None, row: dict | 
 
     progress_clear_if_needed()
     log_print(f"{c}[SKIP                  ].{title}{r}")
-    log_print(f"{c}[SKIP                  ]...{board} → {company}{r}")
-    log_print(f"{c}[SKIP                  ]...{link}{r}")
-    log_print(f"{c}[REASON                ]{DOT3}{DOTC} → {display_reason}{r}")
-    log_print(f"{c}[🚫 DONE                ].{r}")
+    log_print(f"{c}[SKIP                  ]{DOT3}{board} → {company}{r}")
+    if link:
+        for ln in _wrap_lines(link, width=width):
+            progress_clear_if_needed()
+            log_print(f"{c}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+#    log_print(f"{c}[SKIP                  ]{DOT3}{link}{r}")
+    log_print(f"{c}[REASON                ]{DOT3}{DOTC}→ {display_reason}{r}")
+    log_print(f"{c}[DONE                  ].🚫{r}")
     progress_clear_if_needed()
 
 
@@ -5355,17 +5443,24 @@ def _record_skip(row: dict, reason: str) -> None:
     progress_clear_if_needed()
 
 
+
 def _debug_single_url(url: str):
+    """Fetch and parse a single job URL, then pretty-print the details."""
     html = get_html(url)
     if not html:
-        log_print("ERROR", ".Failed to fetch {url}")
+        _bk_log_wrap("ERROR", ".Failed to fetch {url}")
         return
+
+    # Standard pipeline: extract → enrich salary → normalize
     details = extract_job_details(html, url)
+    details = enrich_salary_fields(details, page_host=up.urlparse(url).netloc)
     details = _normalize_job_defaults(details)
-    # Pretty-print the dict so you can see all fields
+
     import json
-    log_print("👀 DEBUG single-url", ".Parsed details:\n" +
-              json.dumps(details, indent=2, sort_keys=True))
+    log_print("👀 DEBUG single-url", ".Parsed details:\n"
+        + json.dumps(details, indent=2, sort_keys=True)
+    )
+
 
 
 ##########################################################
@@ -5685,7 +5780,7 @@ def main():
 
         # now set your totals AFTER dedupe (and AFTER any smoke cap)
     if SMOKE:
-        all_detail_links = all_detail_links[:20]  # final cap for smoke runs
+        all_detail_links = all_detail_links[:20]  # final cap for smoke runs (should be 20)
 
     # progress setup
     total = len(all_detail_links)
@@ -5718,6 +5813,9 @@ def main():
                     "Job URL": link,
                     "Apply URL": link,
                     "Title": title_for_log,
+                    "Job ID (Vendor)": "",
+                    "Job ID (Numeric)": "",
+                    "Job Key":"",
                     "Company": "",
                     "Career Board": board,
                     "Valid Through": "",
@@ -5785,11 +5883,11 @@ def main():
                 skip_row = _normalize_skip_defaults({
                     "Job URL": link,
                     "Title": details.get("Title", ""),
-                    "Company": details.get("Company", ""),
-                    "Career Board": details.get("Career Board", ""),
                     "Job ID (Vendor)": details.get("job_id_vendor",""),
                     "Job ID (Numeric)": details.get("job_id_numeric",""),
                     "Job Key": jk,
+                    "Company": details.get("Company", ""),
+                    "Career Board": details.get("Career Board", ""),
                     "Reason Skipped": "DE-DUPE",
                 })
                 skipped_rows.append(skip_row)
@@ -5835,6 +5933,7 @@ def main():
                     "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
                     "Job ID (Vendor)": details.get("Job ID (Vendor)", details.get("job_id_vendor", "")),
                     "Job ID (Numeric)": details.get("Job ID (Numeric)", details.get("job_id_numeric", "")),
+                    "Job Key": details.get("Job Key", ""),
                     "Company": details.get("Company", "") or "Missing Company",
                     "Career Board": details.get("Career Board", "") or "Missing Board",
                     "Location": details.get("Location", ""),
@@ -5860,6 +5959,9 @@ def main():
                     skip_row = _normalize_skip_defaults({
                         "Job URL": details.get("job_url", link),
                         "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
+                        "Job ID (Vendor)": details.get("job_id_vendor",""),
+                        "Job ID (Numeric)": details.get("job_id_numeric",""),
+                        "Job Key": jk,
                         "Company": company_from_url_fallback(link), 
                         "Career Board": career_board_name(link),
                         "Valid Through": details.get("Valid Through", ""),
@@ -5900,6 +6002,7 @@ def main():
                 "Title": normalize_title(details.get("Title", ""), details.get("Company", "")),
                 "Job ID (Vendor)": details.get("job_id_vendor",""),
                 "Job ID (Numeric)": details.get("job_id_numeric",""),
+                "Job Key": details.get("Job Key", ""),
                 "Company": details.get("Company", "") or "Missing Company",
                 "Career Board": details.get("Career Board", "") or "Missing Board",
                 "Location": details.get("Location", ""),
@@ -5989,6 +6092,7 @@ def main():
                     "Title":                keep_row["Title"],
                     "Job ID (Vendor)":      keep_row["Job ID (Vendor)"],
                     "Job ID (Numeric)":     keep_row["Job ID (Numeric)"],
+                    "Job Key":              jk,
                     "Company":              keep_row["Company"],
                     "Career Board":         keep_row["Career Board"],
                     "Location":             keep_row["Location"],
@@ -6057,6 +6161,7 @@ def main():
                         "Title":                keep_row["Title"],
                         "Job ID (Vendor)":      keep_row["Job ID (Vendor)"],
                         "Job ID (Numeric)":     keep_row["Job ID (Numeric)"],
+                        "Job Key":              keep_row["Job Key"],
                         "Company":              keep_row["Company"],
                         "Career Board":         keep_row["Career Board"],
                         "Location":             keep_row["Location"],
@@ -6212,22 +6317,22 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
         #progress_clear_if_needed()
         log_print("⚠️ WARN",".Push failed:\n" + out)
 
-def _debug_single_url(url: str):
-    """Fetch and parse a single job URL, then pretty-print the details."""
-    html = get_html(url)
-    if not html:
-        _bk_log_wrap("ERROR", ".Failed to fetch {url}")
-        return
+#def _debug_single_url(url: str):
+#   """Fetch and parse a single job URL, then pretty-print the details."""
+#    html = get_html(url)
+#    if not html:
+#        _bk_log_wrap("ERROR", ".Failed to fetch {url}")
+#        return
 
     # Standard pipeline: extract → enrich salary → normalize
-    details = extract_job_details(html, url)
-    details = enrich_salary_fields(details, page_host=up.urlparse(url).netloc)
-    details = _normalize_job_defaults(details)
+#    details = extract_job_details(html, url)
+#    details = enrich_salary_fields(details, page_host=up.urlparse(url).netloc)
+#    details = _normalize_job_defaults(details)
 
-    import json
-    log_print("👀 DEBUG single-url", ".Parsed details:\n"
-        + json.dumps(details, indent=2, sort_keys=True)
-    )
+#    import json
+#    log_print("👀 DEBUG single-url", ".Parsed details:\n"
+#        + json.dumps(details, indent=2, sort_keys=True)
+#    )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,28 @@ A personal project that helps me track job opportunities with structure, clarity
 
 This project grew as I learned Python and explored ways to automate repetitive work. It reflects how I think about building tools: start simple, stay curious, and refine as new needs appear.
 
+
+## Table of Contents
+- [What the Scraper Does](#what-the-scraper-does)
+- [Project Goals](#project-goals)
+- [Current Features](#current-features)
+- [Tech Stack](#tech-stack)
+- [How to Run It](#how-to-run-it)
+- [Future Improvements](#future-improvements)
+- [Why I Built This](#why-i-built-this)
+
+
+-------------------------
+
+
+Scraper_Project/
+├── po_job_scraper.py          # Main entry point
+├── classification_rules.py    # Logic for keep/skip rules
+├── logging_utils.py           # Custom logging and progress display
+├── requirements.txt           # Dependencies
+└── README.md                  # Project documentation
+
+
 -------------------------
 
 What The Scraper Does
@@ -79,6 +101,8 @@ It reflects the same principles I bring to product work: reduce complexity, unde
 If you're exploring scraping, automation, or product workflows, feel free to reach out or connect on LinkedIn.
 
 https://www.linkedin.com/in/angespring/
+
+
 
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)

@@ -16,6 +16,15 @@ cp .env.example .env
 # first run (creates venv, installs deps, downloads chromium, runs the scraper)
 ./run.sh
 
+
+## 📘 Documentation
+
+- **Job Scraper Data Dictionary**  
+  Full field-level reference for the scraper output, maintained in Notion.  
+  👉 https://www.notion.so/2be0995baba880979609e76f9f366c3b?v=2be0995baba880e6b7c2000c07f8df41&source=copy_link
+
+
+
 ## Release notes workflow
 
 Use the helper script to generate stakeholder-ready notes straight from git history:

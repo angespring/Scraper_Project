@@ -1,4 +1,4 @@
-Job Scraper Project
+# Job Scraper Project
 
 A personal project that helps me track job opportunities with structure, clarity, and consistent rules. It collects job links from several career boards, enriches them with logic I designed, and writes everything to CSV files that I can review quickly.
 
@@ -73,3 +73,14 @@ Why I Built This
 This project began as a way to reduce friction in the job search process.
 It became a space for experimentation, learning, and deeper technical thinking.
 It reflects the same principles I bring to product work: reduce complexity, understand the workflow, and build tools that support better decisions.
+
+
+-------------------------
+If you're exploring scraping, automation, or product workflows, feel free to reach out or connect on LinkedIn.
+
+https://www.linkedin.com/in/angespring/
+
+
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)

@@ -5541,12 +5541,12 @@ def extract_wttj_company_jobs(html: str, company_url: str) -> list[str]:
             links.append(full_url)
 
     return links
-BOARDS.append({
-    "name": "WTTJ Beam Benefits company page",
-    "type": "wttj_company",
-    "company_url": "https://app.welcometothejungle.com/companies/Beam-Benefits",
-    "country": "us",
-})
+#BOARDS.append({
+#    "name": "WTTJ Beam Benefits company page",
+#    "type": "wttj_company",
+#    "company_url": "https://app.welcometothejungle.com/companies/Beam-Benefits",
+#    "country": "us",
+#})
 
 
 

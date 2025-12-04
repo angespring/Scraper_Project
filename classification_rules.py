@@ -166,7 +166,7 @@ def _location_debug_line(
     width = 70  # rough wrap; doesn’t need to be perfect
     for i in range(0, len(payload), width):
         chunk = payload[i : i + width]
-        debug(f"..LOCATION DEBUG    {chunk}")
+        debug(f".LOCATION DEBUG    {chunk}")
 
 
 def _remote_location_gate(row: Dict[str, Any], config: ClassificationConfig) -> bool:

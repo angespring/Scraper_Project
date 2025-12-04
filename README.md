@@ -1,41 +1,75 @@
-# Product Job Scraper
+Job Scraper Project
 
-Rules-driven scraper that finds remote Product roles and writes to Google Sheets.
+A personal project that helps me track job opportunities with structure, clarity, and consistent rules. It collects job links from several career boards, enriches them with logic I designed, and writes everything to CSV files that I can review quickly.
 
-Built by Angela Spring — https://vanspring.me
+This project grew as I learned Python and explored ways to automate repetitive work. It reflects how I think about building tools: start simple, stay curious, and refine as new needs appear.
 
-## Quick start
+-------------------------
 
-```bash
-git clone https://github.com/angespring/Scraper_Project.git
+What The Scraper Does
+- Collects job links from supported boards
+- Extracts attributes such as title, company, salary text, location, and posting dates
+- Applies rules to classify each job as a keep or skip
+- Logs progress and decisions in the terminal
+- Writes final results to CSV files for easy sorting
+
+-------------------------
+
+Project Goals
+- Reduce repetitive effort during job searches
+- Build structure around decision rules
+- Improve accuracy and consistency
+- Strengthen technical fluency through hands-on practice
+- Explore how personal tools can support product thinking
+
+-------------------------
+
+Current Features
+- Support for multiple job boards
+- Terminal logging with levels and progress indicators
+- Keep and skip classification logic
+- CSV output with clear data fields
+- Salary extraction and rule evaluation
+- Validation for date and location fields
+
+-------------------------
+
+Tech Stack
+- Python
+- BeautifulSoup
+- Requests
+- CSV
+- Logging
+- GitHub version control
+- Visual Studio Code
+
+-------------------------
+
+How To Run It
+
+This scraper is designed for my own workflow, so it is not a packaged application.
+The structure, logic, and outputs are open for anyone to explore.
+
+To run it locally:
+git clone https://github.com/angespring/Scraper_Project
 cd Scraper_Project
+python3 -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -r requirements.txt
+python po_job_scraper.py
 
-# create local env file from example and fill in your values
-cp .env.example .env
+-------------------------
 
-# first run (creates venv, installs deps, downloads chromium, runs the scraper)
-./run.sh
+Future Improvements
+- Cleaner separation of modules
+- Additional job boards
+- More robust salary parsing
+- Expanded error handling
+- Improved progress indicators
+- Additional test coverage
 
+Why I Built This
 
-## 📘 Documentation
-
-- **Job Scraper Data Dictionary**  
-  Full field-level reference for the scraper output, maintained in Notion.  
-  👉 https://www.notion.so/2be0995baba880979609e76f9f366c3b?v=2be0995baba880e6b7c2000c07f8df41&source=copy_link
-
-
-
-## Release notes workflow
-
-Use the helper script to generate stakeholder-ready notes straight from git history:
-
-```bash
-python tools/generate_release_notes.py \
-  --from-ref origin/main \
-  --title "Smoke-mode UX polish" \
-  --overview "Focused smoke runs on the first listing site plus release-notes automation."
-```
-
-By default the script inserts the new section at the top of `docs/RELEASE_NOTES.md`.
-Add `--print-only` to preview the Markdown without touching the file, or swap in
-`--append` if you prefer chronological ordering.
+This project began as a way to reduce friction in the job search process.
+It became a space for experimentation, learning, and deeper technical thinking.
+It reflects the same principles I bring to product work: reduce complexity, understand the workflow, and build tools that support better decisions.

@@ -3446,7 +3446,9 @@ BLOCKED_URL_PREFIXES = [
 
 STARTING_PAGES = [
 
-
+    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section"
+    "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
+    "https://app.welcometothejungle.com/api/jobs?query=product",
     "https://www.builtin.com/jobs?search=product%20owner&remote=true",
 
     #Testing link- broken!!!
@@ -3910,6 +3912,44 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
 
     return all_links
 
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
+import requests   # or use your existing fetch_html helper if you prefer
+
+def extract_wttj_company_jobs(html: str, company_url: str) -> list[str]:
+    """
+    Given the HTML for a company page on app.welcometothejungle.com,
+    return a list of absolute job URLs found on that page.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/jobs/" not in href:
+            continue
+
+        full_url = urljoin(company_url, href)
+        if full_url not in links:
+            links.append(full_url)
+
+    return links
+
+
+def collect_wttj_company_links(company_url: str) -> list[str]:
+    """
+    Fetch a WTTJ company page and return job URLs listed on it.
+    Example:
+        collect_wttj_company_links(
+            "https://app.welcometothejungle.com/companies/Beam-Benefits"
+        )
+    """
+    resp = requests.get(company_url, timeout=20)
+    resp.raise_for_status()
+    html = resp.text
+
+    return extract_wttj_company_jobs(html, company_url)
+
 
 def can_fetch(url):
     """Check robots.txt with a timeout so it never hangs."""
@@ -4001,6 +4041,9 @@ def career_board_name(url: str) -> str:
         "builtin.com": "Built In",
         "www.builtin.com": "Built In",
         "welcometothejungle.com": "Welcome to the Jungle",
+        "app.welcometothejungle.com": "Welcome to the Jungle",
+        "ashbyhq.com": "Ashby",
+        "jobs.ashbyhq.com": "Ashby",
         # in career_board_name(url) or similar mapping
         "ascensushr.wd1.myworkdayjobs.com": "Ascensus (Workday)",
         #"wd5.myworkdaysite.com/recruiting/uw/": "University of WA (Workday)",
@@ -5474,6 +5517,39 @@ def _extract_dates_from_html(html: str) -> dict:
         out["valid_through"] = _pick_date(m.group(1))
 
     return out
+
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup
+
+def extract_wttj_company_jobs(html: str, company_url: str) -> list[str]:
+    """
+    Given the HTML for a company page on app.welcometothejungle.com,
+    return a list of absolute job URLs found on that page.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    links: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+
+        # Only keep job detail links
+        if "/jobs/" not in href:
+            continue
+
+        full_url = urljoin(company_url, href)
+        if full_url not in links:
+            links.append(full_url)
+
+    return links
+BOARDS.append({
+    "name": "WTTJ Beam Benefits company page",
+    "type": "wttj_company",
+    "company_url": "https://app.welcometothejungle.com/companies/Beam-Benefits",
+    "country": "us",
+})
+
+
+
 
 
 # --- Role taxonomy: allow ONLY these families (title-first), plus close neighbors by responsibility ---

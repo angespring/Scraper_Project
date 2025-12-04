@@ -1,4 +1,4 @@
-![Title banner](image-1.png)
+![Title Banner Image](image-1.png)
 # Job Scraper Project
 
 
@@ -86,7 +86,7 @@ To run it locally:
 - pip install -r requirements.txt
 - python po_job_scraper.py
 
-
+![How To Run It Image](image-2.png)
 
 
 ## Future Improvements

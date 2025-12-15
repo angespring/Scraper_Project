@@ -3,7 +3,7 @@
 </p>
 <br>
 
-# Job Scraper Project
+# Job Intelligence & Workflow Automation
 
 
 A personal project that helps me track job opportunities with structure, clarity, and consistent rules. It collects job links from several career boards, enriches them with logic I designed, and writes everything to CSV files that I can review quickly.

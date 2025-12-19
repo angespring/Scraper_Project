@@ -22,6 +22,9 @@ python3 po_job_scraper.py
 
 python po_job_scraper.py --smoke
 
+python po_job_scraper.py --test-url "https://app.welcometothejungle.com/jobs/PybD0oWI"
+
+
 
 
 

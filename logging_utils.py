@@ -16,6 +16,11 @@ from typing import Any
 # Send logs to stderr so they do not fight with the progress line on stdout
 LOG_STREAM = sys.stderr
 
+# Progress is rendered on stdout (single line), logs go to stderr
+PROGRESS_STREAM = sys.stdout
+_PROGRESS_ACTIVE = False
+
+
 
 # Minimal ANSI color helpers (match po_job_scraper style)
 RESET = "\033[0m"
@@ -55,6 +60,7 @@ def _log(level: str, message: str, *, prefix: str = "") -> None:
     Example output:
     [2025-11-21 14:45:10] [INFO                  ].[GS] Pushed 2 rows to tab 'Table1'.
     """
+    progress_clear_if_needed()
     ts = _timestamp()
     label = (level or "").upper()
     head = f"[{ts}] [{label:<22}]"
@@ -120,24 +126,28 @@ def error(message: str, *, prefix: str = "") -> None:
 
 def progress(message: str, *, prefix: str = "") -> None:
     """
-    Log a progress-style message.
-
-    This keeps the same interface used by po_job_scraper.py,
-    even if we later change how progress lines are rendered.
+    Render a single line progress update on stdout.
+    Does not include timestamps so it can safely re render in place.
     """
-    _log("PROGRESS", message, prefix=prefix)
+    global _PROGRESS_ACTIVE
+
+    prefix_part = f"[{prefix}] " if prefix else ""
+    line = f"{prefix_part}{message}"
+
+    # carriage return means: redraw this same terminal row
+    print(line, end="\r", file=PROGRESS_STREAM, flush=True)
+    _PROGRESS_ACTIVE = True
 
 
 def progress_clear_if_needed() -> None:
     """
-    Placeholder used by po_job_scraper.py to clear progress lines.
-
-    Right now this can safely be a no-op; if we later implement fancy
-    single-line progress updates, we can put that logic here without
-    changing the rest of the code.
+    If the last output was a single line progress update using \\r,
+    print a newline so the next log starts on a fresh row.
     """
-    # No-op for now
-    return None
+    global _PROGRESS_ACTIVE
+    if _PROGRESS_ACTIVE:
+        print("", file=PROGRESS_STREAM, flush=True)
+        _PROGRESS_ACTIVE = False
 
 
 def log_event(

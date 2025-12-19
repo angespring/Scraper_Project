@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from logging_utils import warn, info, debug, log_line
-from logging_utils import warn, info, debug
+from logging_utils import log_event  # used for structured [GS] log lines
 
 
 
@@ -41,13 +41,11 @@ def _gs_log(level: str, msg: str) -> None:
     Uses the same log_line formatting as the main scraper logs,
     with a [GS] prefix so messages are easy to spot.
     """
-    log_event(
-        level,
-        "[GS]",
-        title="",
-        right={"message": msg},
-        url="",
-    )
+    try:
+        log_event(level, msg, left="[GS] ")
+    except Exception:
+        # Fallback to simple line logging if the structured logger signature changes
+        log_line(level, msg, prefix="GS")
 
 
 def init_gs_libs() -> None:
@@ -321,7 +319,7 @@ def to_keep_sheet_row(keep_row, applied="", reason=""):
         "Posting Date": _normalize_sheet_value(
             keep_row.get("Posting Date") or keep_row.get("Posted") or period
         ),
-         "Valid Through": _normalize_sheet_value(keep_row.get("Valid Through", "")),
+        "Valid Through": _normalize_sheet_value(keep_row.get("Valid Through", "")),
         "Job URL": _normalize_sheet_value(keep_row.get("Job URL", "")),
         "Apply URL": _normalize_sheet_value(keep_row.get("Apply URL", "")),
         "Apply URL Note": _normalize_sheet_value(keep_row.get("Apply URL Note", "")),
@@ -357,19 +355,19 @@ def to_skipped_sheet_row(skip_row, applied="", reason=""):
         "Posting Date": _normalize_sheet_value(skip_row.get("Posting Date", "")),
         "Valid Through": _normalize_sheet_value(skip_row.get("Valid Through", "")),
         "Job URL": _normalize_sheet_value(skip_row.get("Job URL", "")),
-        "Apply URL": _normalize_sheet_value(skip_row.get("Apply URL", "")),
-        "Apply URL Note": _normalize_sheet_value(skip_row.get("Apply URL Note", "")),
+        #"Apply URL": _normalize_sheet_value(skip_row.get("Apply URL", "")),
+        #"Apply URL Note": _normalize_sheet_value(skip_row.get("Apply URL Note", "")),
+        "Reason Skipped": _normalize_sheet_value(skip_row.get("Reason Skipped", reason)),
         "WA Rule": _normalize_sheet_value(skip_row.get("WA Rule", "")),
         "Remote Rule": _normalize_sheet_value(skip_row.get("Remote Rule", "")),
         "US Rule": _normalize_sheet_value(skip_row.get("US Rule", "")),
-        "Reason Skipped": _normalize_sheet_value(skip_row.get("Reason Skipped", reason)),
-        "Skip Rule": _normalize_sheet_value(skip_row.get("Skip Rule", "")),
         "Salary Max Detected": _normalize_sheet_value(skip_row.get("Salary Max Detected", "")),
-        "Salary Rule": _normalize_sheet_value(skip_row.get("Salary Rule", "")),
-        "Salary Near Min": _normalize_sheet_value(skip_row.get("Salary Near Min", "")),
-        "Salary Status": _normalize_sheet_value(skip_row.get("Salary Status", "")),
-        "Salary Note": _normalize_sheet_value(skip_row.get("Salary Note", "")),
-        "Salary Est. (Low-High)": _normalize_sheet_value(skip_row.get("Salary Est. (Low-High)", "")),
+        "Skip Rule": _normalize_sheet_value(skip_row.get("Skip Rule", "")),
+        #"Salary Rule": _normalize_sheet_value(skip_row.get("Salary Rule", "")),
+        #"Salary Near Min": _normalize_sheet_value(skip_row.get("Salary Near Min", "")),
+        #"Salary Status": _normalize_sheet_value(skip_row.get("Salary Status", "")),
+        #"Salary Note": _normalize_sheet_value(skip_row.get("Salary Note", "")),
+        #"Salary Est. (Low-High)": _normalize_sheet_value(skip_row.get("Salary Est. (Low-High)", "")),
         "Location Chips": _normalize_sheet_value(skip_row.get("Location Chips", "")),
         "Applicant Regions": _normalize_sheet_value(skip_row.get("Applicant Regions", "")),
     }

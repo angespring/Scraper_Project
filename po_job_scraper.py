@@ -12,7 +12,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
-from classification_rules import ClassificationConfig, classify_keep_or_skip #_log_location_debug
+from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode
+from edsurge_jobs import scrape_edsurge_jobs
 from gsheets_utils import (
     init_gs_libs,
     log_startup_warning_if_needed,
@@ -32,6 +33,8 @@ from logging_utils import (
     progress,
     progress_clear_if_needed,
 )
+
+
 
 
 
@@ -81,6 +84,51 @@ SALARY_CEIL = None
 
 
 
+from datetime import datetime  # if not already imported
+
+
+def base_row_from_listing(listing: dict, board_name: str, detail_url: str) -> dict:
+    """Build the base spreadsheet row from a listing dict."""
+
+    # Start with all the columns your Sheet expects
+    row = {
+        "Applied?": "",
+        "Reason": "",
+        "Date Scraped": datetime.now().strftime("%Y-%m-%d"),
+        "Title": listing.get("title") or "",
+        "Job ID (Vendor)": listing.get("job_id") or "",
+        "Job ID (Numeric)": "",
+        "Job Key": "",
+        "Company": listing.get("company") or "",
+        "Career Board": board_name,
+        "Location": listing.get("location") or "",
+        "Posted": "",
+        "Posting Date": listing.get("posting_date") or "",
+        "Valid Through": listing.get("valid_through") or "",
+        "Job URL": detail_url,
+        "Apply URL": "",
+        "Apply URL Note": "",
+        "Description Snippet": listing.get("snippet") or "",
+        "WA Rule": "",
+        "Remote Rule": "",
+        "US Rule": "",
+        "Salary Max Detected": "",
+        "Salary Rule": "",
+        "Salary Near Min": "",
+        "Salary Status": "",
+        "Salary Note": "",
+        "Salary Est. (Low-High)": "",
+        "Location Chips": "",
+        "Applicant Regions": "",
+        "Visibility Status": "",
+        "Confidence Score": "",
+        "Confidence Mark": "",
+    }
+
+    return row
+
+
+
 def _ansi_ok() -> bool:
     try:
         import sys, os
@@ -114,6 +162,8 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         progress_clear_if_needed()
     except NameError:
         pass
+    # Avoid double timestamps if msg is already prefixed (e.g., upstream logger)
+    #already_ts = bool(re.match(r"\[\d{4}-\d{2}-\d{2}", str(msg).lstrip()))
     ts = _dt.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
     head = f"{ts} {section:<22}"  # 22 keeps your label column tidy
     width = width or shutil.get_terminal_size(fallback=(120, 22)).columns
@@ -141,18 +191,26 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         pass
 
 # colors + painter
-RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m"
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m" 
+BRIGHT_GREEN = "\033[92m"
+
 def _ansi_ok() -> bool:
     import sys, os
     return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
+def FG256(n: int) -> str:
+    return f"\033[38;5;{n}m"
+
+#DARK_GREEN = FG256(22)   # deep forest green
+# other nice greens: 28, 34, 40
+
 LEVEL_COLOR = {
     "ERROR": RED, "WARN": YELLOW, "INFO": CYAN,
-    "KEEP": GREEN, "SKIP": DIM, "SETUP": RESET,
+    "KEEP": DIM + GREEN, "SKIP": DIM + MAGENTA, "SETUP": RESET,
     "ENV": RESET, "BACKUP": RESET, "DONE": RESET, "GS": CYAN,
 }
 # Accent colors to make KEEP/SKIP title lines pop
-KEEP_TITLE_COLOR = BLUE
+KEEP_TITLE_COLOR = GREEN
 SKIP_TITLE_COLOR = MAGENTA
 
 def _paint(label: str) -> str:
@@ -184,7 +242,7 @@ def debug(msg: str) -> None:
         if isinstance(target, dict):
             target.setdefault("__debug_rows", []).append(str(msg))
             return
-    log_line("DEBUG", msg)
+#    log_line("DEBUG", msg)             --- IGNORE --- 20251215
 def backup(msg: str) -> None:   log_line("BACKUP", msg)
 def keep_log(msg: str) -> None: log_line("KEEP", msg)
 def skip_log(msg: str) -> None: log_line("SKIP", msg)
@@ -254,8 +312,17 @@ if 'log' not in globals() or isinstance(globals()['log'], logging.Logger):
 
 
 # --- live progress state + helpers (single place, top-level) ---
+import shutil
 from wcwidth import wcswidth
-from threading import Event, Thread
+from threading import Event, Thread, Lock
+_IO_LOCK = Lock()
+
+
+
+
+def _dispw(s: str) -> int:
+    w = wcswidth(s)
+    return w if w >= 0 else len(s)
 
 _SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 _PROGRESS_STATE = {
@@ -302,15 +369,27 @@ def _progress_render(force: bool = False) -> None:
     now = time.time()
     if not force and (now - state["last_render"]) < 0.1:
         return
+
     state["spinner"] = (state["spinner"] + 1) % len(_SPINNER_FRAMES)
     line = _progress_now()
-    width = globals().get("_LOG_WRAP_WIDTH", 120)
-    sys.stdout.write("\r" + line.ljust(width))
+
+    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
+    pad_to = max(cols - 1, 1)  # leave a little breathing room
+
+    visible = _dispw(line)
+    if visible < pad_to:
+        out = line + (" " * (pad_to - visible))
+    else:
+        out = line
+
+    sys.stdout.write("\r" + out)
     sys.stdout.flush()
+
     state["last_line"] = line
-    state["last_width"] = len(line)
+    state["last_width"] = pad_to
     state["last_render"] = now
     state["needs_redraw"] = False
+
 
 
 def progress_set_total(n: int) -> None:
@@ -357,10 +436,15 @@ def progress_tick(i: int | None = None, kept: int | None = None, skip: int | Non
 
 def progress_clear_if_needed(permanent: bool = False) -> None:
     state = _PROGRESS_STATE
-    if not state["last_line"]:
+    if not state["last_line"] and not state["active"]:
         return
-    sys.stdout.write("\r" + " " * state["last_width"] + "\r")
+
+    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
+    pad_to = max(cols - 1, 1)
+
+    sys.stdout.write("\r" + (" " * pad_to) + "\r")
     sys.stdout.flush()
+
     state["needs_redraw"] = not permanent
     if permanent:
         state["active"] = False
@@ -414,23 +498,27 @@ def _spinner_stop_thread() -> None:
 _builtin_print = print
 
 
-def log_print(msg: str, color: str | None = None) -> None:
-    prefix = _bkts()
-    progress_clear_if_needed()
-    line = f"{prefix} {msg}"
-    if color and _ansi_ok():
-        line = f"{color}{line}{RESET}"
-    _builtin_print(line)
-    progress_refresh_after_log()
+def log_print(msg: str, color: str | None = None, color_prefix: bool = False) -> None:
+    # Avoid double timestamps if msg already contains one
+    has_ts = bool(re.match(r"^\s*\[\d{4}-\d{2}-\d{2}", str(msg)))
+    prefix = "" if has_ts else _bkts()
 
-
-def log_print_plain(msg: str, color: str | None = None) -> None:
-    """Print without adding a timestamp prefix (useful for multi-line blocks)."""
     progress_clear_if_needed()
-    line = f"{msg}"
+
+    lead = f"{prefix + ' ' if prefix else ''}"
+    body = f"{msg}"
+
     if color and _ansi_ok():
-        line = f"{color}{line}{RESET}"
-    _builtin_print(line)
+        if color_prefix:
+            line = f"{color}{lead}{body}{RESET}"
+        else:
+            line = f"{lead}{color}{body}{RESET}"
+    else:
+        line = f"{lead}{body}"
+
+    # IMPORTANT: send logs to stderr so stdout is reserved for the spinner line
+    print(line, file=sys.stderr)
+
     progress_refresh_after_log()
 
 
@@ -782,26 +870,34 @@ from dateutil.tz import tzoffset
 from dateutil.parser import UnknownTimezoneWarning
 warnings.filterwarnings("ignore", category=UnknownTimezoneWarning)
 
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl, urlencode
 
 def _job_key(details: dict, link: str) -> str:
     """
     Build a stable key so we only process the same job once per run.
 
-    Use the full URL (host + path + query) as the primary key so each req
-    stays unique. Fall back to whatever link we have if parsing fails.
+    Normalize the URL so tracking/pagination params don't create new keys
+    for the same job.
     """
     job_url = details.get("Job URL") or details.get("job_url") or link
+
     try:
         p = urlparse(job_url)
-        clean = urlunparse((
-            p.scheme.lower(),
-            p.netloc.lower(),
-            p.path.rstrip("/") or "/",
-            p.params,
-            p.query,
-            "",
-        ))
+        host = p.netloc.lower()
+        path = p.path.rstrip("/") or "/"
+
+        drop = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+            "ref", "referrer", "source", "_hsmi", "_hsenc", "gh_src", "page", "p", "start",
+        }
+        kept = []
+        for k, v in parse_qsl(p.query, keep_blank_values=True):
+            if k.lower() in drop:
+                continue
+            kept.append((k.lower(), v))
+
+        q = urlencode(kept, doseq=True)
+        clean = urlunparse((p.scheme.lower(), host, path, "", q, ""))
         return clean or job_url.lower()
     except Exception:
         return (job_url or link or "").lower()
@@ -1055,6 +1151,44 @@ def parse_remotive(soup, job_url):
 
     return out
 
+def collect_dice_links(listing_url: str, max_pages: int = 25) -> list[str]:
+    """Walk Dice /jobs?page=N pagination and dedupe links across pages."""
+    seen, out = set(), []
+
+    # Try to start from whatever page the URL already has
+    try:
+        start_page = int((up.parse_qs(up.urlparse(listing_url).query).get("page") or ["1"])[0])
+    except Exception:
+        start_page = 1
+
+    page = start_page
+    while page <= max_pages:
+        url = _set_qp(listing_url, page=page)
+        set_source_tag(url)
+
+        html = get_html(url)  # will use Playwright for dice.com in your setup
+        if not html:
+            break
+
+        links = find_job_links(html, url)
+
+        added = 0
+        for lk in links:
+            if lk not in seen:
+                seen.add(lk)
+                out.append(lk)
+                added += 1
+
+        # stop when a page contributes nothing new
+        if added == 0:
+            break
+
+        random_delay()
+        page += 1
+
+    return out
+
+
 def parse_dice(soup, job_url):
     out = {}
     for obj in _extract_json_ld(soup):
@@ -1305,39 +1439,67 @@ import re
 from datetime import datetime
 from html import unescape
 
+
 import re
 from html import unescape
-from datetime import datetime
+
 
 def enrich_dice_fields(details: dict, raw_html: str) -> dict:
     """
     Normalize a Dice job-detail page.
 
     - `details["Apply URL"]` should already be the job-detail URL.
-    - `raw_html` should be the full HTML (what you'd see in view-source).
+    - `raw_html` should be the full HTML (what you see in view-source).
     """
 
     html = raw_html
 
-    # 1. Title / Company / Location from <title>
+    # 1. Title / Company / Location from og:title
     #    Example:
-    #    <title>Product Owner Payments Industry ::: Remote - REDLEO SOFTWARE INC. - Remote</title>
-    m = re.search(r"<title>(.*?)</title>", html, flags=re.DOTALL | re.IGNORECASE)
-    if m:
-        title_full = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
-        parts = [p.strip() for p in title_full.split(" - ")]
-        if parts:
-            details.setdefault("Title", parts[0])
-            details.setdefault("Job Title", parts[0])
-        if len(parts) >= 2:
-            details.setdefault("Company", parts[1])
-        if len(parts) >= 3:
-            details.setdefault("Location", parts[2])
-            details.setdefault("Location Raw", parts[2])
+    #    <meta property="og:title"
+    #      content="Workday Federal - Talent, Learning and Recruiting Lead - Navigant Consulting - McLean, VA">
+    title_meta = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if title_meta:
+        raw_title = unescape(title_meta.group(1)).strip()
+        parts = [p.strip() for p in raw_title.split(" - ") if p.strip()]
 
-    # 2. Company fallback from the company link
-    #    ...company-profile/... data-
-    #    cy="companyNameLink">REDLEO SOFTWARE INC.</a>
+        if len(parts) >= 3:
+            # Everything except the last two pieces is the full job title
+            title = " - ".join(parts[:-2])
+            company_from_title = parts[-2]
+            location_from_title = parts[-1]
+        elif len(parts) == 2:
+            title, company_from_title = parts
+            location_from_title = None
+        else:
+            title = raw_title
+            company_from_title = None
+            location_from_title = None
+
+        details.setdefault("Title", title)
+
+        if company_from_title:
+            details.setdefault("Company", company_from_title)
+
+        if location_from_title:
+            details.setdefault("Location", location_from_title)
+            details.setdefault("Location Raw", location_from_title)
+
+    # 2. Prefer branded company name from JSON if present
+    #    ... "company_name":"Guidehouse" ...
+    brand_match = re.search(r'"company_name"\s*:\s*"([^"]+)"', html)
+    if brand_match:
+        brand = unescape(brand_match.group(1)).strip()
+        if brand:
+            # Always upgrade to the branded name
+            details["Company"] = brand
+
+    # 3. Company fallback from the company link if still missing
+    #    data-cy="companyNameLink">REDLEO SOFTWARE INC.</a>
     if not details.get("Company"):
         m = re.search(
             r'companyNameLink"\s*>\s*([^<]+)</a>',
@@ -1348,7 +1510,21 @@ def enrich_dice_fields(details: dict, raw_html: str) -> dict:
             company = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
             details.setdefault("Company", company)
 
-    # 3. Location fallback from the chip span
+    # 4. Strong location fallback from header line
+    #    <li data-cy="location">McLean, VA</li>
+    if not details.get("Location") or "Consulting" in details.get("Location", ""):
+        m = re.search(
+            r'<li[^>]+data-cy=["\']location["\'][^>]*>([^<]+)</li>',
+            html,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if m:
+            loc = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+            if loc:
+                details["Location"] = loc
+                details.setdefault("Location Raw", loc)
+
+    # 5. Location chip fallback (Remote, On Site, Hybrid) if still missing
     #    <span id="location: Remote">Remote</span>
     if not details.get("Location"):
         m = re.search(
@@ -1361,9 +1537,12 @@ def enrich_dice_fields(details: dict, raw_html: str) -> dict:
             details.setdefault("Location", loc)
             details.setdefault("Location Raw", loc)
 
-    # 4. "Posted ..." line from the timeAgo span (best-effort)
-    #    <span id="timeAgo">Posted 4 days ago | <!-- --> <!-- -->Updated 4 days ago</span>
-    if not details.get("Posted Raw"):
+    # 6. "Posted ..." line from the timeAgo span (best effort)
+    #    <span id="timeAgo">Posted 4 days ago | Updated 4 days ago</span>
+    if not details.get("Posted Raw") or not details.get("Posted"):
+        posted_raw = None
+
+        # Try the span first
         m = re.search(
             r'id="timeAgo"[^>]*>([^<]+)',
             html,
@@ -1371,19 +1550,32 @@ def enrich_dice_fields(details: dict, raw_html: str) -> dict:
         )
         if m:
             posted_raw = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
-            details.setdefault("Posted Raw", posted_raw)
 
-    # 5. Basic description fallback so your salary logic still has text to analyze.
-    #    This is crude but safe: if no Description is set yet, feed the whole page text.
+        # Fallback to JSON "timeAgo" if needed
+        if not posted_raw:
+            m = re.search(
+                r'"timeAgo"\s*:\s*"([^"]+)"',
+                html,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+            if m:
+                posted_raw = unescape(re.sub(r"\s+", " ", m.group(1))).strip()
+
+        if posted_raw:
+            details.setdefault("Posted Raw", posted_raw)
+            details.setdefault("Posted", posted_raw)
+
+
+    # 7. Basic description fallback so salary logic still has text
     if not details.get("Description"):
         text_only = re.sub(r"<[^>]+>", " ", html)
         text_only = re.sub(r"\s+", " ", text_only).strip()
 
-        max_desc_len = 2000  # or 1000 / 1500 if you want shorter
+        max_desc_len = 2000
         details["Description"] = text_only[:max_desc_len]
         details["Description Snippet"] = text_only[:300]
 
-    # 6. Set the Job URL and board markers
+    # 8. Job URL and board markers
     if "Job URL" not in details and "Apply URL" in details:
         details["Job URL"] = details["Apply URL"]
 
@@ -1474,29 +1666,61 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
             emp_type = tag
             break
 
-    # Remote / onsite signal
+    # Remote / onsite signal (prefer explicit Hybrid over Remote/onsite)
     remote_flag = "unknown_or_onsite"
-    if "remote" in block:
-        remote_flag = "Remote"
-    elif "hybrid" in block:
-        remote_flag = "Hybrid"
-    elif "onsite" in block or "on-site" in block:
-        remote_flag = "Onsite"
-    elif "in-office" in block or "in office" in block:
-        remote_flag = "Onsite"
+
+    # Workday detail pages often expose a labeled "remote type" row; grab it directly if present
+    try:
+        import re as _re
+        rt_label = soup.find(string=_re.compile(r"remote\s*type", _re.I))
+        if rt_label:
+            dd = rt_label.find_next("dd")
+            if dd and dd.get_text(strip=True):
+                remote_flag = dd.get_text(strip=True)
+    except Exception:
+        pass
+
+
+    remote_rule = (details.get("Remote Rule") or details.get("remote_flag") or "Unknown").strip()
+
+    badge_text = " ".join([
+        details.get("workplace_type") or "",
+        details.get("work_mode") or "",
+        details.get("workplace_badge") or "",
+    ]).strip()
+
+    is_biv = "builtinvancouver.org" in job_url
+
+    # If we already have an explicit rule, keep it
+    if remote_rule not in {"Remote", "Hybrid", "Onsite"}:
+        if is_biv:
+            # Avoid page chrome, only trust badge text if present
+            remote_rule = classify_work_mode(badge_text) if badge_text else "Unknown"
+        else:
+            t = f"{text} {badge_text}".lower()
+            remote_rule = classify_work_mode(t)
 
     for sel in [
-        "[data-test='job-location']",
+        '[data-test-id="location"]',
         ".job-location",
-        "meta[property='og:locale']",
+        'meta[property="og:locale"]',
     ]:
         node = soup.select_one(sel)
         if not node:
             continue
+
         txt = node.get("content") if node.name == "meta" else node.get_text(" ", strip=True)
         if txt:
             loc = txt.strip()
             break
+
+    # Workday HTML fallback: data-automation-id="locations" often holds the main location
+    if not loc:
+        loc_node = soup.find(attrs={"data-automation-id": "locations"})
+        if loc_node:
+            loc_txt = loc_node.get_text(" ", strip=True)
+            if loc_txt:
+                loc = loc_txt
 
     # Description snippet (lightweight)
     desc = ""
@@ -1583,7 +1807,7 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
 
     details = {
         "Title": title,
-        "Company": company or "HubSpot",
+        "Company": "HubSpot",
         "Location": loc,
         "job_url": job_url,
         "apply_url": apply_url,
@@ -1661,9 +1885,12 @@ def _prune_non_job_sections(soup, host: str) -> None:
     generic = [
         "aside",
         ".sidebar",
-        '*:div:-soup-contains("Similar Jobs")',
-        '*:div:-soup-contains("Recommended jobs")',
-        '*:div:-soup-contains("People also viewed")',
+        'div:-soup-contains("Similar Jobs")',
+        'section:-soup-contains("Similar Jobs")',
+        'div:-soup-contains("Recommended jobs")',
+        'section:-soup-contains("Recommended jobs")',
+        'div:-soup-contains("People also viewed")',
+        'section:-soup-contains("People also viewed")',
         '[aria-label*="Similar"]',
     ]
     for sel in generic:
@@ -1693,6 +1920,216 @@ def _prune_non_job_sections(soup, host: str) -> None:
             except Exception:
                 pass
 
+# The Muse: pull 'Client-provided Location(s)' text when present.
+def _extract_muse_location(soup: BeautifulSoup) -> str | None:
+    import re as _re
+    try:
+        label = soup.find(string=lambda t: isinstance(t, str) and "client-provided location" in t.lower())
+        container = None
+        if label:
+            container = label.parent
+            if container and container.name in ("b", "strong"):
+                container = container.parent
+        if container:
+            label_text = label.strip() if isinstance(label, str) else ""
+            text = container.get_text(" ", strip=True)
+            if text.lower().startswith(label_text.lower()):
+                text = text[len(label_text):].lstrip(" :·-").strip()
+            if text:
+                return text
+            next_block = container.find_next(string=lambda t: isinstance(t, str) and t.strip())
+            if next_block:
+                return next_block.strip()
+        meta_loc = soup.find("meta", attrs={"name": "jobLocation"})
+        if meta_loc and meta_loc.get("content"):
+            return meta_loc["content"].strip()
+        loc_candidate = soup.find(lambda tag: tag.name in ("span", "div") and tag.get_text() and _re.search(r",\\s*[A-Za-z]{2}", tag.get_text()))
+        if loc_candidate:
+            return loc_candidate.get_text(" ", strip=True)
+    except Exception:
+        return None
+    return None
+
+def _debug_biv(details: dict, host: str, label: str) -> None:
+    if "builtinvancouver.org" not in (host or "").lower():
+        return
+
+
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Location          : {details.get('Location')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada            : {details.get('Canada Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}US                : {details.get('US Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                : {details.get('WA Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote            : {details.get('Remote Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips             : {details.get('Location Chips')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions           : {details.get('Applicant Regions')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary            : {details.get('Salary Range')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Text       : {details.get('Salary Text')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Range      : {details.get('Salary Range')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Status     : {details.get('Salary Source')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Placeholder: {details.get('Salary Placeholder')}")
+
+
+
+import json
+import re
+from typing import Any, Dict, Optional, Tuple
+
+_BUILTIN_RANGE_RX = re.compile(
+    r"""
+    (?:
+        compensation(?:\s+details)? |
+        canada\s+pay\s+range |
+        pay\s+range
+    )
+    [^\$]{0,40}
+    \$\s*(?P<min>[\d,]+(?:\.\d{1,2})?)
+    \s*(?:-|–|—|to)\s*
+    \$\s*(?P<max>[\d,]+(?:\.\d{1,2})?)
+    (?:\s*(?P<cur>CAD|USD))?
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_BUILTIN_CUR_RX = re.compile(r"\b(CAD|USD)\b", re.IGNORECASE)
+_BUILTIN_HOURLY_RX = re.compile(r"\b(per\s*hour|hourly|/hr|/hour)\b", re.IGNORECASE)
+
+def _to_float_num(s: str) -> Optional[float]:
+    try:
+        return float(s.replace(",", "").strip())
+    except Exception:
+        return None
+
+def _walk_json(obj: Any):
+    if isinstance(obj, dict):
+        yield obj
+        for v in obj.values():
+            yield from _walk_json(v)
+    elif isinstance(obj, list):
+        for it in obj:
+            yield from _walk_json(it)
+
+def _extract_salary_from_jsonld(page_text: str) -> Optional[Dict[str, Any]]:
+    # Grab all ld+json blocks, parse any that load
+    blocks = re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        page_text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not blocks:
+        # Sometimes you only have “view-source” text or simplified content
+        blocks = re.findall(
+            r'"@type"\s*:\s*"JobPosting".*?\}\s*\}|\{.*?"@type"\s*:\s*"JobPosting".*?\}',
+            page_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    for raw in blocks:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        for node in _walk_json(data):
+            if not isinstance(node, dict):
+                continue
+            if str(node.get("@type") or "").lower() != "jobposting":
+                continue
+
+            # Common schema patterns
+            sal = node.get("baseSalary") or node.get("estimatedSalary")
+            if not isinstance(sal, dict):
+                continue
+
+            cur = (sal.get("currency") or node.get("salaryCurrency") or "").strip().upper() or None
+            val = sal.get("value")
+
+            min_v = max_v = unit = None
+
+            if isinstance(val, dict):
+                unit = (val.get("unitText") or "").strip().upper() or None
+                min_v = val.get("minValue")
+                max_v = val.get("maxValue")
+                if min_v is None and isinstance(val.get("value"), (int, float)):
+                    min_v = val.get("value")
+                if max_v is None and isinstance(val.get("value"), (int, float)):
+                    max_v = val.get("value")
+            elif isinstance(val, (int, float)):
+                min_v = val
+                max_v = val
+
+            if isinstance(min_v, (int, float)) and isinstance(max_v, (int, float)):
+                salary_text = f"{cur + ' ' if cur else ''}{min_v:,.0f} - {max_v:,.0f}".strip()
+                return {
+                    "Salary From": float(min_v),
+                    "Salary To": float(max_v),
+                    "Salary Currency": cur,
+                    "Salary Unit": unit or "YEAR",
+                    "Salary Text": salary_text,
+                    "Salary Range": salary_text,
+                    "Salary Source": "builtin_jsonld",
+                }
+
+    return None
+
+def _extract_salary_from_visible_text(page_text: str, fallback_currency: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    m = _BUILTIN_RANGE_RX.search(page_text or "")
+    if not m:
+        return None
+
+    lo = _to_float_num(m.group("min") or "")
+    hi = _to_float_num(m.group("max") or "")
+    if lo is None or hi is None:
+        return None
+
+    # Currency: explicit wins, otherwise infer
+    cur = (m.group("cur") or "").upper().strip() or None
+    if not cur:
+        # Look nearby for CAD/USD, else fallback
+        window = (page_text[m.start(): m.end() + 80] if page_text else "")
+        cur2 = _BUILTIN_CUR_RX.search(window)
+        cur = (cur2.group(1).upper() if cur2 else None) or fallback_currency
+
+    # Unit: hourly if obvious, else year
+    window2 = (page_text[m.start(): m.end() + 120] if page_text else "")
+    unit = "HOUR" if _BUILTIN_HOURLY_RX.search(window2) else "YEAR"
+
+    salary_text = f"{cur + ' ' if cur else ''}{lo:,.2f} - {hi:,.2f}".strip()
+    return {
+        "Salary From": lo,
+        "Salary To": hi,
+        "Salary Currency": cur,
+        "Salary Unit": unit,
+        "Salary Text": salary_text,
+        "Salary Range": salary_text,
+        "Salary Source": "builtin_text",
+    }
+
+def apply_builtin_salary(details: Dict[str, Any]) -> None:
+    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
+    if "builtin" not in job_url:
+        return
+
+    # Do not overwrite an existing structured salary
+    if details.get("Salary Range") or details.get("Salary Text"):
+        return
+
+    page_text = details.get("page_text") or ""
+    # Built In Vancouver is overwhelmingly CAD, builtin.com is usually USD
+    fallback_currency = "CAD" if "builtinvancouver.org" in job_url else "USD"
+
+    sal = _extract_salary_from_jsonld(page_text)
+    if not sal:
+        sal = _extract_salary_from_visible_text(page_text, fallback_currency=fallback_currency)
+
+    if sal:
+        details.update(sal)
+
+
+
+
 def extract_job_details(html: str, job_url: str) -> dict:
     """
     Generic page detail parser used by many boards.
@@ -1700,15 +2137,107 @@ def extract_job_details(html: str, job_url: str) -> dict:
     """
     company_from_header = None
     board_from_header = None
-    details = {}
-    soup = BeautifulSoup(html or "", "html.parser")
-    host = up.urlparse(job_url).netloc.lower()
-    builtin_meta = _extract_builtin_job_meta(soup) if "builtin.com" in host else {}
+    details: dict = {}
+    builtin_meta: dict = {}
 
-    # strip sidebars / similar jobs so their numbers don't leak
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    host = (up.urlparse(job_url).netloc or "").lower()
+
+    # IMPORTANT: remove Similar Jobs etc before any location scraping
     _prune_non_job_sections(soup, host)
 
-    # prefer the main article area for any text-based parsing (salary, dates, etc.)
+
+    # Built In: lock parsing to the main job card so Similar Jobs can't contaminate fields
+    if "builtin.com" in host or "builtinvancouver.org" in host:
+        card = _builtin_job_card_scope(soup, job_url)
+        try:
+            builtin_meta = _extract_builtin_job_meta(card) or {}
+        except Exception:
+            builtin_meta = {}
+        
+        if "dice.com" in host and "/job-detail/" in job_url:
+            details["Career Board"] = "Dice"
+            details.setdefault("Apply URL", job_url)
+            details = enrich_dice_fields(details, html)
+            return details
+
+
+        loc = _builtin_extract_location_from_card(card)
+        if loc:
+            details["Location"] = loc
+            details.setdefault("Location Raw", loc)
+
+        rr = _builtin_extract_remote_rule_from_card(card)
+        if rr:
+            details["Remote Rule"] = rr
+        
+        # Built In Vancouver: infer remote when the effective location is Canada
+        if "builtinvancouver.org" in host:
+            loc_norm = (details.get("Location") or "").strip().lower()
+            if loc_norm in {"canada", "ca", "can"}:
+                details["Location"] = "Canada"
+                details.setdefault("Location Raw", "Canada")
+                details["Remote Rule"] = "Remote"
+
+
+    if "builtinvancouver.org" in host:
+        hero_country = _builtin_hero_country(soup)
+        existing_loc = (details.get("Location") or "").strip()
+
+        if hero_country and (not existing_loc or existing_loc.lower() in {"canada", "ca", "can"}):
+            details["Location"] = hero_country
+            details["Location Raw"] = hero_country
+            details = _derive_location_rules(details)
+            _debug_biv(details, host, "after hero_country lock + derive")
+        else:
+            _debug_biv(details, host, "skipped hero_country lock (location already set)")
+
+
+    # Built In inline meta for title/company/location/salary where available
+    #builtin_meta: dict = {}
+    #if "builtin.com" in host or "builtinvancouver.org" in host:
+        #try:
+            #builtin_meta = _extract_builtin_job_meta(soup) or {}
+        #except Exception:
+            #builtin_meta = {}
+
+
+    def _strip_recommendations(soup_obj, page_host: str) -> None:
+        """
+        Drop right rail / recommended jobs blocks that often contain other salaries.
+        Best effort only.
+        """
+        selectors = [
+            "aside",
+            ".sidebar",
+            '*:div:-soup-contains("Similar jobs")',
+            '*:div:-soup-contains("Similar Jobs")',
+            '*:div:-soup-contains("You might be interested in")',
+            '*:div:-soup-contains("Recommended jobs")',
+            '*:div:-soup-contains("People also viewed")',
+        ]
+        if "edtech.com" in page_host:
+            selectors += [
+                '*:div:-soup-contains("Here are some similar Product Development jobs")',
+            ]
+        if "themuse.com" in page_host:
+            selectors += ['[role="complementary"]']
+
+        for sel in selectors:
+            try:
+                for node in soup_obj.select(sel):
+                    container = node
+                    for _ in range(2):
+                        if container.parent and container.parent.name not in ("html", "body"):
+                            container = container.parent
+                    container.decompose()
+            except Exception:
+                # selectors are best effort only
+                pass
+
+    _strip_recommendations(soup, host)
+
     main = (
         soup.select_one("main")
         or soup.select_one("article")
@@ -1716,70 +2245,24 @@ def extract_job_details(html: str, job_url: str) -> dict:
         or soup.body
     )
     page_text = main.get_text(" ", strip=True) if main else soup.get_text(" ", strip=True)
-
-    # make this available to all downstream checks
     details["page_text"] = page_text
 
+    # Muse: location override
+    if "themuse.com" in host:
+        muse_loc = _extract_muse_location(soup)
+        if muse_loc:
+            details["Location"] = muse_loc
 
-    # --- remove “similar/related” blocks before any parsing ---
-    def _strip_recommendations(soup, host: str) -> None:
-        """
-        Drop sidebars and 'similar jobs' sections so salary parsing cannot
-        pick up numbers from unrelated listings or ads.
-        """
-        # generic selectors first
-        selectors = [
-            "aside",
-            ".sidebar",
-            '*:div:-soup-contains("Similar Jobs")',
-            '*:div:-soup-contains("You might be interested in")',
-            '*:div:-soup-contains("Recommended jobs")',
-            '*:div:-soup-contains("People also viewed")',
-        ]
-
-        # site-specific cleanup
-        if "edtech.com" in host:
-            # The page shows: “Here are some similar Product Development jobs…”
-            selectors += [
-                '*:div:-soup-contains("Here are some similar Product Development jobs")',
-                'div:has(h2:div:-soup-contains("Similar Product Development jobs"))',
-            ]
-        if "themuse.com" in host:
-            # Muse often nests the right rail in an aside or a div with role=“complementary”
-            selectors += ['[role="complementary"]']
-
-        # try to drop each matched container
-        for sel in selectors:
-            try:
-                for node in soup.select(sel):
-                    # remove a reasonably large container, not just the heading text
-                    # go up one or two levels if we only hit a header
-                    container = node
-                    for _ in range(2):
-                        if container.parent and container.parent.name not in ("html", "body"):
-                            container = container.parent
-                    container.decompose()
-            except Exception:
-                # selectors are best-effort; ignore if Soupsieve cannot match
-                pass
-
-    # call it right after creating soup + host
-    _strip_recommendations(soup, host)
-    # --- end strip block ---
-
-
-    # --- Extract JobPosting JSON-LD if present ---
+    # --- JSON LD helper parse (central place) ---
     try:
         ld_data = parse_jobposting_ldjson(html)
         if ld_data:
             details.update({k: v for k, v in ld_data.items() if v})
     except Exception as e:
-        warn("⚠️ WARN","].JSON-LD parse failed: {e}")
+        warn("WARN", f"JSON-LD parse failed: {e}")
 
-        # --- Extract JSON-LD metadata (Remotive, Muse, WTTJ, etc.) ---
+    # Additional sweep for Posting Date / Valid Through
     import json as _json
-
-    # Walk all ld+json blocks and look for JobPosting objects
     for tag in soup.find_all("script", type="application/ld+json"):
         txt = (tag.string or "").strip()
         if not txt:
@@ -1788,28 +2271,22 @@ def extract_job_details(html: str, job_url: str) -> dict:
             node = _json.loads(txt)
         except Exception:
             continue
-
         objs = node if isinstance(node, list) else [node]
         for obj in objs:
             if not isinstance(obj, dict):
                 continue
             if obj.get("@type") not in ("JobPosting", ["JobPosting"]):
                 continue
-
             dp = obj.get("datePosted")
             vt = obj.get("validThrough")
-
             if dp and not details.get("Posting Date"):
                 details["Posting Date"] = parse_date_relaxed(dp)
             if vt and not details.get("Valid Through"):
                 details["Valid Through"] = parse_date_relaxed(vt)
-
-        # stop early if we got both
         if details.get("Posting Date") and details.get("Valid Through"):
             break
 
-
-    # ---- Title
+    # ---- Title ----
     title = ""
     h1 = soup.find("h1")
     if h1 and h1.get_text(strip=True):
@@ -1822,32 +2299,28 @@ def extract_job_details(html: str, job_url: str) -> dict:
         title = soup.title.get_text(strip=True)
     if builtin_meta.get("title"):
         title = builtin_meta["title"]
-    if "builtin.com" in host:
+    if "builtin.com" in host or "builtinvancouver.org" in host:
         title = _strip_builtin_brand(title)
 
-    # --- Workday: early salary hint, but keep it generic and warning-free ---
-    def _extract_workday_salary_text(soup) -> str:
-        """Best-effort salary grab for pages with salary sections."""
+    # Workday helper to grab friendly salary text for later parsing
+    def _extract_workday_salary_text(soup_obj) -> str:
         import re as _re
-            # Require a real money pattern (with $) so we do not grab "1861" from UW1861, etc.
         amt_pattern = _re.compile(
             r"\$\s?\d[\d,]{2,}(?:\s*[-–]\s*\$\s?\d[\d,]{2,})?"
         )
-        label_re = _re.compile(r"(salary|compensation|pay range|pay-rate|pay range minimum|pay range maximum)", _re.I)
-
-        # First try any node that mentions salary/compensation/pay
-        for node in soup.find_all(string=label_re):
+        label_re = _re.compile(
+            r"(salary|compensation|pay range|pay-rate|pay range minimum|pay range maximum)",
+            _re.I,
+        )
+        for node in soup_obj.find_all(string=label_re):
             try:
                 parent = node.parent
                 chunk = " ".join(parent.get_text(" ", strip=True).split())
             except Exception:
                 chunk = str(node) or ""
-
             m = amt_pattern.search(chunk)
             if m:
                 return m.group(0).strip()
-
-            # Check nearby siblings for the amount
             sib_text = ""
             try:
                 for sib in parent.next_siblings:
@@ -1859,57 +2332,43 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         break
             except Exception:
                 pass
-
             m = amt_pattern.search(sib_text)
             if m:
                 return m.group(0).strip()
-
-        # Fallback: search the whole document once for a plausible range
-        m = amt_pattern.search(soup.get_text(" ", strip=True))
+        m = amt_pattern.search(soup_obj.get_text(" ", strip=True))
         return m.group(0).strip() if m else ""
-
-    host = (urlparse(job_url).hostname or "").lower()
 
     if "dice.com" in host and "/job-detail/" in job_url:
         details["Career Board"] = "Dice"
         details.setdefault("Apply URL", job_url)
-        details = enrich_dice_fields(details, html)   # ← pass raw HTML, not page_text
+        details = enrich_dice_fields(details, html)
         return details
-    
 
     if "workday" in host:
         sal_txt = _extract_workday_salary_text(soup)
         if sal_txt:
-            # Provide a stable field that enrich_salary_fields will parse
             details.setdefault("Salary Range", sal_txt)
             details.setdefault("Salary Est. (Low-High)", sal_txt)
 
-    # Y Combinator: pull from Next.js __NEXT_DATA__ if the static markup looks like 404
-    # Y Combinator: derive company + title from URL / meta instead of brittle __NEXT_DATA__
+    # YC: derive company from URL if possible
     if "ycombinator.com" in host:
         from urllib.parse import urlparse as _yc_urlparse
-
         try:
             parsed = _yc_urlparse(job_url)
             parts = [p for p in parsed.path.split("/") if p]
         except Exception:
             parts = []
-
-        # Company slug lives between "companies" and "jobs"
         if "companies" in parts:
             try:
                 idx = parts.index("companies")
                 if idx + 1 < len(parts):
                     comp_slug = parts[idx + 1]
-                    # "cozmo-ai" -> "cozmo ai"
                     comp_name = comp_slug.replace("-", " ").replace("_", " ").strip()
                     if comp_name:
                         company_from_header = comp_name
             except Exception:
                 pass
 
-    # Fix broken / generic titles like "404" or "All Open Positions"
-    # by preferring og:title, then falling back to the URL slug.
     def _is_bad_title(t: str) -> bool:
         if not t:
             return True
@@ -1923,20 +2382,15 @@ def extract_job_details(html: str, job_url: str) -> dict:
         return False
 
     if _is_bad_title(title):
-        # 1) Try <meta property="og:title">
         ogt = soup.find("meta", attrs={"property": "og:title"})
         og_title = ""
         if ogt and ogt.get("content"):
             og_title = ogt.get("content", "").strip()
-
         if og_title and not _is_bad_title(og_title):
-            # Use og:title only if it is not another generic label
             title = og_title
         else:
-            # 2) Fallback: build a title from the URL slug after /jobs/
-            seg = ""
             parts = [p for p in up.urlparse(job_url).path.split("/") if p]
-
+            seg = ""
             if "jobs" in parts:
                 try:
                     j_idx = parts.index("jobs")
@@ -1944,23 +2398,14 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         seg = parts[j_idx + 1]
                 except Exception:
                     seg = ""
-
             if not seg and parts:
                 seg = parts[-1]
-
             if seg:
-                # "senior-technical-product-manager_new-york"
-                # -> "Senior Technical Product Manager New York"
-                cleaned = (
-                    seg.replace("-", " ")
-                       .replace("_", " ")
-                       .strip()
-                )
+                cleaned = seg.replace("-", " ").replace("_", " ").strip()
                 if cleaned:
                     title = cleaned.title()
 
-    
-    #host = up.urlparse(job_url).netloc.lower()
+    # Board specific detail extractors
     board_extractors = {
         "remotive.com": parse_remotive,
         "www.remotive.com": parse_remotive,
@@ -1968,44 +2413,24 @@ def extract_job_details(html: str, job_url: str) -> dict:
         "www.dice.com": parse_dice,
         "hubspot.com": parse_hubspot_detail,
         "www.hubspot.com": parse_hubspot_detail,
-        # add other hostnames as needed
     }
-
-    # Strip sidebars and “similar jobs” before any parsing
-    _prune_non_job_sections(soup, host)
-
-    # Prefer content from the main article area
-    main = (
-        soup.select_one("main")
-        or soup.select_one("article")
-        or soup.find("div", role="main")
-        or soup.body
-    )
-    page_text = main.get_text(" ", strip=True) if main else soup.get_text(" ", strip=True)
-
-
-    # call board-specific extractor if present
     parser = board_extractors.get(host)
     if parser:
         try:
             board_data = parser(soup, job_url) or {}
-            # merge board_data into details only for keys we want to override/populate
             details.update({k: v for k, v in board_data.items() if v})
         except Exception as e:
-            # log an error but keep going
             log_line("WARN", f"board parser failed for {host}: {e}")
 
-
-    # --- Fallback: look for visible "x days/weeks/months ago" text (e.g., Remotive)
+    # Fallback relative Posted text
     if not details.get("Posted"):
         rel_span = soup.find("span", string=re.compile(r"\d+\s*(day|week|month)s?\s*ago", re.I))
         if rel_span:
             details["Posted"] = rel_span.get_text(strip=True)
-
     if details.get("Posted") and not details.get("Posting Date"):
         details["Posting Date"] = details["Posted"]
 
-    # ---- Company (try header, JSON-LD, or obvious labels)
+    # Company basic detection
     company = ""
     a = (
         soup.select_one("a.job-header__jobHeaderCompanyNameProgrammatic")
@@ -2016,115 +2441,136 @@ def extract_job_details(html: str, job_url: str) -> dict:
         company = (a.get_text(" ", strip=True) or "").strip()
 
     if not company:
-        # JSON-LD hiringOrganization.name
         try:
             for script in soup.find_all("script", type="application/ld+json"):
                 txt = script.string or ""
-                if "hiringOrganization" in txt:
-                    import json
-                    data = json.loads(txt)
-                    objs = data if isinstance(data, list) else [data]
-                    for obj in objs:
-                        org = (obj.get("hiringOrganization") or {})
-                        name = (org.get("name") or "").strip()
-                        if name:
-                            company = name
-                            break
-                    if company:
+                if "hiringOrganization" not in txt:
+                    continue
+                data = _json.loads(txt)
+                objs = data if isinstance(data, list) else [data]
+                for obj in objs:
+                    org = (obj.get("hiringOrganization") or {})
+                    name = (org.get("name") or "").strip()
+                    if name:
+                        company = name
                         break
+                if company:
+                    break
         except Exception:
             pass
+
     if builtin_meta.get("company"):
         company = builtin_meta["company"]
-    if "builtin.com" in host:
-        company = _strip_builtin_brand(company)
 
-    
-    def company_from_header_meta(host: str, html: str) -> str | None:
-        soup = BeautifulSoup(html or "", "html.parser")
-
-        # common across many boards
-        og = soup.find("meta", attrs={"property": "og:site_name"})
-        if og and og.get("content"):
-            return og["content"].strip()
-
-        t = soup.find("title")
-        if t:
-            txt = t.get_text(" ", strip=True)
-            # common HubSpot pattern: "Job Title - Company"
+    # Helper that can be reused for missing companies
+    def company_from_header_meta(page_host: str, html_text: str) -> str | None:
+        s2 = BeautifulSoup(html_text or "", "html.parser")
+        og2 = s2.find("meta", attrs={"property": "og:site_name"})
+        if og2 and og2.get("content"):
+            return og2["content"].strip()
+        t2 = s2.find("title")
+        if t2:
+            txt = t2.get_text(" ", strip=True)
             if " - " in txt:
                 maybe = txt.split(" - ")[-1].strip()
                 if 2 <= len(maybe) <= 80:
                     return maybe
-
-        # board-specific fallbacks
-        h = host.lower()
+        h = page_host.lower()
         if "greenhouse.io" in h:
-            # Greenhouse: Company shows in header breadcrumbs or meta name
-            bc = soup.select_one('[data-mapped="employer_name"], .company-name, .app-title')
+            bc = s2.select_one('[data-mapped="employer_name"], .company-name, .app-title')
             if bc:
                 return bc.get_text(" ", strip=True)
         if "builtin.com" in h:
-            # Built In: often og:site_name is "Built In" so fall back to company link in header
-            c = soup.select_one('a[href*="/company/"], .company__name, [data-test="company-name"]')
+            c = s2.select_one('a[href*="/company/"], .company__name, [data-test="company-name"]')
             if c:
                 return c.get_text(" ", strip=True)
         if "hubspot.com" in h:
-            # HubSpot: try meta og:title "Job Title - Company"
-            ogt = soup.find("meta", attrs={"property": "og:title"})
-            if ogt and " - " in ogt.get("content",""):
-                return ogt["content"].rsplit(" - ", 1)[-1].strip()
-
+            ogt2 = s2.find("meta", attrs={"property": "og:title"})
+            if ogt2 and " - " in ogt2.get("content", ""):
+                return ogt2["content"].rsplit(" - ", 1)[-1].strip()
         return None
 
-    # ---- Location
+    # ---- Location ----
     loc = ""
     cand = (
-        soup.select_one("[class*='location']") or
-        soup.select_one("li:has(svg) + li") or
-        soup.find("span", string=lambda s: s and "remote" in s.lower())
+        soup.select_one("[class*='location']")
+        or soup.select_one("li:has(svg) + li")
+        or soup.find("span", string=lambda s: s and "remote" in s.lower())
     )
     if cand:
         loc = cand.get_text(" ", strip=True)
 
-    # Built In often stores multiple locations inside a title attribute like:
-    # title="&lt;div ...&gt;Lisboa, PRT&lt;/div&gt;&lt;div ...&gt;Atlanta, GA, USA&lt;/div&gt;"
-    if "builtin.com" in host:
+    locs_unique: list[str] = []
+
+    # Built In tooltip locations (central and Vancouver)
+    if "builtin.com" in host or "builtinvancouver.org" in host:
         import html as _html
+
         def _builtin_locations_from_title() -> list[str]:
             locs: list[str] = []
-            nodes = list(soup.find_all(attrs={"title": True}))
-            nodes += list(soup.find_all(attrs={"data-bs-toggle": "tooltip"}))
+
+            # Only look at tooltip nodes that have a title payload
+            nodes = list(soup.find_all(attrs={"data-bs-toggle": "tooltip", "title": True}))
+
             for node in nodes:
-                tattr = node.get("title") or ""
-                # unescape any &lt;div&gt; encoding
-                unesc = _html.unescape(tattr)
-                # Only consider nodes related to locations (visible text often "2 Locations")
-                if "location" not in (node.get_text() or "").lower():
+                # BuiltIn uses the HTML payload in the *title* attribute (escaped)
+                tattr = (node.get("title") or "").strip()
+                if not tattr:
                     continue
+
+                # Only keep the "X Locations" tooltip, not random tooltips
+                node_text = (node.get_text(" ", strip=True) or "").lower()
+                if "location" not in node_text:
+                    continue
+
+                unesc = _html.unescape(tattr)
+
+                # Parse the tooltip HTML, then pull each cell
                 if "<div" in unesc:
                     try:
                         inner = BeautifulSoup(unesc, "html.parser")
-                        for div in inner.find_all("div"):
+
+                        # BuiltIn renders each location in a col div
+                        for div in inner.select("div.col-lg-6"):
                             txt = div.get_text(" ", strip=True)
                             if txt:
                                 locs.append(txt)
+
+                        # Fallback if class changes
+                        if not locs:
+                            for div in inner.find_all("div"):
+                                txt = div.get_text(" ", strip=True)
+                                if txt and "row g-" not in txt.lower():
+                                    locs.append(txt)
+
                     except Exception:
                         continue
                 else:
-                    # fallback: split by semicolon/pipe/line breaks
+                    # Non HTML tooltip fallback
                     for part in re.split(r"[;|]+", unesc):
                         txt = part.strip()
                         if txt:
                             locs.append(txt)
-            return locs
 
-        locs = _builtin_locations_from_title()
-        if locs:
-            loc = "; ".join(locs)
-            details["locations"] = locs
+            # Deduplicate while preserving order
+            seen = set()
+            unique = []
+            for x in locs:
+                k = x.lower()
+                if k not in seen:
+                    seen.add(k)
+                    unique.append(x)
 
-    # Welcome to the Jungle: icon with name="location" then nearby span
+            return unique
+
+        locs_unique = _builtin_locations_from_title()
+
+        if locs_unique:
+            details["Location"] = " / ".join(locs_unique)
+            details["Location Chips"] = locs_unique  # optional, but useful
+            details["BIV Tooltip Locations"] = locs_unique  # optional debug breadcrumb
+
+    # WTTJ special location
     if not loc and "welcometothejungle.com" in host:
         icon = soup.find("i", attrs={"name": "location"})
         if icon:
@@ -2134,8 +2580,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
                 if loc_text:
                     loc = loc_text
 
-
-    # ---- Description (short)
+    # ---- Description ----
     desc = ""
     md = soup.find("meta", attrs={"name": "description"})
     ogd = soup.find("meta", attrs={"property": "og:description"})
@@ -2147,175 +2592,49 @@ def extract_job_details(html: str, job_url: str) -> dict:
         p = soup.find("p")
         if p:
             desc = p.get_text(" ", strip=True)[:300]
-            page_txt = soup.get_text(" ", strip=True).lower()
-    # If the body is sparse (e.g., JS-rendered Workday), fall back to meta description for page_text.
     if not page_text and desc:
         page_text = desc
 
-
-    # ---- Build details and normalize
     details.update({
         "Title": title,
         "Company": company,
         "Career Board": infer_board_from_url(job_url),
-        "Location": loc,
         "Description": desc,
         "Description Snippet": desc,
         "Job URL": job_url,
         "job_url": job_url,
     })
 
-    # Seed remote rule from Built In metadata when present
+    if loc and not details.get("Location"):
+        details["Location"] = loc
+
+    # Built In remote flag from inline meta
     remote_flag = str(builtin_meta.get("remote") or "").strip().lower()
     if remote_flag:
-        if remote_flag in ("true", "1", "remote", "yes"):
+        if remote_flag in ("true", "1", "remote", "yes", "100% telework"):
             details["Remote Rule"] = "Remote"
         elif remote_flag in ("false", "0", "in-office", "in office", "onsite"):
             details["Remote Rule"] = "Onsite"
+        elif remote_flag in ("false", "0", "hybrid", "telework", "occasional telework"):
+            details["Remote Rule"] = "Hybrid"
 
-    # Enrich Workday locations before we derive rules so path/city hints can flow
+    # Workday location enrich before rules
     if "workday" in host or "myworkday" in host or "myworkdaysite" in host:
         details = _enrich_workday_location(details, html, job_url)
-    # normalize title/company first
-    #details = _derive_company_and_title(details, html)
 
-    # ---- capture full page text for rules/salary parsing ----
+    # Capture full text lower for downstream rules
     page_txt = soup.get_text(" ", strip=True).lower()
     details["page_text"] = page_txt
+    details["html_raw"] = html or ""
 
-    # ---- optional: capture The Muse Job ID (avoids false salary hits) ----
+    # Optional Muse job id capture
     m = re.search(r"\bJob\s*ID:\s*([A-Za-z0-9_-]+),?\s*(\d+)?", page_txt, re.I)
     if m:
-        details["job_id_vendor"]  = m.group(1)
+        details["job_id_vendor"] = m.group(1)
         if m.group(2):
             details["job_id_numeric"] = m.group(2)
-    
-    # after: page_txt = soup.get_text(" ", strip=True).lower()
-    details["page_text"] = page_txt          # keep if you’re using it elsewhere
-    details["Description"] = soup.get_text(" ", strip=True)
-    # keep full HTML around for any downstream salary parsing fallbacks
-    details["html_raw"] = html or ""
-    details = enrich_salary_fields(details, page_host=host)
-    details = _derive_location_rules(details)
 
-
-    # Location text
-    loc_text = (details.get("Location") or "").strip()
-    if not loc_text and "remote" in page_txt:
-        details["Location"] = "Remote"
-
-    # Location Chips (normalize to a lowercase set, then write back as list)
-    chips = set()
-    lc = details.get("Location Chips")
-    if isinstance(lc, (list, tuple)):
-        chips.update(str(x).lower() for x in lc if x)
-    elif isinstance(lc, str) and lc:
-        chips.update(x.strip().lower() for x in lc.split(",") if x.strip())
-
-    if "remote" in page_txt:
-        chips.add("remote")
-    if details.get("Location", "").lower() == "remote":
-        chips.add("remote")
-
-    details["Location Chips"] = sorted(chips) if chips else []
-
-    # Country Chips: mark US/Canada eligibility if we see obvious signals.
-    country = set()
-    cc = details.get("Country Chips")
-    if isinstance(cc, (list, tuple)):
-        country.update(str(x).lower() for x in cc if x)
-
-    # Common signals in postings
-    if any(t in page_txt for t in ("united states", "u.s.", "usa")):
-        country.add("us")
-    if "canada" in page_txt:
-        country.add("canada")
-
-    # --- Company (prefer header; then meta/title; then URL) ---
-    company_from_header = ""
-    #host = up.urlparse(job_url).netloc.lower()
-
-    # The Muse
-    if "themuse.com" in host:
-        node = (
-            soup.select_one("header .job-header__jobHeaderCompanyNameProgrammatic")
-            or soup.select_one("header .job-header__jobHeaderCompanyName")
-            or soup.select_one(".job-details__company a")
-            or soup.select_one("a[href^='/profiles/'], a[href^='/companies/']")
-        )
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-
-    # We Work Remotely
-    if not company_from_header and "weworkremotely.com" in host:
-        node = soup.select_one(".company-card .company, .company, .listing-header-container .company")
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-
-    # NoDesk
-    if not company_from_header and host.endswith("nodesk.co"):
-        node = soup.select_one("h1 > p, a.company a, .company")
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-
-    # HubSpot
-    if not company_from_header and ("hubspot.com" in host):
-        node = (
-            soup.select_one("[data-company-name]")
-            or soup.select_one(".job-metadata a[href*='company']")
-            or soup.select_one("header .company a, header .company")
-        )
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-
-    # Greenhouse
-    if not company_from_header and ("greenhouse.io" in host):
-        node = (
-            soup.select_one(".company-name")
-            or soup.select_one(".app-title .company")
-            or soup.select_one(".opening .company")
-        )
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-
-    # Built In
-    if not company_from_header and ("builtin.com" in host):
-        node = (
-            soup.select_one("[data-test='company-name']")
-            or soup.select_one(".job-hero__company a")
-            or soup.select_one(".job-hero__company")
-            or soup.select_one("a[href^='/company/'] span")
-        )
-        if node:
-            company_from_header = node.get_text(" ", strip=True)
-        if not company_from_header:
-            m = re.search(r"builtin\.com/company/([^/?#]+)", job_url)
-            if m:
-                company_from_header = m.group(1).replace("-", " ")
-
-    existing_company = _normalize_company_name(details.get("Company", ""))
-    builtin_company = _strip_builtin_brand(builtin_meta.get("company")) if builtin_meta else ""
-    company = (
-        existing_company
-        or builtin_meta.get("company")
-        or company_from_header
-        or builtin_company
-        or _company_from_common_selectors(soup)
-        or _company_from_meta_or_title(host, soup)
-        or company_from_url_fallback(job_url)
-        or ""
-    )
-    company = _normalize_company_name(company)
-    if not company:
-        fallback = company_from_header_meta(host, html)
-        if fallback:
-            company = fallback
-    if "builtin.com" in host:
-        company = _strip_builtin_brand(company)
-    details["Company"] = company or "No Company Found"
-
-
-    # --- Apply URL (generic fallback if board-specific parser didn't set one) ---
+    # Apply URL generic fallback
     if not details.get("apply_url"):
         try:
             for a in soup.select("a[href]"):
@@ -2327,185 +2646,337 @@ def extract_job_details(html: str, job_url: str) -> dict:
         except Exception:
             pass
     if not details.get("apply_url"):
-        # If there is no obvious apply link, keep the job URL but note the missing apply link
         details["apply_url"] = job_url
         details["Apply URL Note"] = "Apply link missing or job unavailable"
 
+    # Built In: trust inline meta location only when it makes sense
+    builtin_loc = (builtin_meta.get("location") or "").strip()
 
-    details["Description"] = soup.get_text(" ", strip=True)
-    # Built In: prefer location/remote/salary from inline meta when available
-    builtin_loc = (builtin_meta.get("location") or details.get("Location") or "").strip()
     if builtin_loc:
-        details["Location"] = builtin_loc
+        if "builtinvancouver.org" in host:
+            # Vancouver site: do not let meta override Canada with US noise
+            bl = builtin_loc.lower()
+            if any(x in bl for x in ["united states", "u.s.", "usa", "us", "united-states"]):
+                # ignore builtin_loc, keep whatever we already set (hero_country / JSON-LD / card)
+                pass
+            else:
+                details["Location"] = builtin_loc
+        else:
+            # Central Built In is ok to trust more often
+            details["Location"] = builtin_loc
+
+
     if not details.get("Salary Range") and (builtin_meta.get("salary_text") or builtin_meta.get("salary")):
         details["Salary Range"] = builtin_meta.get("salary_text") or builtin_meta.get("salary")
+
+    # Base salary/location enrichment
     details = enrich_salary_fields(details, page_host=host)
     details = _derive_location_rules(details)
+    _debug_biv(details, host, "after base enrich + derive")
 
-    # Built In: prefer precise locations over generic JSON-LD "US"
-    if "builtin.com" in host:
+    debug(f"[BIV DEBUG]......AFTER enrich_salary_fields: "
+          f"Status={details.get('Salary Status')} Placeholder={details.get('Salary Placeholder')} Salary={details.get('Salary')}")
+
+
+    # Built In: for central site, prefer tooltip locations and add ", USA" when obviously missing.
+    # For Built In Vancouver, prefer tooltip but never force USA.
+    if "builtin.com" in host or "builtinvancouver.org" in host:
         try:
-            loc_text = ""
-
-            # 1) Tooltip with multiple locations (e.g., "4 Locations" badge)
-            tooltip_span = soup.find(
-                "span",
-                attrs={"data-bs-title": True},
-                string=re.compile(r"Locations?", re.I),
+            # 0) Scope to the main job header so we do NOT scrape Similar Jobs
+            scope = (
+                soup.select_one("div.job-header")
+                or soup.select_one("header")
+                or soup.select_one("main")
+                or soup
             )
 
-            if tooltip_span:
-                raw_html = tooltip_span.get("data-bs-title") or ""
-                if raw_html:
-                    tooltip_soup = BeautifulSoup(raw_html, "html.parser")
-                    loc_divs = (
-                        tooltip_soup.select(".text-truncate")
-                        or tooltip_soup.find_all("div")
-                    )
-                    locs = [
-                        div.get_text(" ", strip=True)
-                        for div in loc_divs
-                        if div.get_text(strip=True)
-                    ]
-                    if locs:
-                        loc_text = "; ".join(locs)
+            loc_text = ""
 
-            # 2) Fallback: single location badge, no tooltip (e.g., "Pulaski, TN")
+            # 1) Prefer tooltip locations inside the header scope only
+            import html as _html
+
+            def _extract_builtin_tooltip_locations(scope_soup) -> list[str]:
+                # Built In puts the location list in a tooltip span like: "5 Locations"
+                candidates = scope_soup.select("span[data-bs-toggle='tooltip'][title]")
+
+                best: list[str] = []
+
+                for sp in candidates:
+                    label = (sp.get_text(" ", strip=True) or "").lower()
+
+                    # Strong signal: the visible text is "4 Locations", "5 Locations", etc.
+                    if "location" not in label:
+                        continue
+
+                    raw = (sp.get("title") or "").strip()
+                    if not raw:
+                        continue
+
+                    unesc = _html.unescape(raw)
+
+                    # Strong signal: the tooltip html contains the grid cells
+                    if "col-lg-6" not in unesc and "row" not in unesc:
+                        continue
+
+                    inner = BeautifulSoup(unesc, "html.parser")
+
+                    # Primary: each location is in a div.col-lg-6 (sometimes with extra classes)
+                    locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
+                    locs = [x for x in locs if x]
+
+                    # Fallback: any div that looks like a cell if they change class names
+                    if not locs:
+                        locs = [s.strip() for s in inner.stripped_strings if s and s.strip()]
+
+                    # Deduplicate, preserve order
+                    seen = set()
+                    uniq: list[str] = []
+                    for x in locs:
+                        k = x.lower()
+                        if k not in seen:
+                            seen.add(k)
+                            uniq.append(x)
+
+                    # Keep the largest list found (in case multiple tooltips match)
+                    if len(uniq) > len(best):
+                        best = uniq
+
+                return best
+
+
+            # Use main as the scope first because div.job-header is often too narrow
+            scope = soup.select_one("main") or soup
+
+            locs_unique = _extract_builtin_tooltip_locations(scope)
+
+
+            # DEBUG: show raw tooltip extraction result before setting Location
+            if "builtinvancouver.org" in host:
+                _debug_biv(
+                    {
+                        "Location": loc_text,
+                        "Location Chips": locs_unique,
+                        "Canada Rule": details.get("Canada Rule", ""),
+                        "US Rule": details.get("US Rule", ""),
+                        "WA Rule": details.get("WA Rule", ""),
+                        "Remote Rule": details.get("Remote Rule", ""),
+                        "Applicant Regions": details.get("Applicant Regions", ""),
+                        "Salary Range": details.get("Salary Range", ""),
+                        "Salary Text": details.get("Salary Text", ""),
+                        "Salary": details.get("Salary", ""),
+                    },
+                    host,
+                    "tooltip extraction raw",
+                )
+
+
+
+            if locs_unique:
+                details["Location Chips"] = locs_unique
+                details["Location"] = " / ".join(locs_unique)
+
+                if "builtinvancouver.org" in host:
+                    details["BIV Tooltip Location Count"] = len(locs_unique)
+
+
+            # 2) Built In Vancouver specific: “Hiring Remotely in Canada”
+            #    (only check inside the header scope)
             if not loc_text:
-                loc_icon = soup.select_one("i.fa-location-dot")
+                header_text = scope.get_text(" ", strip=True)
+                m = re.search(r"Hiring\s+Remotely\s+in\s+([A-Za-z ]+)", header_text, re.I)
+                if m:
+                    loc_text = m.group(1).strip()
+                    details["Remote Rule"] = "Remote"
+
+            # 3) Single location icon fallback INSIDE the header scope only
+            if not loc_text:
+                loc_icon = scope.select_one("i.fa-location-dot")
                 container = None
-
                 if loc_icon:
-                    # Prefer the outer d-flex row that has the icon + text
-                    # Example: <div class="d-flex align-items-start gap-sm"> ... </div>
-                    container = loc_icon.find_parent(
-                        "div",
-                        class_=re.compile(r"\bd-flex\b.*align-items-start\b", re.I),
-                    )
-
-                    # If that pattern fails, fall back to any d-flex with gap-sm
-                    if not container:
-                        container = loc_icon.find_parent(
-                            "div",
-                            class_=re.compile(r"\bd-flex\b.*gap-sm\b", re.I),
-                        )
-
-                    # As a last resort, just take the nearest d-flex and step one level up
-                    if not container:
-                        nearest = loc_icon.find_parent(
-                            "div", class_=re.compile(r"\bd-flex\b", re.I)
-                        )
-                        if nearest and nearest.parent and nearest.parent.name == "div":
-                            container = nearest.parent
+                    container = loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*align-items-start\b", re.I)) \
+                        or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*gap-sm\b", re.I)) \
+                        or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b", re.I))
 
                 if container:
-                    span_texts = [
-                        s.get_text(" ", strip=True)
-                        for s in container.find_all("span")
-                        if s.get_text(strip=True)
-                    ]
-
-                    # Prefer a span that looks like "City, ST"
-                    for txt in span_texts:
-                        if "," in txt:
-                            loc_text = txt
-                            break
-
-                    # If nothing matched the comma heuristic, fall back to the first span
-                    if not loc_text and span_texts:
+                    span_texts = [s.get_text(" ", strip=True) for s in container.find_all("span") if s.get_text(strip=True)]
+                    if span_texts:
                         loc_text = span_texts[0]
 
-                    # Add country if it is obviously missing
-                    if loc_text and not re.search(
-                        r"\b(US|USA|United States)\b", loc_text
-                    ):
-                        loc_text = f"{loc_text}, USA"
-
-            # If we found a concrete location, persist it
             if loc_text:
                 details["Location"] = loc_text
+            
+            if "builtinvancouver.org" in host and loc_text:
+                details["BIV Tooltip Location Count"] = loc_text.count("/") + 1
+
 
         except Exception:
-            # best-effort; do not break scraping if BuiltIn changes markup
             pass
 
-
-    # Re-derive location rules/chips after any BuiltIn overrides
+    # Re run location rules after Built In overrides
     details = _derive_location_rules(details)
 
+    # If we extracted full tooltip locations, keep them as the displayed Location
+    if details.get("BIV Tooltip Locations"):
+        details["Location"] = " / ".join(details["BIV Tooltip Locations"])
+    _debug_biv({"Location": f"tooltip_count={len(locs_unique)}", **details}, host, "tooltip extract check")
+    _debug_biv(details, host, "after tooltip/header overrides + derive")
+
+    # Built In Vancouver: normalize dates and treat Canada as remote
+    if "builtinvancouver.org" in host:
+        try:
+            # Walk JobPosting ld+json again in case parse_jobposting_ldjson
+            # did not already set the friendly fields.
+            for tag in soup.find_all("script", type="application/ld+json"):
+                raw = (tag.string or "").strip()
+                if not raw:
+                    continue
+
+                data = _json.loads(raw)
+                objs = data if isinstance(data, list) else [data]
+
+                for obj in objs:
+                    if not isinstance(obj, dict):
+                        continue
+                    if obj.get("@type") != "JobPosting":
+                        continue
+
+                    # 1) Dates from structured fields
+                    dp = obj.get("datePosted")
+                    vt = obj.get("validThrough")
+                    if dp and not details.get("Posting Date"):
+                        details["Posting Date"] = parse_date_relaxed(dp)
+                    if vt and not details.get("Valid Through"):
+                        details["Valid Through"] = parse_date_relaxed(vt)
+
+                    # 2) Location from jobLocation.address.addressCountry
+                    job_loc = obj.get("jobLocation") or {}
+                    if isinstance(job_loc, list):
+                        job_loc = job_loc[0] or {}
+                    addr = job_loc.get("address") or {}
+                    country = addr.get("addressCountry") or addr.get("addressCountryCode")
+
+                    if isinstance(country, dict):
+                        country = country.get("name") or country.get("addressCountry")
+
+                    # If the posting is country wide for Canada,
+                    # treat it as a remote Canada role
+                    if str(country).upper() in {"CAN", "CA"} or str(country).strip().lower() == "canada":
+                        details["Location"] = "Canada"
+                        details["Remote Rule"] = "Remote"
+
+                        # Make sure Canada is in Country Chips
+                        existing = set()
+                        cc = details.get("Country Chips") or []
+                        for c in cc:
+                            existing.add(str(c).lower())
+                        existing.add("canada")
+                        details["Country Chips"] = sorted(existing)
+
+                    # We only care about the first JobPosting object
+                    break
+
+                # Stop scanning scripts once we have both dates
+                if details.get("Posting Date") and details.get("Valid Through"):
+                    break
+        except Exception:
+            # Best effort only, do not break the scraper if Built In changes their JSON
+            pass
+
+    # Final Built In Vancouver lock, after all other location sources
+    if "builtinvancouver.org" in host:
+        hero_country = _builtin_hero_country(soup)
+        if hero_country and not (details.get("Location") and ("/" in details["Location"])):
+            details["Location"] = hero_country
+            details["Location Raw"] = hero_country
+            details = _derive_location_rules(details)
+            _debug_biv(details, host, "after hero_country lock + derive")
+
+
+
+    # Location chips and country chips
+    chips = set()
+    lc = details.get("Location Chips")
+    if isinstance(lc, (list, tuple)):
+        chips.update(str(x).lower() for x in lc if x)
+    elif isinstance(lc, str) and lc:
+        chips.update(x.strip().lower() for x in lc.split(",") if x.strip())
+
+    # Built In pages include "REMOTE" in navigation, so do not infer remote from full page text
+    if "builtin.com" not in host and "builtinvancouver.org" not in host:
+        if "remote" in page_txt:
+            chips.add("remote")
+
+    if details.get("Location", "").strip().lower() == "remote":
+        chips.add("remote")
+
+    details["Location Chips"] = sorted(chips) if chips else []
+
+    country = set()
+    cc = details.get("Country Chips")
+    if isinstance(cc, (list, tuple)):
+        country.update(str(x).lower() for x in cc if x)
+
+
+    # Prefer structured country from Location, not page text
+    loc_norm = (details.get("Location") or "").strip().lower()
+    if "canada" in loc_norm or loc_norm in {"ca", "can"}:
+        country.add("canada")
+    elif any(x in loc_norm for x in ["united states", "usa", "u.s."]):
+        country.add("us")
+    else:
+        # fallback to page text only for non Built In pages
+        if "builtin.com" not in host and "builtinvancouver.org" not in host:
+            if any(t in page_txt for t in ("united states", "u.s.", "usa")):
+                country.add("us")
+            if "canada" in page_txt:
+                country.add("canada")
 
     details["Country Chips"] = sorted(country)
 
-    # Final title cleanup: strip trailing/leading company from Title using Company context
+    # Final company cleanup
+    existing_company = _normalize_company_name(details.get("Company", ""))
+    builtin_company = _strip_builtin_brand(builtin_meta.get("company")) if builtin_meta else ""
+    company_final = (
+        existing_company
+        or builtin_meta.get("company")
+        or company_from_header
+        or builtin_company
+        or _company_from_common_selectors(soup)
+        or _company_from_meta_or_title(host, soup)
+        or company_from_url_fallback(job_url)
+        or ""
+    )
+    company_final = _normalize_company_name(company_final)
+    if not company_final:
+        fallback = company_from_header_meta(host, html)
+        if fallback:
+            company_final = fallback
+    if "builtin.com" in host:
+        company_final = _strip_builtin_brand(company_final)
+    details["Company"] = company_final or "No Company Found"
+
+    # Final title cleanup based on company
     details["Title"] = normalize_title(details.get("Title"), details.get("Company"))
 
-    # Now enrich salary with host + full text available
-    details = enrich_salary_fields(details, page_host=host)
-
-    details["html_raw"] = html[:500]
-    # Salary fallback: try BuiltIn-specific extractor first
+    # Salary fallback: first try Built In specific parser, then generic text.
+    # For Built In Vancouver we still use the Built In extractor to avoid phone numbers.
     if not details.get("salary_min") and not details.get("salary_max"):
-        # 1. Try BuiltIn extractor (avoids grabbing employee counts)
-        lo, hi = extract_salary_builtin(details.get("html_raw", ""))
+        lo = hi = None
+
+        if "builtin.com" in host or "builtinvancouver.org" in host:
+            # Use the Built In specific extractor
+            lo, hi = extract_salary_builtin(details.get("html_raw", ""))
+        else:
+            # All other boards can use the generic text extractor
+            lo, hi = extract_salary_from_text(details.get("page_text", ""))
+
         if lo or hi:
             details["salary_min"] = lo
             details["salary_max"] = hi
             details["salary_raw"] = f"{lo or ''}–{hi or ''}"
-        else:
-            # 2. Fall back to generic text extractor
-            lo, hi = extract_salary_from_text(details.get("page_text", ""))
-            if lo or hi:
-                details["salary_min"] = lo
-                details["salary_max"] = hi
-                details["salary_raw"] = f"{lo or ''}–{hi or ''}"
-    
-    # Welcome to the Jungle: if there is a "$120,000-$160,000" style range,
-    # make sure we treat it as a proper low/high pair.
-    if "welcometothejungle.com" in host:
-        import re as _re
-        text = details.get("page_text") or soup.get_text(" ", strip=True)
 
-        m = _re.search(
-            r"\$?\s?(\d[\d,]{2,})\s*[-–]\s*\$?\s?(\d[\d,]{2,})",
-            text,
-        )
-        if m:
-            lo_raw, hi_raw = m.group(1), m.group(2)
-            try:
-                lo = int(lo_raw.replace(",", ""))
-                hi = int(hi_raw.replace(",", ""))
-            except ValueError:
-                lo = hi = None
-
-            if lo and hi:
-                details["salary_min"] = lo
-                details["salary_max"] = hi
-                details["salary_raw"] = f"{lo}-{hi}"
-                # Feed back a nice range string so your CSV "Salary Est. (Low-High)" stays friendly
-                details["Salary Est. (Low-High)"] = f"${lo_raw}-${hi_raw}"
-                details.setdefault("Salary Range", f"${lo_raw}-${hi_raw}")
-
-        # Optional: explicit "Not specified" marker when there is a salary icon but no numbers
-        if not details.get("Salary Range"):
-            icon = soup.find("i", attrs={"name": "salary"})
-            if icon:
-                span = icon.find_next("span")
-                txt = span.get_text(" ", strip=True).lower() if span else ""
-                if "not specified" in txt:
-                    details.setdefault("Salary Status", "Missing or Unknown")
-
-
-    # 🔹 Fill Salary Rule if we have a status but no rule yet
-    if details.get("Salary Status") and not details.get("Salary Rule"):
-        details["Salary Rule"] = details["Salary Status"]
-
-    # 🔹 Workday-only: trust our explicit Salary Range over any weird fallback
-    if "workday" in host:
-        if details.get("Salary Range"):
-            details["Salary Est. (Low-High)"] = details["Salary Range"]
-
+    # Finished populating details; return the dict
     return details
-
 
 
 def _looks_like_id(s: str | None) -> bool:
@@ -2526,6 +2997,126 @@ def _title_from_url(job_url: str) -> str:
 
 BUILTIN_JOB_INIT_RX = re.compile(r"Builtin\.jobPostInit\((\{.*?\})\);?", re.S)
 BUILTIN_BRAND_RX   = re.compile(r"\s*\|\s*Built In\s*$", re.I)
+
+def _builtin_hero_country(soup: BeautifulSoup) -> str | None:
+    """
+    Built In pages often show:
+      <span>Hiring Remotely in </span><span>Canada</span>
+
+    We want the second span (Canada) and we want it from the hero area,
+    not from Similar Jobs.
+    """
+    if not soup:
+        return None
+
+    # Find the hero phrase anywhere in the main content
+    node = soup.find(string=re.compile(r"Hiring\s+Remotely\s+in", re.I))
+    if not node:
+        return None
+
+    # node is usually a NavigableString inside a <span>
+    span = node.parent if getattr(node, "parent", None) else None
+    if not span:
+        return None
+
+    # Next span after "Hiring Remotely in" is typically the country
+    nxt = span.find_next("span")
+    if not nxt:
+        return None
+
+    country = nxt.get_text(" ", strip=True)
+    if not country:
+        return None
+
+    # Safety: avoid accidentally re-grabbing the phrase
+    if re.search(r"Hiring\s+Remotely\s+in", country, re.I):
+        return None
+
+    return country
+
+
+def _builtin_job_card_scope(soup, job_url: str):
+    """
+    Return the BeautifulSoup node for the main job card, so we don't
+    accidentally parse Similar Jobs / Recommended Jobs blocks.
+    """
+    m = re.search(r"/(\d+)(?:[/?#]|$)", job_url or "")
+    if m:
+        card = soup.find(id=f"job-card-{m.group(1)}")
+        if card:
+            return card
+
+    # Fallback: Built In pages generally mark the main card with data-id="job-card"
+    card = soup.select_one('div[data-id="job-card"]')
+    return card or soup
+
+
+def _builtin_extract_location_from_card(card) -> str | None:
+    """
+    Extract location from the hero card only.
+    Handles:
+      - "Hiring Remotely in Canada"
+      - multi-location popovers (best effort)
+    """
+    text = card.get_text(" ", strip=True)
+
+    # 1) Best case: exact phrase on Built In Vancouver page
+    m = re.search(r"Hiring\s+Remotely\s+in\s+([A-Za-z][A-Za-z\s]+)", text, re.I)
+    if m:
+        return m.group(1).strip()
+
+    # 2) Multi-location popover (Built In often uses BS popovers/tooltips)
+    # Look only inside the location-dot line inside the job card.
+    icon = card.select_one("i.fa-location-dot")
+    if icon:
+        container = icon.find_parent("div")
+        if container:
+            # Grab any popover content if present
+            pop = (
+                container.find(attrs={"data-bs-content": True})
+                or container.find(attrs={"data-bs-title": True})
+                or container.find(attrs={"data-bs-original-title": True})
+            )
+            if pop:
+                blob = " ".join(
+                    [
+                        pop.get("data-bs-content", "") or "",
+                        pop.get("data-bs-title", "") or "",
+                        pop.get("data-bs-original-title", "") or "",
+                    ]
+                )
+                blob = re.sub(r"<[^>]+>", " ", blob)
+                blob = re.sub(r"\s+", " ", blob).strip()
+
+                # Country collapse (matches your desired behaviour)
+                if re.search(r"\bcanada\b|\bCAN\b|\bCA\b", blob, re.I):
+                    return "Canada"
+                if re.search(r"\bunited states\b|\bUSA\b|\bUS\b", blob, re.I):
+                    return "US"
+
+                # Last fallback: return whatever is in the blob
+                if blob:
+                    return blob
+
+    return None
+
+
+
+
+def _builtin_extract_remote_rule_from_card(card) -> str | None:
+    icon = card.select_one("i.fa-house-building")
+    if not icon:
+        return None
+    container = icon.find_parent("div")
+    if not container:
+        return None
+
+    label = container.get_text(" ", strip=True)
+    mode = classify_work_mode(label)
+
+    return None if mode == "Unknown" else mode
+
+
 
 def _extract_builtin_job_meta(soup: BeautifulSoup) -> dict[str, str]:
     """
@@ -2673,27 +3264,15 @@ def _is_target_role(d: dict) -> bool:
     return False
 
 def _is_remote(d: dict) -> bool:
-    rr  = str(d.get("Remote Rule") or "").lower()
-    loc = str(d.get("Location") or "").lower()
+    rr  = str(d.get("Remote Rule") or "")
+    loc = str(d.get("Location") or "")
     chips_val = d.get("Location Chips")
-    chips = " ".join(map(str, chips_val)).lower() if isinstance(chips_val, (list, tuple)) else str(chips_val or "").lower()
+    chips = " ".join(map(str, chips_val)) if isinstance(chips_val, (list, tuple)) else str(chips_val or "")
 
-    text = " ".join([chips, loc, rr])
+    text = " ".join([rr, loc, chips]).strip()
+    mode = classify_work_mode(text).lower()
+    return mode in ("remote", "hybrid")
 
-    # new fast-paths
-    if "flexible / remote" in text or "flexible remote" in text:
-        return True
-    if " remote" in text or text.startswith("remote") or "/remote" in text:
-        return True
-
-    # keep your existing allow/deny patterns below
-    if re.search(r"\bremote\b", text) or "anywhere" in text or "global" in text:
-        return True
-    if re.search(r"\b(on[-\s]?site|in[-\s]?office|hybrid)\b", text):
-        return False
-
-    # Default: treat missing/unknown signals as NOT remote so location rules still apply.
-    return False
 
 # Shared Seattle/WA locality hints
 SEATTLE_TERMS = [
@@ -3208,7 +3787,7 @@ def _fmt_salary_line(row: dict) -> str:
         parts.append(placeholder)
     
     if status == "signal_only":
-        parts[0] = "signal-only"
+        parts.append("salary mentioned")
 
     # If we assembled anything at all, join with separators
     if parts:
@@ -3336,13 +3915,15 @@ PLAYWRIGHT_DOMAINS = {
     "edtech.com", "www.edtech.com",
     "edtechjobs.io/", "www.edtechjobs.io",
     "builtin.com", "www.builtin.com",
+    "builtinvancouver.org", "www.builtinvancouver.org",
     "wellfound.com", "www.wellfound.com",
-    "welcometothejungle.com", "www.welcometothejungle.com", 
+    "welcometothejungle.com", "www.welcometothejungle.com",
     "app.welcometothejungle.com", "us.welcometothejungle.com",
     "workingnomads.com", "www.workingnomads.com",
-    # JS-heavy boards that need Playwright
-    "myworkdayjobs.com", "wd1.myworkdayjobs.com", "myworkdaysite.com", 
-    "wd5.myworkdaysite.com","ashbyhq.com", "jobs.ashbyhq.com",
+    # JS heavy boards that need Playwright
+    "dice.com", "www.dice.com",
+    "myworkdayjobs.com", "wd1.myworkdayjobs.com", "myworkdaysite.com",
+    "wd5.myworkdaysite.com", "ashbyhq.com", "jobs.ashbyhq.com",
 }
 
 
@@ -3365,6 +3946,8 @@ KNOWN = {
     "remoteok.com": "Remote OK",
     "builtin.com": "Built In",
     "wellfound.com": "Wellfound",
+    "builtinvancouver.org": "Built In Vancouver",
+    "www.builtinvancouver.org": "Built In Vancouver",
     "welcometothejungle.com": "Welcome to the Jungle",
 }
 
@@ -3429,30 +4012,34 @@ def is_blocked_url(url: str) -> bool:
 BLOCKED_URL_PREFIXES = [
     "https://www.washington.edu/jobs",
     "https://washington.edu/jobs",  # just in case
-    "https://nodesk.co/remote-jobs/us"
-    "https://nodesk.co/remote-jobs/other"
-    "https://nodesk.co/remote-jobs/asia"
-    "https://nodesk.co/remote-jobs/operations"
-    "https://nodesk.co/remote-jobs/full-time"
-    "https://nodesk.co/remote-jobs/uk"
-    "https://nodesk.co/remote-jobs/product-marketing"
-    "https://nodesk.co/remote-jobs/sql"
-    "https://nodesk.co/remote-jobs/customer-support"
-    "https://nodesk.co/remote-jobs/new"
-    "https://nodesk.co/remote-jobs/europe"
-    "https://nodesk.co/remote-jobs/part-time"
-    "https://nodesk.co/remote-jobs/product-manager"
+    "https://nodesk.co/remote-jobs/us",
+    "https://nodesk.co/remote-jobs/other",
+    "https://nodesk.co/remote-jobs/asia",
+    "https://nodesk.co/remote-jobs/operations",
+    "https://nodesk.co/remote-jobs/full-time",
+    "https://nodesk.co/remote-jobs/uk",
+    "https://nodesk.co/remote-jobs/product-marketing",
+    "https://nodesk.co/remote-jobs/sql",
+    "https://nodesk.co/remote-jobs/customer-support",
+    "https://nodesk.co/remote-jobs/new",
+    "https://nodesk.co/remote-jobs/europe",
+    "https://nodesk.co/remote-jobs/part-time",
+    "https://nodesk.co/remote-jobs/product-manager",
+    "https://nodesk.co/remote-jobs/data/",
+    "https://nodesk.co/remote-jobs/ai/",
+    "https://weworkremotely.com/remote-jobs/new?utm_content=post-job-cta&utm_source=wwr-accounts-nav-mobile",
+    "https://dhigroupinc.com/careers/default.aspx",
 ]
 
 STARTING_PAGES = [
 
-    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section"
-    "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
-    "https://app.welcometothejungle.com/api/jobs?query=product",
-    "https://www.builtin.com/jobs?search=product%20owner&remote=true",
+    # Preferred SMOKE target: The Muse (keeps lightweight, server-rendered HTML)
+    #"https://www.themuse.com/jobs?categories=product&location=remote",
 
-    #Testing link- broken!!!
-    #"https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner"
+
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
+    "https://www.dice.com/jobs?q=product+owner",
+    
 
     # HubSpot (server-rendered listings; crawl like a board)
     #"https://www.hubspot.com/careers/jobs?q=product&;page=1",
@@ -3473,13 +4060,15 @@ STARTING_PAGES = [
 
     # Business Analyst / Systems Analyst
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
-    #"https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
-    #"https://www.builtin.com/jobs?search=business%20analyst&remote=true",
+    "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
+    "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
+    "https://builtinvancouver.org/jobs?search=Business+Analyst",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
 
     # Scrum Master / RTE
     "https://remotive.com/remote-jobs/product?search=scrum%20master",
     "https://www.builtin.com/jobs?search=scrum%20master&remote=true",
+
 
 
     # Remote-friendly product boards that serve real HTML
@@ -3507,9 +4096,9 @@ STARTING_PAGES = [
 
     "https://jobs.ashbyhq.com/zapier",
 
-    # The Muse works well
-    "https://www.themuse.com/jobs?categories=product&location=remote",
-    "https://www.themuse.com/jobs?categories=management&location=remote",
+    # The Muse works well (canonical filtered URL lives at the top of STARTING_PAGES)
+    # "https://www.themuse.com/jobs?categories=product&location=remote",
+    # "https://www.themuse.com/jobs?categories=management&location=remote",
 
     # YC jobs (Playwright-friendly)
     "https://www.ycombinator.com/jobs/role/product-manager",
@@ -3520,6 +4109,10 @@ STARTING_PAGES = [
     # Built In (JS-heavy → Playwright)
     "https://www.builtin.com/jobs?search=product%20manager&remote=true",
     "https://www.builtin.com/jobs?search=product%20owner&remote=true",
+    "https://builtinvancouver.org/jobs?search=Product+Manager",
+    "https://builtinvancouver.org/jobs?search=Product+Owner",
+    #"https://builtinvancouver.org/jobs",
+
 
     # HubSpot (server-rendered listings; crawl like a board)
     "https://www.hubspot.com/careers/jobs?q=product&;page=1",
@@ -3532,6 +4125,43 @@ STARTING_PAGES = [
 
     # Welcome to the Jungle (JS-heavy → Playwright)
     "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true",
+    "https://app.welcometothejungle.com/companies/12Twenty#jobs-section"
+    "https://app.welcometothejungle.com/companies/Microsoft#jobs-section"
+    "https://app.welcometothejungle.com/companies/Google#jobs-section"
+    "https://app.welcometothejungle.com/companies/Adobe#jobs-section"
+    "https://app.welcometothejungle.com/companies/Asana#jobs-section"
+    "https://app.welcometothejungle.com/companies/Amazon#jobs-section"
+    "https://app.welcometothejungle.com/companies/Airtable#jobs-section"
+    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section"
+    "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section"
+    "https://app.welcometothejungle.com/companies/Clari#jobs-section"
+    "https://app.welcometothejungle.com/companies/Confluent#jobs-section"
+    "https://app.welcometothejungle.com/companies/DataDog#jobs-section" 
+    "https://app.welcometothejungle.com/companies/Dataminr#jobs-section"
+    "https://app.welcometothejungle.com/companies/Expensify#jobs-section"
+    "https://app.welcometothejungle.com/companies/Figma#jobs-section"
+    "https://app.welcometothejungle.com/companies/Gong-io#jobs-section"
+    "https://app.welcometothejungle.com/companies/HashiCorp#jobs-section"
+    "https://app.welcometothejungle.com/companies/HubSpot#jobs-section"
+    "https://app.welcometothejungle.com/companies/Looker#jobs-section"
+    "https://app.welcometothejungle.com/companies/MaintainX#jobs-section"
+    "https://app.welcometothejungle.com/companies/Notion#jobs-section"
+    "https://app.welcometothejungle.com/companies/Outreach#jobs-section"
+    "https://app.welcometothejungle.com/companies/PagerDuty#jobs-section"
+    "https://app.welcometothejungle.com/companies/Segment#jobs-section"
+    "https://app.welcometothejungle.com/companies/Smartsheet#jobs-section"
+    "https://app.welcometothejungle.com/companies/Stripe#jobs-section"
+    "https://app.welcometothejungle.com/companies/Top-Hat#jobs-section"
+    "https://app.welcometothejungle.com/companies/TripActions#jobs-section"
+    "https://app.welcometothejungle.com/companies/UiPath#jobs-section"
+    "https://app.welcometothejungle.com/companies/Vetcove#jobs-section"
+    "https://app.welcometothejungle.com/companies/Zoom#jobs-section"
+    "https://app.welcometothejungle.com/companies/Metabase#jobs-section"
+    "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
+    "https://app.welcometothejungle.com/api/jobs?query=product",
+    "https://www.builtin.com/jobs?search=product%20owner&remote=true",
+
+
 ]
 
 assert all(u.startswith("http") for u in STARTING_PAGES), "A STARTING_PAGES entry is missing a comma."
@@ -3951,6 +4581,193 @@ def collect_wttj_company_links(company_url: str) -> list[str]:
     return extract_wttj_company_jobs(html, company_url)
 
 
+
+from dataclasses import dataclass
+from typing import Iterable, List, Optional
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup, NavigableString, Tag
+
+
+REMOTE_ROCKETSHIP_PM_US = (
+    "https://www.remoterocketship.com/country/united-states/jobs/product-manager/"
+)
+
+
+@dataclass
+class RemoteRocketshipJob:
+    source: str = "remote_rocketship"
+    title: str = ""
+    company: str = ""
+    location_raw: Optional[str] = None
+    salary_text: Optional[str] = None
+    posted_text: Optional[str] = None
+    tags_raw: Optional[str] = None
+    listing_url: Optional[str] = None      # Remote Rocketship "View Job"
+    apply_url: Optional[str] = None        # External ATS link
+
+    def to_row(self) -> dict:
+        """
+        Map into your generic row structure.
+        Adjust keys here to align with base_row_from_listing or your CSV schema.
+        """
+        return {
+            "source": self.source,
+            "title": self.title,
+            "company": self.company,
+            "location_raw": self.location_raw,
+            "salary_text": self.salary_text,
+            "posted_text": self.posted_text,
+            "tags_raw": self.tags_raw,
+            "listing_url": self.listing_url,
+            "apply_url": self.apply_url,
+        }
+
+
+def fetch_remote_rocketship_html(
+    session: requests.Session,
+    url: str = REMOTE_ROCKETSHIP_PM_US,
+) -> str:
+    resp = session.get(url, timeout=30)
+    resp.raise_for_status()
+    return resp.text
+
+
+def _next_text_containing(start_node: Tag, substring: str) -> Optional[str]:
+    node = start_node
+    while node is not None:
+        node = node.find_next(string=True)
+        if node is None:
+            return None
+        if isinstance(node, NavigableString) and substring in node:
+            text = node.strip()
+            if text:
+                return text
+    return None
+
+
+def _first_salary_after(anchor: Tag) -> Optional[str]:
+    for sib in anchor.next_siblings:
+        if isinstance(sib, NavigableString):
+            text = sib.strip()
+            if "$" in text:
+                return text
+        elif isinstance(sib, Tag):
+            # stop if we hit a new heading or a new card
+            if sib.name in {"h3", "h4"}:
+                break
+    return None
+
+
+def parse_remote_rocketship_jobs(html: str, page_url: str) -> List[RemoteRocketshipJob]:
+    soup = BeautifulSoup(html, "html.parser")
+    jobs: List[RemoteRocketshipJob] = []
+
+    # Each job starts at an h3 that has a "View Job" and "Apply" further down
+    for h3 in soup.find_all("h3"):
+        title_link = h3.find("a")
+        if not title_link:
+            continue
+
+        # Skip section headers such as "People also searched for"
+        if "People also searched for" in title_link.get_text(strip=True):
+            continue
+
+        view_link = h3.find_next("a", string=lambda s: s and "View Job" in s)
+        apply_link = h3.find_next("a", string=lambda s: s and s.strip() == "Apply")
+        if not view_link or not apply_link:
+            # Not a full job card
+            continue
+
+        # Make sure these belong to this card and not a later one
+        # Basic guard: if the next h3 comes before the apply link, skip
+        next_h3 = h3.find_next("h3")
+        if next_h3 and next_h3 is not h3:
+            for node in h3.next_elements:
+                if node is next_h3:
+                    # we reached the next card before seeing "Apply"
+                    if node is not apply_link and node is not view_link:
+                        apply_link = None
+                    break
+        if not apply_link:
+            continue
+
+        title = title_link.get_text(strip=True)
+
+        # Company is usually the next h4
+        company = ""
+        company_h4 = h3.find_next("h4")
+        if company_h4:
+            company_a = company_h4.find("a")
+            if company_a:
+                company = company_a.get_text(strip=True)
+            else:
+                company = company_h4.get_text(strip=True)
+
+        # Posted text such as "6 minutes ago", "9 hours ago"
+        posted_text = _next_text_containing(h3, "ago")
+
+        # Location anchor contains "Remote"
+        loc_anchor = h3.find_next("a", string=lambda s: s and "Remote" in s)
+        location_raw = loc_anchor.get_text(strip=True) if loc_anchor else None
+
+        # Salary if present
+        salary_text = _first_salary_after(loc_anchor) if loc_anchor else None
+
+        # Tags between location line and Apply button
+        tags: List[str] = []
+        if loc_anchor:
+            for tag_a in loc_anchor.find_all_next("a"):
+                if tag_a is apply_link or tag_a is view_link:
+                    break
+                text = tag_a.get_text(strip=True)
+                # Keep only meaningful job tags
+                if any(
+                    key in text
+                    for key in [
+                        "Full Time",
+                        "Part Time",
+                        "Contract",
+                        "Junior",
+                        "Mid-level",
+                        "Senior",
+                        "Lead",
+                        "Product Manager",
+                        "H1B",
+                    ]
+                ):
+                    tags.append(text)
+
+        job = RemoteRocketshipJob(
+            title=title,
+            company=company,
+            location_raw=location_raw,
+            salary_text=salary_text,
+            posted_text=posted_text,
+            tags_raw=", ".join(dict.fromkeys(tags)),  # dedupe while preserving order
+            listing_url=urljoin(page_url, title_link.get("href", "")),
+            apply_url=apply_link.get("href", None),
+        )
+        jobs.append(job)
+
+    return jobs
+
+
+def scrape_remote_rocketship_pm_us(session: Optional[requests.Session] = None) -> List[dict]:
+    """
+    One shot helper that returns rows ready for CSV or your base_row_from_listing.
+    """
+    if session is None:
+        session = requests.Session()
+
+    html = fetch_remote_rocketship_html(session, REMOTE_ROCKETSHIP_PM_US)
+    jobs = parse_remote_rocketship_jobs(html, REMOTE_ROCKETSHIP_PM_US)
+    return [job.to_row() for job in jobs]
+
+
+
+
 def can_fetch(url):
     """Check robots.txt with a timeout so it never hangs."""
     parsed = up.urlparse(url)
@@ -4040,6 +4857,9 @@ def career_board_name(url: str) -> str:
         "glassdoor.com": "Glassdoor",
         "builtin.com": "Built In",
         "www.builtin.com": "Built In",
+        "builtinvancouver.org": "Built In Vancouver",
+        "www.builtinvancouver.org": "Built In Vancouver",
+        "wellfound.com": "Wellfound (Wellfound)",        
         "welcometothejungle.com": "Welcome to the Jungle",
         "app.welcometothejungle.com": "Welcome to the Jungle",
         "ashbyhq.com": "Ashby",
@@ -4117,10 +4937,14 @@ def is_job_detail_url(u: str) -> bool:
     if "edtechjobs.io" in host:
         return path.startswith("/jobs/") and not path.endswith("-jobs") and path.count("/") >= 2
 
-    # Built In
-    if "builtin.com" in host:
-        # /job/<category>/<slug>/<id>
-        return path.startswith("/job/") and path.count("/") >= 3
+    # Built In (main site) and Built In Vancouver
+    if "builtin.com" in host or "builtinvancouver.org" in host:
+        # Real job pages look like: /job/<slug>/<numeric-id>
+        # Examples:
+        #   /job/business-analyst-oms/7890832
+        #   /job/senior-product-manager-core-sync/7790870
+        return bool(re.match(r"^/job/[^/]+/\d+/?$", path))
+
 
     # Wellfound (AngelList Talent)
     if "wellfound.com" in host:
@@ -4131,6 +4955,12 @@ def is_job_detail_url(u: str) -> bool:
     if "welcometothejungle.com" in host or "app.welcometothejungle.com" in host:
         # e.g., /en/companies/<company>/jobs/<slug> or /en/jobs/<id>
         return "/jobs/" in path and not path.endswith("/jobs") and path.count("/") >= 3
+    
+    # Dice
+    if "dice.com" in host:
+        # Real job pages look like /job-detail/...; search pages use /jobs
+        return "/job-detail/" in path
+
 
     # Common ATS providers (good yield)
     # Greenhouse
@@ -4214,9 +5044,36 @@ def find_job_links(listing_html: str, base_url: str) -> list[str]:
         or "workday.com" in base_host
     )
 
+    # Built In (US) and Built In Vancouver listing pages
+    if "builtin.com" in base_host or "builtinvancouver.org" in base_host:
+        for a in anchors:
+            href = a["href"].strip()
+            if not href:
+                continue
+
+            # Skip "Top ___ Jobs ..." style links
+            text = a.get_text(" ", strip=True)
+            text_lower = text.lower()
+            if text_lower.startswith("top ") and " jobs" in text_lower:
+                continue
+
+            full_url = up.urljoin(base_url, href)
+            if is_blocked_url(full_url):
+                continue
+
+            p = up.urlparse(full_url)
+            path = p.path.lower()
+
+            # Only keep real job detail pages like /job/<slug>/<numeric-id>
+            if not re.match(r"^/job/[^/]+/\d+/?$", path):
+                continue
+
+            links.add(full_url)
+
+        return list(links)
+
 
     cap = 120 if ("ashbyhq.com" in base_host or is_workday) else None
-
     # Ashby special case
     if "ashbyhq.com" in base_host:
         for a in anchors:
@@ -4471,7 +5328,59 @@ def normalize_title(t: str, company: str | None = None) -> str:
 
 PLACEHOLDER_RX = re.compile(r"search by company rss feeds public api", re.I)
 
-def best_location_for_display(ld: dict, chips: str, scraped_loc: str) -> str:
+COUNTRY_RX = {
+    "CANADA": re.compile(r"\b(canada|can)\b", re.I),
+    "US": re.compile(r"\b(united states|usa|us)\b", re.I),
+    "MEXICO": re.compile(r"\bmexico\b", re.I),
+    "UK": re.compile(r"\buk|united kingdom\b", re.I),
+}
+
+def _countries_in(values: list[str]) -> set[str]:
+    out: set[str] = set()
+    for v in values or []:
+        if not v:
+            continue
+        s = v.strip()
+
+        # Canada (do NOT treat "CA" as Canada)
+        if re.search(r"\bcanada\b", s, re.I) or re.search(r"\bCAN\b", s):
+            out.add("CANADA")
+
+        # United States
+        if re.search(r"\bunited states\b", s, re.I) or re.search(r"\bUSA\b", s) or re.search(r"\bUS\b", s):
+            out.add("US")
+
+    return out
+
+def infer_default_country(job_url: str) -> str:
+    host = (urlparse(job_url).netloc or "").lower()
+
+    # Built In Vancouver is Canada
+    if "builtinvancouver" in host:
+        return "Canada"
+
+    # Dice is US default
+    if host.endswith("dice.com"):
+        return "US"
+
+    # Optional: .ca domains default to Canada
+    if host.endswith(".ca"):
+        return "Canada"
+
+    # Safe default
+    return "US"
+
+def best_location_for_display(ld: dict, chips: str, scraped_loc: str, default_country: str = "US") -> str:
+    def _all_canadian_locs(values: list[str]) -> bool:
+        """Return True when we have multiple locations and they are all Canada-coded."""
+        vals = [v for v in values if v]
+        if len(vals) < 2:
+            return False
+        return all(
+            re.search(r"\bcan(?:ada)?\b", v, re.I) or re.search(r"\bCAN\b", v)
+            for v in vals
+        )
+
     def _looks_specific(loc: str) -> bool:
         """Heuristic: prefer city/state strings over generic region tokens."""
         if not loc:
@@ -4486,33 +5395,59 @@ def best_location_for_display(ld: dict, chips: str, scraped_loc: str) -> str:
             return True
         return False
 
+    locs_from_ld = ld.get("locations") or []
+    scraped_parts = [p.strip() for p in re.split(r"[;/|]", scraped_loc) if p.strip()] if scraped_loc else []
+
+    # If scraped location is explicitly Canada, do not let chip noise override it
+    if scraped_loc and re.search(r"\bcan(?:ada)?\b", scraped_loc, re.I):
+        return scraped_loc if _looks_specific(scraped_loc) else "Canada"
+
+
+    # Collapse multi-province Canada lists down to a country-level label
+    if _all_canadian_locs(locs_from_ld):
+        return "Canada"
+    if scraped_parts and _all_canadian_locs(scraped_parts):
+        return "Canada"
+
     # 1) Prefer explicit region tokens in chips (skip pure "Remote")
     if chips:
-        tokens = [p.strip() for p in chips.split("|") if p.strip()]
+        tokens = [p.strip() for p in re.split(r"[|/;,]", chips) if p.strip()]
+        #tokens = [p.strip() for p in chips.split("|") if p.strip()]        Original line
         tokens = [t for t in tokens if t.lower() not in ("remote", "global", "anywhere")]
-        for key in ("US", "USA", "United States", "Canada", "North America", "Europe", "EU", "EMEA", "UK"):
-            for t in tokens:
-                if key.lower() in t.lower():
-                    # If scraped_loc is more specific than a generic region token, keep the specific one
-                    if _looks_specific(scraped_loc):
-                        return scraped_loc
-                    return t
+
+        countries = _countries_in(tokens + ([scraped_loc] if scraped_loc else []))
+
+        # Only collapse to Canada if Canada is the only detected country
+        if countries == {"CANADA"}:
+            return scraped_loc if _looks_specific(scraped_loc) else "Canada"
+
+        # If multiple countries exist, prefer the more specific scraped_loc
+        if _looks_specific(scraped_loc):
+            return scraped_loc
+
+        # Otherwise return the most informative token (or the first)
         if tokens:
             return tokens[0]
+        
 
     # 2) LD-JSON locations
     locs = ld.get("locations") or []
     if locs:
         nice = [l for l in locs if l and l.lower() not in ("remote", "global", "anywhere")]
         if nice:
-            return ", ".join(nice[:2])
+            job_url = (
+                (ld.get("job_url") or ld.get("Job URL") or ld.get("url") or ld.get("URL") or "")
+            )
+            if "builtinvancouver.org" in str(job_url).lower():
+                return ", ".join(nice)        # keep all locations for Built In Vancouver
+            return ", ".join(nice[:2])        # keep short version elsewhere
 
     # 3) Scraped location unless it was the crawler placeholder
     if scraped_loc and not PLACEHOLDER_RX.search(scraped_loc):
         return scraped_loc
 
-    # 4) Last resort
-    return "Remote"
+    # 4) Last resort: site default country
+    return default_country
 
 import re
 
@@ -4596,6 +5531,8 @@ REGION_TOKENS = {
 
 PATH_LOC_MAP = {
     "seattle": "Seattle, WA",
+    "seattle-non-campus": "Seattle, Non-Campus",
+    "Seattle, Non-Campus": "Seattle, Non-Campus",
     "tacoma": "Tacoma, WA",
     "harborview": "Harborview Medical Center, Seattle, WA",
     "montlake": "Seattle, WA",
@@ -4606,6 +5543,8 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
     chips = []
     low = (loc or "").lower()
     text = (page_text or "").lower()
+    up_loc = (loc or "").upper()
+    up_text = (page_text or "").upper()
 
     if "remote" in low or "remote" in text:
         chips.append("Remote")
@@ -4613,6 +5552,10 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
     for token, label in REGION_TOKENS.items():
         if token in low or token in text:
             chips.append(label)
+
+    # Recognize ISO country code CAN (Canada) when boards use abbreviations
+    if re.search(r"\bCAN\b", up_loc) or re.search(r"\bCAN\b", up_text):
+        chips.append("CA")
 
     for token in US_STATES:
         if token in low:
@@ -4634,9 +5577,12 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
 def _detect_applicant_regions(text: str) -> list[str]:
     regions = []
     low = (text or "").lower()
+    up = (text or "").upper()
     for token, label in REGION_TOKENS.items():
         if token in low:
             regions.append(label)
+    if re.search(r"\bCAN\b", up):
+        regions.append("CA")
     # Deduplicate
     seen = set()
     out = []
@@ -4677,54 +5623,151 @@ def _apply_path_location_hint(details: dict, url: str | None = None) -> None:
         pass
 
 
+CAN_PROV_RX = re.compile(r"\b(BC|AB|SK|MB|ON|QC|NB|NS|NL|PE|YT|NT|NU)\b", re.I)
+
 def _derive_location_rules(details: dict) -> dict:
     loc = details.get("Location", "") or details.get("display_location", "")
+    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
+
     text = " ".join([
         details.get("page_text") or "",
         details.get("Description") or "",
         details.get("Description Snippet") or "",
     ])
-    chips = _tokenize_location_chips(loc, text)
-    applicant_regions = _detect_applicant_regions(text)
+
+    loc_low = (loc or "").lower()
+
+    # Built In Vancouver: do not let page chrome pollute chip generation
+    text_for_rules = text
+    text_for_chips = "" if "builtinvancouver.org" in job_url else text
+
+    chips = _tokenize_location_chips(loc, text_for_chips)
+    applicant_regions = _detect_applicant_regions(text_for_rules)
+
+    # Built In Vancouver: detect Canada using multiple signals
+    is_biv = "builtinvancouver.org" in job_url
+    is_canada = False
+    if is_biv:
+        is_canada = bool(
+            re.search(r"\bcanada\b", loc_low)
+            or re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low)  # ", CAN"
+            or re.search(r"(?:^|[,\s])ca(?:$|[,\s])", loc_low)   # ", CA"
+            or CAN_PROV_RX.search(loc_low)
+            or any(str(c).lower() == "canada" for c in chips)
+        )
+
+    if is_biv and is_canada:
+        details["US Rule"] = "Fail"
+        details["WA Rule"] = "Fail"
+        details["Canada Rule"] = "Pass"
+
+        chips = [c for c in chips if c not in {"US", "NA"}]
+        applicant_regions = [r for r in applicant_regions if r not in {"US", "NA"}]
+
+        if not any(str(c).lower() == "canada" for c in chips):
+            chips.append("Canada")
+
+        # Only default to Remote for Canada when the listing is country-wide
+        rr = (details.get("Remote Rule") or "").strip()
+
+        # "Langley, British Columbia, CAN" is a specific onsite location, not country-wide remote
+        loc_specific = bool(re.search(r",\s*(bc|british columbia|on|ontario|qc|quebec|ab|alberta|mb|manitoba|sk|saskatchewan|ns|nova scotia|nb|new brunswick|nl|newfoundland|pe|prince edward island)\b", loc_low))
+
+        country_wide = (loc_low in {"canada", "can", "ca"} or loc_low.strip() == "")
+
+        if rr not in {"Remote", "Hybrid", "Onsite"}:
+            if country_wide and not loc_specific:
+                details["Remote Rule"] = "Remote"
+            else:
+                # If they gave a specific city/province, do not assume remote
+                details["Remote Rule"] = "Onsite"
 
     # Apply URL/path-based hint (e.g., Workday campus names)
     _apply_path_location_hint(details)
 
-    # Re-evaluate chips if path hint added one
+    # Merge chips if something already wrote Location Chips as a string
     chips_field = details.get("Location Chips") or ""
-    if chips_field and isinstance(chips_field, str):
-        chips = list({*chips, *[c for c in chips_field.split('|') if c]})
+    if isinstance(chips_field, str) and chips_field.strip():
+        extra = [c for c in re.split(r"[|,]", chips_field) if c.strip()]
+        chips = list({*chips, *extra})
 
-    remote_rule = details.get("Remote Rule") or "Unknown"
+    # Start with any explicit remote rule we already extracted (Built In badge parsing)
+    remote_rule = details.get("Remote Rule") or details.get("remote_flag") or "Unknown"
+
+    badge_text = " ".join([
+        details.get("workplace_type") or "",
+        details.get("work_mode") or "",
+        details.get("workplace_badge") or "",
+    ]).strip()
+
+    is_biv = "builtinvancouver.org" in job_url
+
+    # If we already have an explicit rule (Remote/Hybrid/Onsite), do not overwrite it
+    if remote_rule in {"Remote", "Hybrid", "Onsite"}:
+        pass
+    else:
+        if is_biv:
+            # For BIV, avoid page_text (nav contains "REMOTE"). Use badge_text if present.
+            if badge_text:
+                remote_rule = classify_work_mode(badge_text)
+            else:
+                remote_rule = "Unknown"
+        else:
+            remote_rule = classify_work_mode(f"{text} {badge_text}".lower())
+
+
+
+    onsite_terms = ("in-office", "in office", "onsite", "on-site", "on site")
+
+    """if "hybrid" in t or "telework" in t:
+        remote_rule = "Hybrid"
+    if any(term in t for term in onsite_terms):
+        remote_rule = "Onsite"
     if remote_rule.lower() in ("default", "unknown_or_onsite", "unknown", "no_remote_signal"):
-        t = text.lower()
-        if "in-office" in t or "in office" in t:
-            remote_rule = "Onsite"
-        elif "remote" in t:
+        if "remote" in t:
             remote_rule = "Remote"
-        elif "hybrid" in t:
+        elif "hybrid" in t or "telework" in t or "a few days at home" in t:
             remote_rule = "Hybrid"
-        elif "onsite" in t or "on-site" in t:
+        elif any(term in t for term in onsite_terms):
             remote_rule = "Onsite"
         else:
             remote_rule = "Unknown"
+    elif remote_rule.lower() == "remote" and ("hybrid" in t or "telework" in t):
+        remote_rule = "Hybrid"
+    elif any(term in t for term in onsite_terms):
+        remote_rule = "Onsite" """
 
-    # US rule: pass if chips/regions mention US/NA or location has US/state; fail if we see non-US regions without US
+    # US rule
     us_rule = details.get("US Rule") or ""
     if not us_rule or us_rule.lower() == "default":
-        if any(c in {"US", "NA"} for c in chips + applicant_regions):
+        if any(c in {"US", "NA"} for c in chips) or (not loc and any(r in {"US", "NA"} for r in applicant_regions)):
             us_rule = "Pass"
         elif any(c in {"EU", "UK", "EMEA", "APAC", "LATAM"} for c in chips + applicant_regions):
             us_rule = "Fail"
         else:
-            # look for explicit US signals in location
             low_loc = (loc or "").lower()
             if any(tok in low_loc for tok in ("united states", "usa", "u.s.")) or any(s in low_loc for s in US_STATES):
                 us_rule = "Pass"
             else:
                 us_rule = "Fail"
 
-    # WA rule: pass if explicit WA/Seattle signals OR the role is fully Remote in the US/CA
+    # Canada rule
+    canada_rule = details.get("Canada Rule") or ""
+    if not canada_rule or canada_rule.lower() == "default":
+        low_loc = (loc or "").lower()
+        chips_text = "|".join(chips).lower()
+        if (
+            "canada" in low_loc
+            or CAN_PROV_RX.search(low_loc)
+            or low_loc.endswith(", ca")
+            or "canada" in chips_text
+            or "|ca|" in f"|{chips_text}|"
+        ):
+            canada_rule = "Pass"
+        else:
+            canada_rule = "Fail"
+
+    # WA rule
     wa_rule = details.get("WA Rule") or ""
     if not wa_rule or wa_rule.lower() == "default":
         low_loc = (loc or "").lower()
@@ -4740,13 +5783,22 @@ def _derive_location_rules(details: dict) -> dict:
 
     details["Remote Rule"] = remote_rule
     details["US Rule"] = us_rule
+    details["Canada Rule"] = canada_rule
     details["WA Rule"] = wa_rule
+
+    # Keep these consistently pipe delimited since the rest of the pipeline expects that often
     details["Location Chips"] = details.get("Location Chips") or "|".join(chips)
     details["Applicant Regions"] = details.get("Applicant Regions") or "|".join(applicant_regions)
+
+    # If we already have multiple locations, keep them
+    if isinstance(details.get("Location"), str) and " / " in details["Location"]:
+        return details
+
     try:
         details["Location"] = best_location_for_display(details, details.get("Location Chips", ""), loc)
     except Exception:
         pass
+
     return details
 
 
@@ -4781,13 +5833,58 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     page_text = str(d.get("page_text") or "")
     phost     = (page_host or "").lower()
 
+    # --- Built In (incl. city sites like Built In Vancouver) ---
+    # If Built In did NOT give us a structured salary, be conservative:
+    # don't keep tiny or obviously bogus dollar amounts scraped from the text.
+    if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
+        have_structured = bool(d.get("Salary Range") or d.get("Salary Text"))
+        if not have_structured:
+            # If a later pass guessed a salary but it's tiny (e.g. $12)
+            # and there's no "hour" / "hr" context, treat it as noise and drop it.
+            s_from = d.get("Salary From")
+            s_text = (d.get("Salary Text") or "").lower()
+            if (
+                isinstance(s_from, (int, float)) 
+                and s_from < 1000 
+                and "hour" not in s_text 
+                and "/hr" not in s_text 
+                and "per hour" not in s_text
+            ):
+                for k in ["Salary From", "Salary To", "Salary Range", "Salary Text", "Salary Source"]:
+                    d.pop(k, None)
+
+
     # EdTech specific: page_text includes "Similar Jobs" with other jobs and salaries.
     # For this host we trust the main description fields and drop page_text.
     if "edtech.com" in phost:
         page_text = ""
 
-    blob = " ".join(str(p or "") for p in (sr_text, full_desc, snippet, title, page_text))
+    blob_parts = [
+        d.get("page_text") or "",
+        d.get("Description") or "",
+        d.get("Description Snippet") or "",
+    ]
+
+    # Built In: include raw HTML because salary ranges are often split across spans
+    if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
+        blob_parts.append(d.get("html_raw") or "")
+
+    blob = " ".join(blob_parts)
     blob_lower = blob.lower()
+
+    # DEBUG: confirm what salary text we are scanning
+    if page_host and "builtinvancouver.org" in page_host:
+        try:
+            log_line("BIV DEBUG", f"{DOT6}Salary blob_len= {len(blob_lower)} has_$= {'$' in blob_lower} has_cad= {'cad' in blob_lower}")
+            # show a small window around the first dollar sign if present
+            idx = blob_lower.find("$")
+            if idx != -1:
+                log_line("BIV DEBUG", f"{DOT6}Salary blob window= {blob_lower[max(0, idx-80):idx+180]!r}")
+            else:
+                log_line("BIV DEBUG", f"{DOT6}Salary blob head= {blob_lower[:220]!r}")
+        except Exception:
+            pass
+
 
 
     # ==== WORKDAY salary extraction (simple and robust) ====
@@ -4857,6 +5954,26 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
             "compensation",
         )
     )
+
+    # If we have salary language but no numbers, preserve the signal
+    has_numeric = isinstance(d.get("Salary From"), (int, float)) or isinstance(d.get("Salary To"), (int, float))
+
+    if has_signal and not has_numeric:
+        # Do not overwrite a better existing text value
+        if not (d.get("Salary Text") or "").strip():
+            # Pick a friendly label based on what we saw
+            if "competitive" in signal_blob:
+                d["Salary Text"] = "Competitive salary (no range listed)"
+                d["Salary Range"] = "Competitive salary"
+            elif "pay range" in signal_blob or "salary range" in signal_blob:
+                d["Salary Text"] = "Salary range mentioned (no numbers listed)"
+                d["Salary Range"] = "Salary range mentioned"
+            else:
+                d["Salary Text"] = "Compensation mentioned (no numbers listed)"
+                d["Salary Range"] = "Compensation mentioned"
+
+            d["Salary Source"] = d.get("Salary Source") or "signal_only"
+
 
     # Collect known job-id numbers so we can filter them out of salary candidates.
     job_id_numbers: set[int] = set()
@@ -4982,18 +6099,29 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
                 status = "missing"
                 note = "Salary context check failed"
 
-        d["Salary Max Detected"] = max_detected or ""
-        d["Salary Near Min"]     = near_min_val
-        d["Salary Status"]       = status
-        d["Salary Note"]         = note
-        d["Salary Placeholder"]  = ""  # real number beats placeholder
-        return d
+        # Only finalize numeric salary fields if we still have a numeric salary
+        if max_detected:
+            d["Salary Max Detected"] = max_detected or ""
+            d["Salary Near Min"]     = near_min_val
+            d["Salary Status"]       = status
+            d["Salary Note"]         = note
+            d["Salary Placeholder"]  = ""  # real number beats placeholder
+            return d
+
+        # If context check removed the salary, fall through to signal-only/missing logic below
+
 
     # 6) No usable numeric salary: fall back to signal-only / missing
     if has_signal:
         status      = "signal_only"
         placeholder = placeholder or "Competitive salary"
         note        = "Salary language present but no concrete numbers"
+
+        # NEW: treat signal as a real salary artifact for UI + BuiltIn checks
+        d["Salary"]        = d.get("Salary") or placeholder
+        d["Salary Text"]   = d.get("Salary Text") or placeholder
+        d["Salary Range"]  = d.get("Salary Range") or placeholder
+        d["Salary Source"] = d.get("Salary Source") or "signal_only"
     else:
         status      = "missing"
         placeholder = ""
@@ -5051,146 +6179,291 @@ def _autoscroll_listing(page,
     return len(page.query_selector_all(link_css))
     
 
+from playwright.sync_api import sync_playwright
+from urllib import parse as up
+import re
+import time
+
+TRANSIENT_NET_MARKERS = (
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_TIMED_OUT",
+)
+
+PW_SUCCESS = 0
+PW_FAIL = 0
+REQ_FALLBACK = 0
+
+
 def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
+    """
+    Fetch HTML for a URL using Playwright, with:
+      - Transient network retries on page.goto
+      - Host specific waits and scrolling
+      - Optional stats counters (PW_SUCCESS, PW_FAIL, REQ_FALLBACK) if defined
+    """
     if sync_playwright is None:
         return None
+
+    # network errors we treat as transient and worth retrying
+    TRANSIENT_NET_MARKERS = (
+        "ERR_INTERNET_DISCONNECTED",
+        "ERR_CONNECTION_RESET",
+        "ERR_CONNECTION_CLOSED",
+        "ERR_TIMED_OUT",
+    )
+
     try:
         with sync_playwright() as p:
             browser_type = getattr(p, engine)  # "chromium" | "firefox" | "webkit"
             browser = browser_type.launch(headless=True, args=["--no-sandbox"])
             context = browser.new_context(user_agent=user_agent)
             page = context.new_page()
-            page.goto(url, timeout=PW_GOTO_TIMEOUT, wait_until="domcontentloaded")
-            
+
             try:
-                #from urllib.parse import urlparse
-                h = up.urlparse(url).netloc.lower()
-
-                if h.endswith("jobs.ashbyhq.com"):
-                    # Wait until job cards/links render (Ashby uses <a href="/<org>/<slug>">)
-                    page.wait_for_selector("a[href*='/jobs/']:not([href$='/jobs'])", timeout=PW_WAIT_TIMEOUT*2)
-                    # Gentle scroll to trigger lazy loads
-                    page.mouse.wheel(0, 2500)
-                    page.wait_for_timeout(800)
-
-                elif h.endswith("myworkdayjobs.com") or h.endswith("myworkdaysite.com"):
-                    # Workday often needs a little extra settle time
-                    page.wait_for_timeout(1200)
-                
-                elif h.endswith("wellfound.com"):
-                    page.wait_for_selector("a[href^='/jobs/'], a[href^='/l/']", timeout=PW_WAIT_TIMEOUT*2)
-                    page.mouse.wheel(0, 3000)
-                    page.wait_for_timeout(800)
-                
-                elif h.endswith("welcometothejungle.com"):
-                    # Wait for the main content
-                    page.wait_for_selector("main, [data-testid='job-offer']", timeout=PW_WAIT_TIMEOUT*2)
-
-                    # Click any visible "View more" expanders so hidden sections load
+                # ---------------------------
+                # 1. Robust page.goto with retry
+                # ---------------------------
+                last_exc = None
+                for attempt in range(1, 4):  # up to 3 attempts
                     try:
-                        # Role-based locator first
-                        buttons = page.get_by_role("button", name=re.compile(r"view more", re.I))
-                        count = buttons.count()
-                        if count:
-                            for i in range(min(count, 4)):
-                                try:
-                                    buttons.nth(i).click()
-                                    page.wait_for_timeout(300)
-                                except Exception:
-                                    pass
+                        page.goto(
+                            url,
+                            timeout=PW_GOTO_TIMEOUT,
+                            wait_until="domcontentloaded",
+                        )
+                        last_exc = None
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        msg = str(e)
+                        is_transient = any(m in msg for m in TRANSIENT_NET_MARKERS)
+                        if is_transient and attempt < 3:
+                            log_event(
+                                "WARN",
+                                (
+                                    f"Playwright network issue on attempt {attempt} for "
+                                    f"{url} ({e.__class__.__name__}): {e}. Retrying..."
+                                ),
+                            )
+                            time.sleep(3 * attempt)
+                            continue
+                        # non transient or last attempt
+                        raise
 
-                        # Fallback to common WTTJ expanders
-                        for sel in [
-                            "button:has-text('View more')",
-                            "[role='button']:has-text('View more')",
-                            "button[data-testid='show-more']",
-                        ]:
-                            els = page.locator(sel)
-                            n = els.count()
-                            if n:
-                                for i in range(min(n, 4)):
+                # if all attempts failed, re raise last exception
+                if last_exc is not None:
+                    raise last_exc
+
+                # ---------------------------
+                # 2. Host and path info
+                # ---------------------------
+                try:
+                    parsed = up.urlparse(url)
+                    host = parsed.netloc.lower()
+                    path = parsed.path or "/"
+                    #log_event("DEBUG", f"Playwright host={host} path={path} url={url}")    ignored 20251215    
+                except Exception:
+                    host = ""
+                    path = "/"
+
+                # ---------------------------
+                # 3. Host specific behavior
+                # ---------------------------
+                try:
+                    if host.endswith("jobs.ashbyhq.com"):
+                        # Wait until job cards or links render
+                        page.wait_for_selector(
+                            "a[href*='/jobs/']:not([href$='/jobs'])",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+                        # Gentle scroll to trigger lazy loads
+                        page.mouse.wheel(0, 2500)
+                        page.wait_for_timeout(800)
+
+                    elif host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
+                        # Workday often needs a bit of extra time
+                        page.wait_for_timeout(1200)
+
+                    elif host.endswith("wellfound.com"):
+                        page.wait_for_selector(
+                            "a[href^='/jobs/'], a[href^='/l/']",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+                        page.mouse.wheel(0, 3000)
+                        page.wait_for_timeout(800)
+
+                    elif host.endswith("dice.com") or host.endswith("www.dice.com"):
+                        # Wait for job cards rendered by JS
+                        page.wait_for_selector(
+                            "a[href*='/job-detail/']",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+                        page.mouse.wheel(0, 4000)
+                        page.wait_for_timeout(800)
+
+                    elif host.endswith("welcometothejungle.com"):
+                        # Wait for the main content
+                        page.wait_for_selector(
+                            "main, [data-testid='job-offer']",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+
+                        # Click visible "View more" expanders so hidden sections load
+                        try:
+                            # Role-based locator first
+                            buttons = page.get_by_role(
+                                "button",
+                                name=re.compile(r"view more", re.I),
+                            )
+                            count = buttons.count()
+                            if count:
+                                for i in range(min(count, 4)):
                                     try:
-                                        els.nth(i).click()
+                                        buttons.nth(i).click()
                                         page.wait_for_timeout(300)
                                     except Exception:
                                         pass
 
-                        # Let the DOM settle
-                        page.wait_for_timeout(500)
-                    except Exception:
-                        pass
+                            # Fallback to common WTTJ expanders
+                            for sel in [
+                                "button:has-text('View more')",
+                                "[role='button']:has-text('View more')",
+                                "button[data-testid='show-more']",
+                            ]:
+                                els = page.locator(sel)
+                                n = els.count()
+                                if n:
+                                    for i in range(min(n, 4)):
+                                        try:
+                                            els.nth(i).click()
+                                            page.wait_for_timeout(300)
+                                        except Exception:
+                                            pass
 
+                            # Let the DOM settle
+                            page.wait_for_timeout(500)
+                        except Exception:
+                            pass
 
+                except Exception:
+                    # do not fail the run on host specific tweaks
+                    pass
 
-            except Exception:
-                pass
-
-                        # Auto-scroll for EdTech listing pages (infinite scroll)
-            try:
-                #from urllib.parse import urlparse
-                host = up.urlparse(url).netloc.lower()
-                path = up.urlparse(url).path or "/"
-
-                needs_autoscroll = (
-                    host in {"edtech.com", "www.edtech.com"}
-                    and "/jobs/" in path
-                    and path.endswith("-jobs")
-                )
-
-                if needs_autoscroll:
-                    # 3a) click 'More' buttons if present
-                    try:
-                        for _ in range(50):
-                            btn = page.query_selector("button:has-text('More'), a:has-text('More'), button:has-text('Load'), a:has-text('Load')")
-                            if not btn:
-                                break
-                            btn.click()
-                            page.wait_for_timeout(900)
-                    except Exception:
-                        pass
-
-                    # 3b) then deep autoscroll until stable
-                    _autoscroll_listing(
-                        page,
-                        link_css='a[href^="/jobs/"]:not([href$="-jobs"])',
-                        max_loops=1100,
-                        idle_ms=2000
+                # ---------------------------
+                # 4. EdTech listing autoscroll
+                # ---------------------------
+                try:
+                    needs_autoscroll = (
+                        host in {"edtech.com", "www.edtech.com"}
+                        and "/jobs/" in path
+                        and path.endswith("-jobs")
                     )
-            except Exception:
-                # don’t fail the run if autoscroll logic hiccups
-                pass
 
-            # (this `try:` already existed below — leave it)
-            try:
-                page.wait_for_selector(
-                    "a[href^='/job/'], a[href*='/jobs/'], a[href*='/remote-jobs/'], "
-                    "a:has(h2), a:has(h3), main article",
-                    timeout=PW_WAIT_TIMEOUT,
-                )
+                    if needs_autoscroll:
+                        # click "More" buttons first if present
+                        try:
+                            for _ in range(50):
+                                btn = page.query_selector(
+                                    "button:has-text('More'), "
+                                    "a:has-text('More'), "
+                                    "button:has-text('Load'), "
+                                    "a:has-text('Load')"
+                                )
+                                if not btn:
+                                    break
+                                btn.click()
+                                page.wait_for_timeout(900)
+                        except Exception:
+                            pass
 
-            except Exception:
-                pass
-            # after page.goto(...)
-            try:
-                page.wait_for_selector(
-                    "script[src*='greenhouse.io/embed/job_board'], "
-                    "iframe[src*='greenhouse'], "
-                    "a[href*='jobs.lever.co'], "
-                    "a[href*='ashbyhq.com']",
-                    timeout=PW_WAIT_TIMEOUT
-                )
-            except Exception:
-                pass  # fall back to whatever's loaded
-            html = page.content()
-            context.close()
-            browser.close()
-            return html
+                        # then deep autoscroll until stable
+                        _autoscroll_listing(
+                            page,
+                            link_css='a[href^="/jobs/"]:not([href$="-jobs"])',
+                            max_loops=1100,
+                            idle_ms=2000,
+                        )
+                except Exception:
+                    # do not fail run if autoscroll logic hiccups
+                    pass
+
+                # ---------------------------
+                # 5. Generic waits for common job structures
+                # ---------------------------
+                try:
+                    page.wait_for_selector(
+                        "a[href^='/job/'], "
+                        "a[href*='/jobs/'], "
+                        "a[href*='/remote-jobs/'], "
+                        "a:has(h2), "
+                        "a:has(h3), "
+                        "main article",
+                        timeout=PW_WAIT_TIMEOUT,
+                    )
+                except Exception:
+                    pass
+
+                # wait for common embedded boards if present
+                try:
+                    page.wait_for_selector(
+                        "script[src*='greenhouse.io/embed/job_board'], "
+                        "iframe[src*='greenhouse'], "
+                        "a[href*='jobs.lever.co'], "
+                        "a[href*='ashbyhq.com']",
+                        timeout=PW_WAIT_TIMEOUT,
+                    )
+                except Exception:
+                    # fine to fall back to whatever is loaded
+                    pass
+
+                # ---------------------------
+                # 6. Capture HTML and bump counters
+                # ---------------------------
+                html = page.content()
+
+                # optional counters if you define them globally
+                try:
+                    g = globals()
+                    if "PW_SUCCESS" in g:
+                        g["PW_SUCCESS"] += 1
+                except Exception:
+                    pass
+
+                #log_event("DEBUG", f"Playwright returned HTML for {url}")       ignored 20251215    
+                return html
+
+            finally:
+                # always clean up Playwright resources
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+
     except Exception as e:
-        msg = f"Playwright failed on {url} ({e.__class__.__name__}):\n{e}\nFalling back to requests."
+        # optional failure / fallback counters
+        try:
+            g = globals()
+            if "PW_FAIL" in g:
+                g["PW_FAIL"] += 1
+            if "REQ_FALLBACK" in g:
+                g["REQ_FALLBACK"] += 1
+        except Exception:
+            pass
+
+        msg = (
+            f"Playwright failed on {url} ({e.__class__.__name__}):\n"
+            f"{e}\n"
+            "Falling back to requests."
+        )
         for ln in msg.splitlines():
             log_event("WARN", ln)
         return None
-
 
 
 def get_html(url):
@@ -5224,13 +6497,13 @@ def expand_career_sources():
     pages = []
     for url in CAREER_PAGES:
         progress_clear_if_needed()
-        _bk_log_wrap("[CAREERS", f" ]{DOT3} 1. Probing {url}")
+        _bk_log_wrap("[CAREERS", f" ]{DOT3}Probing {url}")
         html = get_html(url)
         if not html:
-            log_print("[WARN", f" ]{DOT3}{DOTW} 2. Warning: Failed to GET listing page: {url}")
+            log_print("[WARN", f" ]{DOT3}{DOTW}Warning: Failed to GET listing page: {url}")
 
             progress_clear_if_needed()
-            _bk_log_wrap("[WARN", f" ]{DOT3}{DOTW} 3. Could not fetch: {url}")
+            _bk_log_wrap("[WARN", f" ]{DOT3}{DOTW}Could not fetch: {url}")
             continue
 
         
@@ -5296,7 +6569,7 @@ def expand_career_sources():
 
         if found:
             progress_clear_if_needed()
-            _bk_log_wrap("[CAREERS", f" ]{DOT6}-> {len(found)} board(s) found on {url}")
+            _bk_log_wrap("[CAREERS", f" ]{DOT6}{len(found)} board(s) found on {url}")
             pages.extend(sorted(found))
         else:
             progress_clear_if_needed()
@@ -5541,14 +6814,6 @@ def extract_wttj_company_jobs(html: str, company_url: str) -> list[str]:
             links.append(full_url)
 
     return links
-#BOARDS.append({
-#    "name": "WTTJ Beam Benefits company page",
-#    "type": "wttj_company",
-#    "company_url": "https://app.welcometothejungle.com/companies/Beam-Benefits",
-#    "country": "us",
-#})
-
-
 
 
 
@@ -5564,7 +6829,6 @@ INCLUDE_TITLES_EXACT = [
     r"\bbusiness analyst\b",
     r"\bsystems analyst\b",
     r"\bbusiness systems analyst\b",
-    r"\bbusiness system analyst\b",
     r"\bbusiness systems engineer\b",
     r"\bscrum master\b",
     r"\brelease train engineer\b", r"\brte\b",
@@ -5577,6 +6841,7 @@ INCLUDE_TITLES_FUZZY = [
     r"\bprod\s*ops\b",
     r"\bproduct\s+analyst\b",
     r"\bbusiness\s+analyst\b",
+    r"\bbusiness\s+system\s+analyst\b",
     r"\brequirements?\s+(?:analyst|engineer)\b",
     r"\bsolutions?\s+analyst\b",
     r"\bimplementation\s+analyst\b",
@@ -5615,6 +6880,7 @@ EXCLUDE_TITLES = [
     r"\bhr|recruiter|talent|people\s+ops\b",
     r"\b(finance|payroll|bookkeep|accountant)\b(?!.*\bproduct\b)",
     r"\boperations?\b(?!.*\bproduct\b)",
+    r"\bintern\b",
 ]
 
 # responsibility signals that look like PO/PM/BA/BSA/Scrum Master work
@@ -5758,25 +7024,12 @@ _seen_job_keys: set[str] = set()
 
 
 def _log_keep_to_terminal(row: dict) -> None:
-    ts = now_ts()
-    title = (row.get("Title") or "").strip()
-    url   = (row.get("Job URL") or "").strip()
-    company, board = _company_and_board_for_terminal(row)
-    salary_line = _fmt_salary_line(row)
-    loc = (row.get("Location") or "").strip()
-
-    progress_clear_if_needed()
-    keep_log(f"{title}")
-    log_print(f"[{ts}] {_status_box('KEEP')}{DOT3}{company} → {board}")
-    if url:
-        log_print(f"[{ts}] {_status_box('KEEP')}{DOT3}{url}")
-    if loc:
-        log_print(f"[{ts}] {_status_box('KEEP')}{DOT3}Location: {loc}")
-    if salary_line:
-        log_print(f"[{ts}] {_status_box('$ SALARY')} {salary_line}")
-    _print_debug_rows_for(row, color=LEVEL_COLOR.get("KEEP", RESET))
-    log_print(f"[{ts}] {_status_box('✅ DONE')}.")
-    progress_clear_if_needed()
+    """
+    Render KEEP rows using the unified log_event layout so spacing/wrapping
+    stays aligned with SKIP blocks.
+    """
+    title = _title_for_log(row, row.get("Job URL", ""))
+    log_event("KEEP", title, right=row)
 
 
 def _host(u: str) -> str:
@@ -6173,12 +7426,64 @@ def _is_commutable_local(d: dict) -> bool:
 
 def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dict:
     """
-    Pull location info from Workday job detail page JSON blobs.
-    Adds 'Location', 'locations' (list), and 'Location Chips' hints when found.
+    Pull location info from Workday job detail page JSON blobs and the visible
+    badges (remoteType, locations).
     """
     try:
+        html_lower = (html or "").lower()
         soup = BeautifulSoup(html or "", "html.parser")
+
+        # 1. Visible "Remote type" badge, for tenants like UW
+        try:
+            rt_dd = soup.select_one("[data-automation-id='remoteType'] dd") or \
+                    soup.select_one("[data-automation-id='remoteType']")
+            if rt_dd:
+                rt_txt = rt_dd.get_text(" ", strip=True)
+                if rt_txt:
+                    low = rt_txt.lower()
+                    if "hybrid" in low or "telework" in low:
+                        details["Remote Rule"] = "Hybrid"
+                        details["remote_flag"] = "Hybrid"
+                    elif "remote" in low:
+                        details["Remote Rule"] = "Remote"
+                        details["remote_flag"] = "Remote"
+                    else:
+                        # only set Onsite if nothing was set yet
+                        details.setdefault("Remote Rule", "Onsite")
+        except Exception:
+            pass
+
+        # 2. Visible "Location" badge, usually city and campus
+        try:
+            loc_dd = soup.select_one("[data-automation-id='locations'] dd") or \
+                     soup.select_one("[data-automation-id='locations']")
+            if loc_dd:
+                loc_txt = loc_dd.get_text(" ", strip=True)
+                if loc_txt:
+                    cur = (details.get("Location") or "").strip().lower()
+                    # overwrite only when current value is generic
+                    if cur in ("", "us", "united states", "remote"):
+                        details["Location"] = loc_txt
+        except Exception:
+            pass
+
+        # 3. Pre detect hybrid/telework signal from full HTML as a fallback
+        if ("hybrid" in html_lower) or ("telework" in html_lower):
+            details.setdefault("Remote Rule", "Hybrid")
+            details.setdefault("remote_flag", "Hybrid")
+
+        # existing JSON parsing code follows
         script_txt = ""
+        for s in soup.find_all("script"):
+            raw = s.string or s.get_text() or ""
+            if not raw:
+                continue
+            if "mosaic.providerData" in raw or "INITIAL_STATE" in raw:
+                script_txt = raw
+                break
+        if not script_txt:
+            return details
+        
         for s in soup.find_all("script"):
             raw = s.string or s.get_text() or ""
             if not raw:
@@ -6212,6 +7517,34 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
         job_locations = job.get("jobLocations") or job.get("joblocations") or []
         locs: list[str] = []
         chips: set[str] = set()
+
+        # Remote/Hybrid hint embedded in the Workday JSON payload (robust even when the page
+        # text lacks the visible badge we want). This gives Hybrid priority over Remote.
+        job_text = ""
+        try:
+            job_text = json.dumps(job).lower()
+        except Exception:
+            job_text = ""
+        if job_text:
+            if ("hybrid" in job_text) or ("telework" in job_text):
+                details["Remote Rule"] = "Hybrid"
+                details["remote_flag"] = "Hybrid"
+            elif "remote" in job_text and not details.get("Remote Rule"):
+                details["Remote Rule"] = "Remote"
+                details.setdefault("remote_flag", "Remote")
+
+        # Remote type from visible HTML rows (fallback when JSON lacks it)
+        if not details.get("Remote Rule"):
+            try:
+                import re as _re
+                rt_label = soup.find(string=_re.compile(r"remote\\s*type", _re.I))
+                if rt_label:
+                    dd = rt_label.find_next("dd")
+                    if dd and dd.get_text(strip=True):
+                        details["Remote Rule"] = dd.get_text(strip=True)
+                        details.setdefault("remote_flag", details["Remote Rule"])
+            except Exception:
+                pass
 
         for loc in job_locations:
             if not isinstance(loc, dict):
@@ -6269,7 +7602,8 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
         path_lower = (urlparse(details.get("Job URL") or job_url or "").path or "").lower()
         for token, nice in PATH_LOC_MAP.items():
             if token in path_lower:
-                if not details.get("Location") or details.get("Location", "").lower() in {"", "us", "united states"}:
+                loc_cur = (details.get("Location") or "").lower()
+                if (not loc_cur or loc_cur in {"", "us", "united states"} or "remote" in loc_cur):
                     details["Location"] = nice
                 chips.add("US")
                 chips.add("WA")
@@ -6761,15 +8095,21 @@ def log_event(level: str,
 
     if lvl == "KEEP":
         progress_clear_if_needed()
+        keep_tag = _box("KEEP ")
+        keep_body_color = None  # no body highlighting requested
+
         # --- Title (first line) ---
         title_txt = (job_dict.get("Title") or "").strip()
         if title_txt:
-            wrapped = _wrap_lines(title_txt, width=width)
-            for i, ln in enumerate(wrapped):
-                if i == 0:
-                    log_print(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
-                else:
-                    log_print_plain(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
+            for ln in _wrap_lines(title_txt, width=width):
+                log_print(f"{keep_tag}.{ln}", color=KEEP_TITLE_COLOR, color_prefix=True)
+
+    #        wrapped = _wrap_lines(title_txt, width=width)
+    #        for i, ln in enumerate(wrapped):
+    #            if i == 0:
+    #                log_print(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
+    #            else:
+    #                log_print_plain(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
 
         company = (job_dict.get("Company") or "").strip() or "Missing Company"
         board   = ((job_dict.get("Career Board") or job_dict.get("career_board") or "").strip()
@@ -6779,34 +8119,43 @@ def log_event(level: str,
         #company = (job_dict.get("Company") or "Missing Company").strip()
         #board   = (job_dict.get("Career Board") or "Missing Board").strip()
         progress_clear_if_needed()
-        log_print_plain(f"{color}{_box('KEEP ')}...{board}.....{company}{RESET}")
+        for ln in _wrap_lines(f"{color}{board}{DOT6}{company}{RESET}", width=width):
+            log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
 
         # --- URL line ---
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                log_print_plain(f"{color}{_box('KEEP ')}...{ln}{RESET}")
+                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
         loc = (job_dict.get("Location") or "").strip()
         if loc:
-            rr = (job_dict.get("Remote Rule") or "Unknown").strip()
-            loc_line = f"{rr} Location: {loc}."
+            remote_term = (
+                job_dict.get("Remote Rule")
+                or job_dict.get("remote_rule")
+                or job_dict.get("Remote Flag")
+                or job_dict.get("remote_flag")
+                or "Remote"
+            )
+            loc_line = f"{color}{remote_term} Location: {loc}."
             for ln in _wrap_lines(loc_line, width=width):
-                log_print_plain(f"{color}{_box('KEEP ')}...{ln}{RESET}")
+                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
         apply_note = job_dict.get("Apply URL Note", "")
         if apply_note:
-            log_print_plain(f"{color}{_box('KEEP ')}...Apply note: {apply_note}{RESET}")
+            for ln in _wrap_lines(f"Apply note: {apply_note}", width=width):
+                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
 
         # --- Always show Salary line with fixed 22-cell width ---
-        log_print_plain(f"{color}{_box('💲 SALARY ')}...{_salary_payload_22(job_dict)}{RESET}")
-        
+        #log_print(f"{color}{_box('$ SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
+        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
+        log_line("$ SALARY", _vis_fit(salary_str or "Missing or Unknown", 22))
 
 
-        if vis or score or mark:
-            log_print_plain(f"{color}{_conf_box(vis, score, mark)}.{RESET}")
 
-        _print_debug_rows_for(job_dict, color=color)
-        log_print_plain(f"{color}{_box('✅ DONE ')}.{RESET}")
-        #refresh_progress()
+        #if vis or score or mark:
+        #    log_print(f"{color}{_conf_box(vis, score, mark)}.{RESET}")
+
+        _print_debug_rows_for(job_dict, color=keep_body_color)
+        log_print(f"{color}{_box('DONE ')}.✅ {RESET}")
         return
 
     if lvl == "SKIP":
@@ -6815,28 +8164,36 @@ def log_event(level: str,
             wrapped = _wrap_lines(title, width=width)
             for i, ln in enumerate(wrapped):
                 if i == 0:
-                    log_print(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR)
+                    log_print(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR, color_prefix=True)
                 else:
-                    log_print_plain(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR)
+                    log_print(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR)
 
         if career_board or company:
             progress_clear_if_needed()
-            log_print_plain(f"{color}{_box('SKIP ')}{DOT3}{career_board}{DOT6}{company}{RESET}")
+            log_print(f"{color}{_box('SKIP ')}{DOT3}{career_board}{DOT6}{company}{RESET}")
 
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                log_print_plain(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
         loc = (job_dict.get("Location") or "").strip()
         if loc:
-            rr = (job_dict.get("Remote Rule") or "Unknown").strip()
-            loc_line = f"{rr} Location: {loc}."
+            remote_term = (
+                job_dict.get("Remote Rule")
+                or job_dict.get("remote_rule")
+                or job_dict.get("Remote Flag")
+                or job_dict.get("remote_flag")
+                or "Remote"
+            )
+            loc_line = f"{remote_term} Location: {loc}."
             for ln in _wrap_lines(loc_line, width=width):
-                log_print_plain(f"{color}{_box('SKIP ')}...{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
         
         # --- Always show Salary line with fixed 22-cell width ---
-        log_print_plain(f"{color}{_box('💲 SALARY ')}...{_salary_payload_22(job_dict)}{RESET}")
-        
+        #log_print(f"{color}{_box('$ SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
+        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
+        log_line("$ SALARY", _vis_fit(salary_str or "Missing or Unknown", 22))
+
 
 
         # use the explicit reason parameter if provided, otherwise the dict
@@ -6845,10 +8202,10 @@ def log_event(level: str,
         if reason_text:
             for ln in _wrap_lines(reason_text, width=width):
                 progress_clear_if_needed()
-                log_print_plain(f"{color}{_box('SKIP ')}...{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
 
-        if vis or score or mark:
-            log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
+        #if vis or score or mark:
+        #    log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
         progress_clear_if_needed()
         _print_debug_rows_for(job_dict, color=color)
         log_print(f"{color}{_box('DONE ')}.🚫{RESET}")
@@ -6888,6 +8245,8 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
 # alias so older call sites without the underscore still work
 # keep the public alias consistent
 def log_and_record_skip(link: str, rule_reason: str | None = None, keep_row: dict | None = None) -> None:
+    # Legacy alias: keep the old entry point but route to the shared helper
+    # _record_skip(link, None, row)  # buggy call kept for reference
     _log_and_record_skip(link, rule_reason, keep_row)
 
 
@@ -6895,36 +8254,18 @@ PRIOR_DECISIONS_CACHE: dict[str, tuple[str, str]] = {}
 
 
 def _log_and_record_skip(link: str, rule_reason: str | None = None, row: dict | None = None) -> None:
-
     """
-    Normalize + record a skipped job and emit SKIP logs to the terminal.
+    Helper used by both the main loop and the rule engine.
+    Logs a SKIP line and records the skip row once.
     """
-    # --- normalize the row and make sure core fields are present ---
-    if row is None:
-        row = {}
-    display_reason = rule_reason or row.get("Reason Skipped") or "Filtered by rules"
-    row.setdefault("Job URL", link)
-    row.setdefault("Reason Skipped", display_reason)
-    row = _normalize_skip_defaults(row)
-    _apply_prior_decisions(row, PRIOR_DECISIONS_CACHE)
+    row = row or {}
+    reason = (row.get("Reason Skipped") or rule_reason or "").strip() or "filtered by rules"
 
-    # --- record the skip once (updates `skipped_rows` + `skip_count`) ---
-    _record_skip(row, reason=display_reason)
+    # Log a structured SKIP block with the row details and a plain-text reason
+    log_event("SKIP", _title_for_log(row, link), right=row, reason=reason)
 
-    # --- route console output through the unified logger ---
-    title = ""
-    try:
-        title = _title_for_log(row, link)
-    except Exception:
-        title = row.get("Title", "") or ""
-
-    log_event(
-        "SKIP",
-        title,
-        right=row,
-        reason=display_reason,
-        url=link,
-    )
+    # Actually record the skip
+    _record_skip(row, reason=reason)
 
 
 
@@ -6976,14 +8317,15 @@ def _normalize_skip_defaults(row: dict) -> dict:
     return base
 
 
-def _record_keep(row: dict) -> None:
+
+def _record_keep(row: dict) -> bool:
     global kept_count
 
     # 1) Merge in any prior decisions from Google Sheets (Reason, Applied?, etc.)
     try:
         _apply_prior_decisions(row, PRIOR_DECISIONS_CACHE)
     except NameError:
-        # safety: if cache not defined for some reason, just continue
+        # Safety: if cache not defined for some reason, just continue
         pass
 
     # 2) Track seen URLs for de-dupe
@@ -6999,11 +8341,31 @@ def _record_keep(row: dict) -> None:
     kept_count += 1
     progress_clear_if_needed()
     _progress_after_decision()
+    return True
 
 
 
-def _record_skip(row: dict, reason: str) -> None:
+def _record_skip(
+    row_or_link: dict | str,
+    reason: str | None = None,
+    row: dict | None = None,
+) -> None:
+    """
+    Record a skipped job. Accepts both the legacy signature
+    `_record_skip(row, reason)` and the newer form `_record_skip(link, reason, row)`.
+    """
     global skip_count, _seen_job_keys
+
+    # Normalize inputs so downstream logic always has a dict row
+    if isinstance(row_or_link, dict):
+        row = row_or_link or {}
+    else:
+        row = row or {}
+        row.setdefault("Job URL", row_or_link)
+
+    # Preserve the skip reason on the row for later consumers
+    if reason and not row.get("Reason Skipped"):
+        row["Reason Skipped"] = reason
 
     url = (row.get("Job URL") or row.get("job_url") or "").strip()
     job_key = (row.get("Job Key") or url).strip()
@@ -7011,9 +8373,11 @@ def _record_skip(row: dict, reason: str) -> None:
     # Hard de-dupe: if we have already recorded this job once, stop here
     if job_key:
         if job_key in _seen_job_keys:
+            # We have already recorded a KEEP or SKIP for this job
             return
         _seen_job_keys.add(job_key)
 
+    # Keep URL-level stats for debugging
     if url:
         _seen_skip_urls.add(url)
 
@@ -7050,9 +8414,6 @@ def _debug_single_url(url: str):
     import json
     pretty = json.dumps(details, indent=2, sort_keys=True)
     log_print(f"❖ DEBUG single-url …Parsed details:\n{pretty}")
-    #log_print("👀 DEBUG single-url", ".Parsed details:\n"
-    #   + json.dumps(details, indent=2, sort_keys=True)
-    #)
 
 
 
@@ -7094,6 +8455,9 @@ def main(args: argparse.Namespace | None = None) -> None:
     SOFT_SALARY_FLOOR = args.soft_floor or 0
     SALARY_CEIL  = args.ceil or None
 
+#    PW_SUCCESS = 0
+#    PW_FAIL = 0
+#    REQ_FALLBACK = 0
 
     global kept_count, skip_count
     _seen_job_keys = set()
@@ -7127,8 +8491,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     )
 
     seen_keys_this_run: set[str] = set()
-
-    
+  
     # 1) Build the final set of listing pages
     pages = list(STARTING_PAGES)
     # Temporarily disable HubSpot listings until title parsing is fixed
@@ -7266,6 +8629,12 @@ def main(args: argparse.Namespace | None = None) -> None:
             progress_clear_if_needed()
             continue
 
+        if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
+            links = collect_dice_links(listing_url, max_pages=25)
+            all_detail_links.extend(links)
+            continue
+
+        
         # Workday listing → detail expansion (Ascensus and similar tenants)
         if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
             # First try JSON expansion
@@ -7310,6 +8679,11 @@ def main(args: argparse.Namespace | None = None) -> None:
 
             else:
                 links = find_job_links(html, listing_url)
+            
+            if "dice.com/jobs" in listing_url:
+                links = collect_dice_links(listing_url, max_pages=25)
+            elif "hubspot.com/careers/jobs" in listing_url:
+                links = collect_hubspot_links(listing_url, max_pages=25)
 
 
         # HubSpot pagination (page=1..N)
@@ -7412,7 +8786,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         deduped.append(link)
 
     after_unique = len(deduped)
-    log_line("DE-DUPE", f"{DOT3}{DOTR} Reduced {before_total} → {after_unique} unique URLs")
+    #log_line("DE-DUPE", f"{DOT3}{DOTR} Reduced {before_total} → {after_unique} unique URLs")   ignored 20251215
 
     # use the cleaned list from here on
     all_detail_links = deduped
@@ -7456,6 +8830,8 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     try:
         for j, link in enumerate(all_detail_links, start=1):
+            # ensure details is always defined, even if extract_job_details blows up
+            details: dict = {}
             try:
                 set_source_tag(listing_url)
                 html = get_html(link)
@@ -7485,7 +8861,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                         "Applicant Regions": "",
                     })
 
-                    _log_and_record_skip(link, None, skip_row or {"Job URL": link})
+                    _log_and_record_skip(link, default_reason, skip_row or {"Job URL": link})
                     continue
 
                 # B) we have HTML -> parse details and enrich salary
@@ -7629,12 +9005,37 @@ def main(args: argparse.Namespace | None = None) -> None:
                 remote_rule = keep_row_normalized.get("Remote Rule", remote_rule)
                 us_rule = keep_row_normalized.get("US Rule", us_rule)
                 wa_rule = keep_row_normalized.get("WA Rule", wa_rule)
+                keep_row["Remote Rule"] = remote_rule
+                keep_row["US Rule"] = us_rule
+                keep_row["WA Rule"] = wa_rule
+                # Preserve explicit remote flag fields for downstream consumers/logs
+                keep_row["remote_flag"] = details.get("remote_flag") or details.get("is_remote_flag") or remote_rule
+                keep_row["Remote Flag"] = keep_row["remote_flag"]
 
+
+                # IMPORTANT: carry Canada Rule into the row used by the classifier
+                keep_row["Canada Rule"] = keep_row_normalized.get("Canada Rule") or details.get("Canada Rule", "")
+
+                
                 # Classification via the new rules helper
                 row_for_classification = {
                     **keep_row,
                     "Salary Status": details.get("Salary Status", ""),
+                    "Canada Rule": keep_row.get("Canada Rule") or details.get("Canada Rule", ""),
                 }
+
+                if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
+                    log_print(f"{_box('ROW CHECK ')}{DOT6}WA Rule= {row_for_classification.get('WA Rule')} "
+                        f" |  Remote Rule= {row_for_classification.get('Remote Rule')} "
+                        f" |  Canada Rule= {row_for_classification.get('Canada Rule')} "
+                        f" |  US Rule= {row_for_classification.get('US Rule')} "
+                        f" |  Location= {row_for_classification.get('Location')}"
+                    )
+
+
+                    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Location : {details.get('Location')}")
+
+
 
                 is_keep, reason = classify_keep_or_skip(
                     row_for_classification,
@@ -7642,8 +9043,8 @@ def main(args: argparse.Namespace | None = None) -> None:
                     seen_keys_this_run,
                 )
 
-                keep_row["Reason"] = reason
-                _log_keep_to_terminal(keep_row)
+                #keep_row["Reason"] = reason
+                #_log_keep_to_terminal(keep_row)
 
 
                 if not is_keep:
@@ -7696,14 +9097,13 @@ def main(args: argparse.Namespace | None = None) -> None:
                         }
 
                         _inherit_debug_rows(row, keep_row)
-                        _log_and_record_skip(link, None, row)
+                        _log_and_record_skip(link, row.get("Reason Skipped") or reason or "Filtered by rules", row)
                         salary_blocked = True
 
                 if not salary_blocked:
-                    _record_keep(keep_row)
-                    log_event("KEEP", _title_for_log(keep_row, link), right=keep_row)
-
-                job = keep_row
+                    if _record_keep(keep_row):
+                        _log_keep_to_terminal(keep_row)
+                    job = keep_row
 
                     
             except Exception as e:
@@ -7737,9 +9137,10 @@ def main(args: argparse.Namespace | None = None) -> None:
                 # Attach a trimmed traceback to debug rows so you can inspect later
                 _append_debug_row(error_row, f"{DOTL} Traceback (trimmed): {tb_str[-800:]}")
 
-                _log_and_record_skip(link, err_msg, error_row)
+                log_event(link, err_msg, error_row)
                 # continue with the next job instead of killing the whole run
                 continue
+
 
     finally:
         progress_done()
@@ -7749,9 +9150,13 @@ def main(args: argparse.Namespace | None = None) -> None:
     # --- SMOKE safeguard: ask before writing anything -----------------
     # args is still in scope here inside main()
     if getattr(args, "smoke", False):
-        reply = input(
-            "\nSMOKE run complete. Save results to CSV/Sheets? [y/N]: "
-        ).strip().lower()
+        try:
+            reply = input(
+                "\nSMOKE run complete. Save results to CSV/Sheets? [y/N]: "
+            ).strip().lower()
+        except EOFError:
+            # Non-interactive (CI/automation) fallback: default to "no"
+            reply = "n"
 
         if reply not in ("y", "yes"):
             info("SMOKE run: user chose not to save results; skipping all writes.")
@@ -7779,6 +9184,10 @@ def main(args: argparse.Namespace | None = None) -> None:
     kept_count = len(kept_rows)
     skip_count = len(skipped_rows)
 
+
+    info(
+        f".Playwright success {PW_SUCCESS}, failures {PW_FAIL}, fallbacks {REQ_FALLBACK}",
+    )
     done_log(f".Kept {kept_count}, Skipped {skip_count} "
           f"in {(datetime.now() - start_ts).seconds}s")
     done_log(f".CSV: {OUTPUT_CSV}")

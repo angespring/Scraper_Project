@@ -5,6 +5,8 @@ import subprocess
 import textwrap, builtins
 import logging
 import traceback
+import builtins
+import re
 
 
 from urllib.parse import urlparse, urljoin, urlsplit, parse_qs, urlunparse
@@ -14,6 +16,7 @@ from bs4 import BeautifulSoup
 from contextlib import contextmanager
 from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode
 from edsurge_jobs import scrape_edsurge_jobs
+from typing import Any, Dict, Optional, Tuple
 from gsheets_utils import (
     init_gs_libs,
     log_startup_warning_if_needed,
@@ -50,7 +53,6 @@ DOTL = "🐞"             # Debug lady bug
 DOTY = "❓"             # Debug
 
 
-import builtins  # use real print here, not the later override
 import sys, os, time
 
 # for the live progress spinner thread
@@ -725,7 +727,7 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                     backup(f"{DOT3}Pruned by count {old.name}")
                 except OSError as e:
                     progress_clear_if_needed()
-                    builtins.print(f"{_bkts()} [⚠️ WARN               ].Could not remove {old.name}: {e}")
+                    log_print(f"{_bkts()} [⚠️ WARN               ].Could not remove {old.name}: {e}")
 
 # --- HOW TO USE (uncomment exactly one) ---
 backup_all_py_to_archive()                  # 1) keep ALL backups
@@ -740,7 +742,8 @@ backup_all_py_to_archive()                  # 1) keep ALL backups
 import sys, subprocess, os
 from datetime import datetime
 import builtins, datetime as _dt
-_builtin_print = builtins.print
+_builtin_print = print
+
 
 
 def ts_pprint(*args, **kwargs):
@@ -1955,18 +1958,18 @@ def _debug_biv(details: dict, host: str, label: str) -> None:
         return
 
 
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Location          : {details.get('Location')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada            : {details.get('Canada Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}US                : {details.get('US Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                : {details.get('WA Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote            : {details.get('Remote Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips             : {details.get('Location Chips')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions           : {details.get('Applicant Regions')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary            : {details.get('Salary Range')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Text       : {details.get('Salary Text')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Range      : {details.get('Salary Range')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Status     : {details.get('Salary Source')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Salary Placeholder: {details.get('Salary Placeholder')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Location              : {details.get('Location')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada                : {details.get('Canada Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}US                    : {details.get('US Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                    : {details.get('WA Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote                : {details.get('Remote Rule')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips                 : {details.get('Location Chips')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions               : {details.get('Applicant Regions')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary             : {details.get('Salary Range')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Text        : {details.get('Salary Text')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Range       : {details.get('Salary Range')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Status      : {details.get('Salary Status')}")
+    log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Placeholder : {details.get('Salary Placeholder')}")
 
 
 
@@ -2096,7 +2099,17 @@ def _extract_salary_from_visible_text(page_text: str, fallback_currency: Optiona
     window2 = (page_text[m.start(): m.end() + 120] if page_text else "")
     unit = "HOUR" if _BUILTIN_HOURLY_RX.search(window2) else "YEAR"
 
-    salary_text = f"{cur + ' ' if cur else ''}{lo:,.2f} - {hi:,.2f}".strip()
+    # NEW: avoid .00 for annual salaries
+    if unit == "YEAR":
+        lo = int(lo)
+        hi = int(hi)
+
+    # NEW: format annual salaries without decimals
+    if unit == "YEAR":
+        salary_text = f"{cur + ' ' if cur else ''}{lo:,} - {hi:,}".strip()
+    else:
+        salary_text = f"{cur + ' ' if cur else ''}{lo:,.2f} - {hi:,.2f}".strip()
+
     return {
         "Salary From": lo,
         "Salary To": hi,
@@ -2107,25 +2120,164 @@ def _extract_salary_from_visible_text(page_text: str, fallback_currency: Optiona
         "Salary Source": "builtin_text",
     }
 
+
+def _money_to_int(s: str) -> Optional[int]:
+    if not s:
+        return None
+    # remove commas and currency symbols
+    s2 = re.sub(r"[^\d.]", "", s)
+    if not s2:
+        return None
+    # If it looks like a float, allow it but cast to int
+    try:
+        return int(float(s2))
+    except Exception:
+        return None
+
+def _normalize_salary_unit(unit_text: str) -> str:
+    u = (unit_text or "").strip().lower()
+    if "hour" in u:
+        return "hour"
+    if "week" in u:
+        return "week"
+    if "month" in u:
+        return "month"
+    if "year" in u or "ann" in u:
+        return "year"
+    return u or "year"
+
+def _format_salary(min_amt: Optional[int], max_amt: Optional[int], currency: str, unit: str) -> str:
+    cur = (currency or "").upper() or "CAD"
+    u = _normalize_salary_unit(unit)
+
+    if min_amt is None and max_amt is None:
+        return ""
+
+    # If only one side exists, treat it as a single value
+    if min_amt is None:
+        min_amt = max_amt
+    if max_amt is None:
+        max_amt = min_amt
+
+    if min_amt == max_amt:
+        return f"{cur} {min_amt:,}/{u}"
+
+    lo, hi = sorted([min_amt, max_amt])
+    return f"{cur} {lo:,}–{hi:,}/{u}"
+
+
+def extract_builtin_salary(
+    ld_json: Optional[Dict[str, Any]],
+    page_text: str = "",
+) -> Tuple[str, Optional[int], Optional[int], str, str]:
+    """
+    Returns:
+      salary_display, salary_min, salary_max, salary_currency, salary_unit
+    """
+    # 1) JSON-LD baseSalary
+    if isinstance(ld_json, dict):
+        bs = ld_json.get("baseSalary") or ld_json.get("estimatedSalary") or None
+        if isinstance(bs, dict):
+            currency = bs.get("currency") or bs.get("salaryCurrency") or "CAD"
+            unit = _normalize_salary_unit(
+                (bs.get("value") or {}).get("unitText") if isinstance(bs.get("value"), dict) else bs.get("unitText")
+            )
+
+            val = bs.get("value")
+            if isinstance(val, dict):
+                # Can be minValue/maxValue OR value
+                min_amt = _money_to_int(str(val.get("minValue") or ""))
+                max_amt = _money_to_int(str(val.get("maxValue") or ""))
+                if min_amt is None and max_amt is None:
+                    single = _money_to_int(str(val.get("value") or val.get("amount") or ""))
+                    min_amt = single
+                    max_amt = single
+
+                salary_display = _format_salary(min_amt, max_amt, currency, unit)
+                if salary_display:
+                    return salary_display, min_amt, max_amt, (currency or "CAD"), unit
+
+            # Sometimes baseSalary is flat
+            min_amt = _money_to_int(str(bs.get("minValue") or ""))
+            max_amt = _money_to_int(str(bs.get("maxValue") or ""))
+            if min_amt is None and max_amt is None:
+                single = _money_to_int(str(bs.get("value") or bs.get("amount") or ""))
+                min_amt = single
+                max_amt = single
+            salary_display = _format_salary(min_amt, max_amt, currency, unit)
+            if salary_display:
+                return salary_display, min_amt, max_amt, (currency or "CAD"), unit
+
+    # 2) Text fallback
+    t = page_text or ""
+    # Examples to catch:
+    # "Salary: $120,000 - $160,000"
+    # "$55–$70/hr"
+    # "CAD 110,000–140,000"
+    m = re.search(
+        r"(?i)\b(?:salary|pay)\b[^\d]{0,40}((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:-|–|to)\s*((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:/?\s*(hour|hr|year|yr|month|week))?",
+        t,
+    )
+    if m:
+        a, b, unit_raw = m.group(1), m.group(2), m.group(3)
+        currency = "CAD" if "CAD" in (a.upper() + b.upper()) else "USD" if "USD" in (a.upper() + b.upper()) else "CAD"
+        unit = _normalize_salary_unit(unit_raw or "year")
+        min_amt = _money_to_int(a)
+        max_amt = _money_to_int(b)
+        salary_display = _format_salary(min_amt, max_amt, currency, unit)
+        return salary_display, min_amt, max_amt, currency, unit
+
+    m2 = re.search(
+        r"(?i)\b((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:/?\s*(hour|hr|year|yr|month|week))\b",
+        t,
+    )
+    if m2:
+        a, unit_raw = m2.group(1), m2.group(2)
+        currency = "CAD" if "CAD" in a.upper() else "USD" if "USD" in a.upper() else "CAD"
+        unit = _normalize_salary_unit(unit_raw or "year")
+        amt = _money_to_int(a)
+        salary_display = _format_salary(amt, amt, currency, unit)
+        return salary_display, amt, amt, currency, unit
+
+    return "", None, None, "CAD", "year"
+
+
+
 def apply_builtin_salary(details: Dict[str, Any]) -> None:
     job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
     if "builtin" not in job_url:
         return
 
     # Do not overwrite an existing structured salary
-    if details.get("Salary Range") or details.get("Salary Text"):
+    if details.get("Salary Range") or details.get("Salary Text") or details.get("salary_min") or details.get("salary_max"):
         return
 
     page_text = details.get("page_text") or ""
     # Built In Vancouver is overwhelmingly CAD, builtin.com is usually USD
     fallback_currency = "CAD" if "builtinvancouver.org" in job_url else "USD"
 
-    sal = _extract_salary_from_jsonld(page_text)
+    page_text = details.get("page_text") or ""
+    html_raw = details.get("html_raw") or details.get("html") or ""
+
+    # 1) Try JSON LD from the HTML, not from page_text
+    sal = _extract_salary_from_jsonld(html_raw) if html_raw else None
+
+    # 2) If that fails, try visible text
     if not sal:
         sal = _extract_salary_from_visible_text(page_text, fallback_currency=fallback_currency)
 
     if sal:
         details.update(sal)
+
+        # Bridge to normalized keys if your pipeline uses them elsewhere
+        if not details.get("salary_min") and details.get("Salary From") is not None:
+            details["salary_min"] = details["Salary From"]
+        if not details.get("salary_max") and details.get("Salary To") is not None:
+            details["salary_max"] = details["Salary To"]
+        if not details.get("salary_raw"):
+            details["salary_raw"] = details.get("Salary Range") or details.get("Salary Text") or ""
+
+
 
 
 
@@ -2193,14 +2345,6 @@ def extract_job_details(html: str, job_url: str) -> dict:
         else:
             _debug_biv(details, host, "skipped hero_country lock (location already set)")
 
-
-    # Built In inline meta for title/company/location/salary where available
-    #builtin_meta: dict = {}
-    #if "builtin.com" in host or "builtinvancouver.org" in host:
-        #try:
-            #builtin_meta = _extract_builtin_job_meta(soup) or {}
-        #except Exception:
-            #builtin_meta = {}
 
 
     def _strip_recommendations(soup_obj, page_host: str) -> None:
@@ -2761,9 +2905,9 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         "WA Rule": details.get("WA Rule", ""),
                         "Remote Rule": details.get("Remote Rule", ""),
                         "Applicant Regions": details.get("Applicant Regions", ""),
-                        "Salary Range": details.get("Salary Range", ""),
-                        "Salary Text": details.get("Salary Text", ""),
-                        "Salary": details.get("Salary", ""),
+                        "💲 Salary Range": details.get("Salary Range", ""),
+                        "💲 Salary Text": details.get("Salary Text", ""),
+                        "💲 Salary": details.get("Salary", ""),
                     },
                     host,
                     "tooltip extraction raw",
@@ -5833,6 +5977,39 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     page_text = str(d.get("page_text") or "")
     phost     = (page_host or "").lower()
 
+    def _fmt_est(cur: str | None, lo: int | None, hi: int | None) -> str:
+        cur = (cur or "").upper().strip()
+        if lo and hi:
+            # Matches your existing "CAD 69,450 - 119,450" style
+            return f"{cur} {lo:,} - {hi:,}" if cur else f"{lo:,} - {hi:,}"
+        if hi:
+            return f"{cur} ≈ {hi:,}" if cur else f"≈ {hi:,}"
+        return ""
+
+    def _salary_rule_from_status(status: str, source: str = "") -> str:
+        # One label you can filter on without re parsing status text
+        source = (source or "").lower()
+        if "builtin" in source:
+            return "builtin_range"
+        if status in ("at_or_above", "near_min", "below_floor"):
+            return "floor_check"
+        if status == "signal_only":
+            return "signal_only"
+        return "missing_salary"
+    
+    def _salary_variants(n: int) -> list[str]:
+        # Variants you will commonly see in HTML
+        return [
+            str(n),                       # 96400
+            f"{n:,}",                     # 96,400
+            f"{n:,.2f}",                  # 96,400.00
+            f"${n}",                      # $96400
+            f"${n:,}",                    # $96,400
+            f"${n:,.2f}",                 # $96,400.00
+        ]
+
+
+
     # --- Built In (incl. city sites like Built In Vancouver) ---
     # If Built In did NOT give us a structured salary, be conservative:
     # don't keep tiny or obviously bogus dollar amounts scraped from the text.
@@ -5865,62 +6042,129 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         d.get("Description Snippet") or "",
     ]
 
-    # Built In: include raw HTML because salary ranges are often split across spans
     if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
         blob_parts.append(d.get("html_raw") or "")
 
-    blob = " ".join(blob_parts)
+    blob = " ".join(str(x or "") for x in blob_parts)
     blob_lower = blob.lower()
 
-    # DEBUG: confirm what salary text we are scanning
+    # --- Built In Vancouver: promote explicit pay ranges before signal-only logic ---
     if page_host and "builtinvancouver.org" in page_host:
-        try:
-            log_line("BIV DEBUG", f"{DOT6}Salary blob_len= {len(blob_lower)} has_$= {'$' in blob_lower} has_cad= {'cad' in blob_lower}")
-            # show a small window around the first dollar sign if present
-            idx = blob_lower.find("$")
-            if idx != -1:
-                log_line("BIV DEBUG", f"{DOT6}Salary blob window= {blob_lower[max(0, idx-80):idx+180]!r}")
+
+        range_rx = re.compile(
+            r"\$\s*(?P<min>[\d,]+(?:\.\d+)?)\s*"
+            r"(?:-|–|—|to|\u2014|\u2013)\s*"
+            r"\$\s*(?P<max>[\d,]+(?:\.\d+)?)\s*"
+            r"(?P<cur>cad|usd)?",
+            re.IGNORECASE
+        )
+
+        flat = blob
+        flat = re.sub(r"</span>\s*<span[^>]*>", "", flat, flags=re.I)
+        flat = re.sub(r"<[^>]+>", " ", flat)
+        flat = re.sub(r"\s+", " ", flat)
+        flat_lower = flat.lower()
+
+        m = range_rx.search(flat)
+        if m:
+            lo = int(float(m.group("min").replace(",", "")))
+            hi = int(float(m.group("max").replace(",", "")))
+
+            window = flat_lower[max(0, m.start() - 160): min(len(flat_lower), m.end() + 160)]
+
+            if any(w in window for w in ("compensation", "pay range", "salary", "base salary", "annual")):
+
+                cur = (m.group("cur") or "").upper()
+                if not cur:
+                    cur = "CAD" if ("cad" in window or "cad" in blob_lower) else "USD"
+
+                d["Salary From"] = lo
+                d["Salary To"] = hi
+                d["salary_min"] = lo
+                d["salary_max"] = hi
+                d["Salary Currency"] = cur
+                d["Salary Unit"] = "YEAR"
+
+                d["Salary Range"] = f"{cur} {lo:,} - {hi:,}"
+                d["Salary Text"] = d["Salary Range"]
+                d["Salary Source"] = d.get("Salary Source") or "builtin_range"
+                d["Salary Placeholder"] = ""
+
+                d["Salary Max Detected"] = hi
+                d["Salary Status"] = "detected_range"
+                d["Salary Note"] = "Built In Vancouver pay range detected"
+
+                # Fill the extra columns you want in Sheets
+                d["Salary Rule"] = d.get("Salary Rule") or "builtin_range"
+
+                if SALARY_FLOOR and hi < SALARY_FLOOR and (not SOFT_SALARY_FLOOR or hi >= SOFT_SALARY_FLOOR):
+                    d["Salary Near Min"] = hi
+                else:
+                    d["Salary Near Min"] = ""
+
+                d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur, lo, hi)
+
+                try:
+                    log_line("BIV DEBUG", f"{DOT6}✅ promoted range: {d['Salary Range']}")
+                except Exception:
+                    pass
+
+                return d
+
             else:
-                log_line("BIV DEBUG", f"{DOT6}Salary blob head= {blob_lower[:220]!r}")
-        except Exception:
-            pass
+                try:
+                    log_line("BIV DEBUG", f"{DOT6}⚠️ range matched but context gate failed: {window!r}")
+                except Exception:
+                    pass
+
+        else:
+            # No range matched at all
+            first_dollar = flat_lower.find("$")
+            if first_dollar != -1:
+                preview = flat_lower[max(0, first_dollar - 80) : first_dollar + 180]
+            else:
+                preview = flat_lower[:220]
+
+            log_line(
+                "BIV DEBUG",
+                f"{DOT6}⚠️ no range match in flat blob preview={preview!r}"
+            )
 
 
 
-    # ==== WORKDAY salary extraction (simple and robust) ====
-    workday_min = None
-    workday_max = None
+        # ==== WORKDAY salary extraction (simple and robust) ====
+        workday_min = None
+        workday_max = None
+        workday_text = page_text  # you already defined page_text above
 
-    # Use the already-normalized page_text we built above
-    workday_text = page_text
+        if "Pay Range Minimum" in workday_text or "Pay Range Maximum" in workday_text:
+            m1 = re.search(r"Pay Range Minimum.*?([\d,]+)", workday_text, re.I | re.S)
+            m2 = re.search(r"Pay Range Maximum.*?([\d,]+)", workday_text, re.I | re.S)
 
-    # Look for Workday-style "Pay Range Minimum / Maximum" blocks
-    if "Pay Range Minimum" in workday_text or "Pay Range Maximum" in workday_text:
-        import re
+            def _to_int(x: str | None) -> int | None:
+                if not x:
+                    return None
+                try:
+                    return int(x.replace(",", ""))
+                except Exception:
+                    return None
 
-        m1 = re.search(r"Pay Range Minimum.*?([\d,]+)", workday_text, re.I | re.S)
-        m2 = re.search(r"Pay Range Maximum.*?([\d,]+)", workday_text, re.I | re.S)
+            workday_min = _to_int(m1.group(1) if m1 else None)
+            workday_max = _to_int(m2.group(1) if m2 else None)
 
-        def _to_int(x: str | None) -> int | None:
-            if not x:
-                return None
-            try:
-                return int(x.replace(",", ""))
-            except Exception:
-                return None
+            if workday_max is not None:
+                # Feed Workday into the generic path consistently
+                d["Salary Max Detected"] = workday_max
+                d["Salary Near Min"] = workday_min or ""
+                d["Salary Status"] = "at_or_above"
+                d["Salary Note"] = "Workday min/max detected"
+                d["Salary Rule"] = d.get("Salary Rule") or "workday_range"
 
-        workday_min = _to_int(m1.group(1) if m1 else None)
-        workday_max = _to_int(m2.group(1) if m2 else None)
+                cur_for_est = d.get("Salary Currency") or ("CAD" if "cad" in blob_lower else "")
+                d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur_for_est, workday_min, workday_max)
 
-        # If we found a max value from Workday, feed it into the generic logic
-        if workday_max is not None:
-            max_detected = workday_max
-            # If Workday gives a real salary, trust it completely
-            d["Salary Max Detected"] = workday_max
-            d["Salary Status"] = "at_or_above"
-            d["Salary Note"] = "Workday min/max detected"
-            d["Salary Near Min"] = workday_min or ""
-            return d
+                return d
+
 
 
     def _looks_like_job_count(span: tuple[int, int]) -> bool:
@@ -5956,7 +6200,14 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     )
 
     # If we have salary language but no numbers, preserve the signal
-    has_numeric = isinstance(d.get("Salary From"), (int, float)) or isinstance(d.get("Salary To"), (int, float))
+    has_numeric = bool(
+        isinstance(d.get("Salary From"), (int, float))
+        or isinstance(d.get("Salary To"), (int, float))
+        or d.get("salary_min")
+        or d.get("salary_max")
+        or d.get("Salary Max Detected")
+    )
+
 
     if has_signal and not has_numeric:
         # Do not overwrite a better existing text value
@@ -5996,16 +6247,22 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     dollar_candidates: list[int] = []
     k_candidates: list[int] = []
     # Seed candidates with any explicit Workday min / max if present
-    if workday_min:
-        candidates.append(workday_min)
-    if workday_max:
-        candidates.append(workday_max)
+    #if workday_min:
+        #candidates.append(workday_min)
+    #if workday_max:
+        #candidates.append(workday_max)
 
 
     # Pattern like "$120,000" or "120,000".
     # On The Muse *and* Remotive we require an actual "$" so footer ZIPs
     # and "Unlock 69,133 Remote Jobs" do not get picked up.
-    force_dollar = ("themuse.com" in phost) or ("remotive.com" in phost)
+    force_dollar = (
+        ("themuse.com" in phost)
+        or ("remotive.com" in phost)
+        or ("builtin.com" in phost)
+        or ("builtinvancouver.org" in phost)
+    )
+
     if force_dollar:
         dollar_pattern = r"\$\s*([\d][\d,]{2,})"   # require '$' for Muse + Remotive
     else:
@@ -6087,7 +6344,9 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         # as salary. Only keep max_detected if it appears in valid salary context.
         if max_detected:
             try:
-                if not _salary_number_has_good_context(blob, max_detected):
+                variants = _salary_variants(int(max_detected))
+
+                if not any(_salary_number_has_good_context(blob, v) for v in variants):
                     max_detected = None
                     near_min_val = ""
                     status = "missing"
@@ -6106,18 +6365,31 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
             d["Salary Status"]       = status
             d["Salary Note"]         = note
             d["Salary Placeholder"]  = ""  # real number beats placeholder
-            return d
 
-        # If context check removed the salary, fall through to signal-only/missing logic below
+            # Fill the extra columns you want in Sheets
+            d["Salary Rule"] = d.get("Salary Rule") or _salary_rule_from_status(status, d.get("Salary Source") or "")
+
+            cur_for_est = d.get("Salary Currency") or ("CAD" if "cad" in blob_lower else "")
+            d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur_for_est, None, int(max_detected))
+
+            return d
 
 
     # 6) No usable numeric salary: fall back to signal-only / missing
-    if has_signal:
+    already_numeric = bool(
+        d.get("Salary Max Detected")
+        or d.get("salary_max")
+        or d.get("salary_min")
+        or d.get("Salary To")
+        or d.get("Salary From")
+    )
+
+    if has_signal and not already_numeric:
         status      = "signal_only"
         placeholder = placeholder or "Competitive salary"
         note        = "Salary language present but no concrete numbers"
 
-        # NEW: treat signal as a real salary artifact for UI + BuiltIn checks
+        # Treat signal as a real salary artifact for UI + BuiltIn checks
         d["Salary"]        = d.get("Salary") or placeholder
         d["Salary Text"]   = d.get("Salary Text") or placeholder
         d["Salary Range"]  = d.get("Salary Range") or placeholder
@@ -6127,11 +6399,12 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         placeholder = ""
         note        = "No salary information detected"
 
-    d["Salary Max Detected"] = ""
-    d["Salary Near Min"]     = ""
-    d["Salary Status"]       = status
-    d["Salary Note"]         = note
-    d["Salary Placeholder"]  = placeholder
+    if status in ("missing", "signal_only"):
+        d["Salary Max Detected"] = ""
+        d["Salary Near Min"]     = ""
+        d["Salary Status"]       = status
+        d["Salary Note"]         = note
+        d["Salary Placeholder"]  = placeholder
 
     return d
 
@@ -8380,8 +8653,8 @@ def _record_skip(
     # Keep URL-level stats for debugging
     if url:
         _seen_skip_urls.add(url)
-
     skipped_rows.append(to_skipped_sheet_row(row))
+
     skip_count += 1
     progress_clear_if_needed()
     _progress_after_decision()
@@ -9033,18 +9306,12 @@ def main(args: argparse.Namespace | None = None) -> None:
                     )
 
 
-                    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Location : {details.get('Location')}")
-
-
-
                 is_keep, reason = classify_keep_or_skip(
                     row_for_classification,
                     CLASSIFIER_CONFIG,
                     seen_keys_this_run,
                 )
 
-                #keep_row["Reason"] = reason
-                #_log_keep_to_terminal(keep_row)
 
 
                 if not is_keep:

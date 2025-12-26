@@ -2,25 +2,17 @@
 
 import shutil
 import subprocess
-import textwrap
-import builtins
+import textwrap, builtins
 import logging
 import traceback
 
 
-import json
-import re
-
-
-
-
-from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlparse, urljoin, urlsplit, parse_qs, urlunparse, parse_qsl, urlencode
+from urllib.parse import urlparse, urljoin, urlsplit, parse_qs, urlunparse
 from pathlib import Path
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
-from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode
+from classification_rules import ClassificationConfig, classify_keep_or_skip #_log_location_debug
 from edsurge_jobs import scrape_edsurge_jobs
 from gsheets_utils import (
     init_gs_libs,
@@ -56,6 +48,7 @@ DOTL = "🐞"             # Debug lady bug
 DOTY = "❓"             # Debug
 
 
+import builtins  # use real print here, not the later override
 import sys, os, time
 
 # for the live progress spinner thread
@@ -65,13 +58,14 @@ import threading
 # --- Unified CLI args & run configuration (single parse, early) ---
 import argparse
 
-DEBUG_LOCATION = True
-
 
 
 # keep this function where your logger utils live, near _p / _box / _progress_print
 # ================= PROGRESS LINE =================
 _P = {"active_len": 0, "start": None, "total": 0}
+
+# ---- live progress helpers (single line) ----
+import sys, time
 
 
 PUSH_MODE = "ask"   # "auto" | "ask" | "off"
@@ -87,6 +81,8 @@ SALARY_CEIL = None
 
 
 
+
+from datetime import datetime  # if not already imported
 
 
 def base_row_from_listing(listing: dict, board_name: str, detail_url: str) -> dict:
@@ -193,26 +189,18 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         pass
 
 # colors + painter
-RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m" 
-BRIGHT_GREEN = "\033[92m"
-
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m"
 def _ansi_ok() -> bool:
     import sys, os
     return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
 
-def FG256(n: int) -> str:
-    return f"\033[38;5;{n}m"
-
-#DARK_GREEN = FG256(22)   # deep forest green
-# other nice greens: 28, 34, 40
-
 LEVEL_COLOR = {
     "ERROR": RED, "WARN": YELLOW, "INFO": CYAN,
-    "KEEP": DIM + GREEN, "SKIP": DIM + MAGENTA, "SETUP": RESET,
+    "KEEP": GREEN, "SKIP": DIM, "SETUP": RESET,
     "ENV": RESET, "BACKUP": RESET, "DONE": RESET, "GS": CYAN,
 }
 # Accent colors to make KEEP/SKIP title lines pop
-KEEP_TITLE_COLOR = GREEN
+KEEP_TITLE_COLOR = BLUE
 SKIP_TITLE_COLOR = MAGENTA
 
 def _paint(label: str) -> str:
@@ -244,6 +232,7 @@ def debug(msg: str) -> None:
         if isinstance(target, dict):
             target.setdefault("__debug_rows", []).append(str(msg))
             return
+    log_line("DEBUG", msg)
 def backup(msg: str) -> None:   log_line("BACKUP", msg)
 def keep_log(msg: str) -> None: log_line("KEEP", msg)
 def skip_log(msg: str) -> None: log_line("SKIP", msg)
@@ -313,17 +302,8 @@ if 'log' not in globals() or isinstance(globals()['log'], logging.Logger):
 
 
 # --- live progress state + helpers (single place, top-level) ---
-import shutil
 from wcwidth import wcswidth
-from threading import Event, Thread, Lock
-_IO_LOCK = Lock()
-
-
-
-
-def _dispw(s: str) -> int:
-    w = wcswidth(s)
-    return w if w >= 0 else len(s)
+from threading import Event, Thread
 
 _SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 _PROGRESS_STATE = {
@@ -372,20 +352,11 @@ def _progress_render(force: bool = False) -> None:
         return
     state["spinner"] = (state["spinner"] + 1) % len(_SPINNER_FRAMES)
     line = _progress_now()
-
-    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
-    pad_to = max(cols - 1, 1)  # leave a little breathing room
-
-    visible = _dispw(line)
-    if visible < pad_to:
-        out = line + (" " * (pad_to - visible))
-    else:
-        out = line
-
-    sys.stdout.write("\r" + out)
+    width = globals().get("_LOG_WRAP_WIDTH", 120)
+    sys.stdout.write("\r" + line.ljust(width))
     sys.stdout.flush()
     state["last_line"] = line
-    state["last_width"] = pad_to
+    state["last_width"] = len(line)
     state["last_render"] = now
     state["needs_redraw"] = False
 
@@ -434,12 +405,9 @@ def progress_tick(i: int | None = None, kept: int | None = None, skip: int | Non
 
 def progress_clear_if_needed(permanent: bool = False) -> None:
     state = _PROGRESS_STATE
-    if not state["last_line"] and not state["active"]:
+    if not state["last_line"]:
         return
-    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
-    pad_to = max(cols - 1, 1)
-
-    sys.stdout.write("\r" + (" " * pad_to) + "\r")
+    sys.stdout.write("\r" + " " * state["last_width"] + "\r")
     sys.stdout.flush()
     state["needs_redraw"] = not permanent
     if permanent:
@@ -508,9 +476,7 @@ def log_print(msg: str, color: str | None = None, color_prefix: bool = False) ->
             line = f"{lead}{color}{body}{RESET}"
     else:
         line = f"{lead}{body}"
-
-    # IMPORTANT: send logs to stderr so stdout is reserved for the spinner line
-    print(line, file=sys.stderr)
+    _builtin_print(line)
     progress_refresh_after_log()
 
 
@@ -579,6 +545,21 @@ log = logging.getLogger("scraper")
 _LOG_WRAP_WIDTH = 120
 width = _LOG_WRAP_WIDTH
 
+from urllib.parse import urlparse, urlunparse
+
+def _link_key(u: str) -> str:
+    """
+    Lowercase host, strip 'www.', drop query and fragment, and
+    remove a trailing '/' so /job/abc and /job/abc/ are the same.
+    """
+    try:
+        p = urlparse(u)
+        host = p.netloc.lower().replace("www.", "")
+        path = p.path.rstrip("/")
+        clean = urlunparse((p.scheme, host, path, "", "", ""))
+        return clean
+    except Exception:
+        return (u or "").strip().rstrip("/")
 
 
 GIT_PUSH_MODE = "prompt"    # change to "prompt" or "auto" when you want
@@ -847,34 +828,26 @@ from dateutil.tz import tzoffset
 from dateutil.parser import UnknownTimezoneWarning
 warnings.filterwarnings("ignore", category=UnknownTimezoneWarning)
 
-from urllib.parse import urlparse, parse_qsl, urlencode
+from urllib.parse import urlparse
 
 def _job_key(details: dict, link: str) -> str:
     """
     Build a stable key so we only process the same job once per run.
 
-    Normalize the URL so tracking/pagination params don't create new keys
-    for the same job.
+    Use the full URL (host + path + query) as the primary key so each req
+    stays unique. Fall back to whatever link we have if parsing fails.
     """
     job_url = details.get("Job URL") or details.get("job_url") or link
-
     try:
         p = urlparse(job_url)
-        host = p.netloc.lower()
-        path = p.path.rstrip("/") or "/"
-
-        drop = {
-            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-            "ref", "referrer", "source", "_hsmi", "_hsenc", "gh_src", "page", "p", "start",
-        }
-        kept = []
-        for k, v in parse_qsl(p.query, keep_blank_values=True):
-            if k.lower() in drop:
-                continue
-            kept.append((k.lower(), v))
-
-        q = urlencode(kept, doseq=True)
-        clean = urlunparse((p.scheme.lower(), host, path, "", q, ""))
+        clean = urlunparse((
+            p.scheme.lower(),
+            p.netloc.lower(),
+            p.path.rstrip("/") or "/",
+            p.params,
+            p.query,
+            "",
+        ))
         return clean or job_url.lower()
     except Exception:
         return (job_url or link or "").lower()
@@ -1127,44 +1100,6 @@ def parse_remotive(soup, job_url):
         out["posting_date"] = m.group(1).split("T", 1)[0]
 
     return out
-
-def collect_dice_links(listing_url: str, max_pages: int = 25) -> list[str]:
-    """Walk Dice /jobs?page=N pagination and dedupe links across pages."""
-    seen, out = set(), []
-
-    # Try to start from whatever page the URL already has
-    try:
-        start_page = int((up.parse_qs(up.urlparse(listing_url).query).get("page") or ["1"])[0])
-    except Exception:
-        start_page = 1
-
-    page = start_page
-    while page <= max_pages:
-        url = _set_qp(listing_url, page=page)
-        set_source_tag(url)
-
-        html = get_html(url)  # will use Playwright for dice.com in your setup
-        if not html:
-            break
-
-        links = find_job_links(html, url)
-
-        added = 0
-        for lk in links:
-            if lk not in seen:
-                seen.add(lk)
-                out.append(lk)
-                added += 1
-
-        # stop when a page contributes nothing new
-        if added == 0:
-            break
-
-        random_delay()
-        page += 1
-
-    return out
-
 
 def parse_dice(soup, job_url):
     out = {}
@@ -1657,35 +1592,24 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
     except Exception:
         pass
 
-
-    remote_rule = (details.get("Remote Rule") or details.get("remote_flag") or "Unknown").strip()
-
-    badge_text = " ".join([
-        details.get("workplace_type") or "",
-        details.get("work_mode") or "",
-        details.get("workplace_badge") or "",
-    ]).strip()
-
-    is_biv = "builtinvancouver.org" in job_url
-
-    # If we already have an explicit rule, keep it
-    if remote_rule not in {"Remote", "Hybrid", "Onsite"}:
-        if is_biv:
-            # Avoid page chrome, only trust badge text if present
-            remote_rule = classify_work_mode(badge_text) if badge_text else "Unknown"
-        else:
-            t = f"{text} {badge_text}".lower()
-            remote_rule = classify_work_mode(t)
+    if remote_flag == "unknown_or_onsite":
+        if "hybrid" in block or "telework" in block or "a few days at home" in block:
+            remote_flag = "Hybrid"
+        elif "remote" in block:
+            remote_flag = "Remote"
+        elif "onsite" in block or "on-site" in block or "on site" in block:
+            remote_flag = "Onsite"
+        elif "in-office" in block or "in office" in block:
+            remote_flag = "Onsite"
 
     for sel in [
-        '[data-test-id="location"]',
+        "[data-test='job-location']",
         ".job-location",
-        'meta[property="og:locale"]',
+        "meta[property='og:locale']",
     ]:
         node = soup.select_one(sel)
         if not node:
             continue
-
         txt = node.get("content") if node.name == "meta" else node.get_text(" ", strip=True)
         if txt:
             loc = txt.strip()
@@ -1784,7 +1708,7 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
 
     details = {
         "Title": title,
-        "Company": "HubSpot",
+        "Company": company or "HubSpot",
         "Location": loc,
         "job_url": job_url,
         "apply_url": apply_url,
@@ -1862,12 +1786,9 @@ def _prune_non_job_sections(soup, host: str) -> None:
     generic = [
         "aside",
         ".sidebar",
-        'div:-soup-contains("Similar Jobs")',
-        'section:-soup-contains("Similar Jobs")',
-        'div:-soup-contains("Recommended jobs")',
-        'section:-soup-contains("Recommended jobs")',
-        'div:-soup-contains("People also viewed")',
-        'section:-soup-contains("People also viewed")',
+        '*:div:-soup-contains("Similar Jobs")',
+        '*:div:-soup-contains("Recommended jobs")',
+        '*:div:-soup-contains("People also viewed")',
         '[aria-label*="Similar"]',
     ]
     for sel in generic:
@@ -1927,405 +1848,6 @@ def _extract_muse_location(soup: BeautifulSoup) -> str | None:
         return None
     return None
 
-def _debug_biv(details: dict, host: str, label: str) -> None:
-    if "builtinvancouver.org" not in (host or "").lower():
-        return
-
-
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Location              : {details.get('Location')}")
-
-    # ✅ ADD THIS
-    biv_locs = details.get("BIV Tooltip Locations")
-    biv_count = details.get("BIV Tooltip Location Count")
-    if biv_count is None and isinstance(biv_locs, list):
-        biv_count = len(biv_locs)
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}BIV Location Count    : {biv_count}")
-
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada                : {details.get('Canada Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}US                    : {details.get('US Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                    : {details.get('WA Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote                : {details.get('Remote Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips                 : {details.get('Location Chips')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions               : {details.get('Applicant Regions')}")
-    #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary             : {details.get('Salary Range')}")
-    #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Text        : {details.get('Salary Text')}")
-    #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Range       : {details.get('Salary Range')}")
-    #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Status      : {details.get('Salary Source')}")
-    #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Placeholder : {details.get('Salary Placeholder')}")
-
-
-def _debug_biv_loc(stage: str, details: dict, extra: dict | None = None) -> None:
-    if not DEBUG_LOCATION:
-        return
-    extra = extra or {}
-    log_line("BIV DEBUG", f"{DOTL}LOC STAGE          : {stage}")
-    log_line("BIV DEBUG", f"{DOTL}..Location         : {details.get('Location')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Location Raw     : {details.get('Location Raw')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Remote Rule      : {details.get('Remote Rule')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Location Chips   : {details.get('Location Chips')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Locations Text   : {details.get('Locations Text')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Regions          : {details.get('Regions')!r}")
-
-    for k, v in extra.items():
-        s = str(v)
-        if len(s) > 220:
-            s = s[:220] + "...(trunc)"
-        log_line("BIV DEBUG", f"{DOTL}..{k:<16}: {s}")
-
-
-
-_BUILTIN_RANGE_RX = re.compile(
-    r"""
-    (?:
-        compensation(?:\s+details)? |
-        canada\s+pay\s+range |
-        pay\s+range
-    )
-    [^\$]{0,40}
-    \$\s*(?P<min>[\d,]+(?:\.\d{1,2})?)
-    \s*(?:-|–|—|to)\s*
-    \$\s*(?P<max>[\d,]+(?:\.\d{1,2})?)
-    (?:\s*(?P<cur>CAD|USD))?
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
-
-_BUILTIN_CUR_RX = re.compile(r"\b(CAD|USD)\b", re.IGNORECASE)
-_BUILTIN_HOURLY_RX = re.compile(r"\b(per\s*hour|hourly|/hr|/hour)\b", re.IGNORECASE)
-
-def _to_float_num(s: str) -> Optional[float]:
-    try:
-        return float(s.replace(",", "").strip())
-    except Exception:
-        return None
-
-def _walk_json(obj: Any):
-    if isinstance(obj, dict):
-        yield obj
-        for v in obj.values():
-            yield from _walk_json(v)
-    elif isinstance(obj, list):
-        for it in obj:
-            yield from _walk_json(it)
-
-def _extract_salary_from_jsonld(page_text: str) -> Optional[Dict[str, Any]]:
-    # Grab all ld+json blocks, parse any that load
-    blocks = re.findall(
-        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
-        page_text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if not blocks:
-        # Sometimes you only have “view-source” text or simplified content
-        blocks = re.findall(
-            r'"@type"\s*:\s*"JobPosting".*?\}\s*\}|\{.*?"@type"\s*:\s*"JobPosting".*?\}',
-            page_text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-
-    for raw in blocks:
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            data = json.loads(raw)
-        except Exception:
-            continue
-
-        for node in _walk_json(data):
-            if not isinstance(node, dict):
-                continue
-            if str(node.get("@type") or "").lower() != "jobposting":
-                continue
-
-            # Common schema patterns
-            sal = node.get("baseSalary") or node.get("estimatedSalary")
-            if not isinstance(sal, dict):
-                continue
-
-            cur = (sal.get("currency") or node.get("salaryCurrency") or "").strip().upper() or None
-            val = sal.get("value")
-
-            min_v = max_v = unit = None
-
-            if isinstance(val, dict):
-                unit = (val.get("unitText") or "").strip().upper() or None
-                min_v = val.get("minValue")
-                max_v = val.get("maxValue")
-                if min_v is None and isinstance(val.get("value"), (int, float)):
-                    min_v = val.get("value")
-                if max_v is None and isinstance(val.get("value"), (int, float)):
-                    max_v = val.get("value")
-            elif isinstance(val, (int, float)):
-                min_v = val
-                max_v = val
-
-            if isinstance(min_v, (int, float)) and isinstance(max_v, (int, float)):
-                salary_text = f"{cur + ' ' if cur else ''}{min_v:,.0f} - {max_v:,.0f}".strip()
-                return {
-                    "Salary From": float(min_v),
-                    "Salary To": float(max_v),
-                    "Salary Currency": cur,
-                    "Salary Unit": unit or "YEAR",
-                    "Salary Text": salary_text,
-                    "Salary Range": salary_text,
-                    "Salary Source": "builtin_jsonld",
-                }
-
-    return None
-
-def _extract_salary_from_visible_text(page_text: str, fallback_currency: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    m = _BUILTIN_RANGE_RX.search(page_text or "")
-    if not m:
-        return None
-
-    lo = _to_float_num(m.group("min") or "")
-    hi = _to_float_num(m.group("max") or "")
-    if lo is None or hi is None:
-        return None
-
-    # Currency: explicit wins, otherwise infer
-    cur = (m.group("cur") or "").upper().strip() or None
-    if not cur:
-        # Look nearby for CAD/USD, else fallback
-        window = (page_text[m.start(): m.end() + 80] if page_text else "")
-        cur2 = _BUILTIN_CUR_RX.search(window)
-        cur = (cur2.group(1).upper() if cur2 else None) or fallback_currency
-
-    # Unit: hourly if obvious, else year
-    window2 = (page_text[m.start(): m.end() + 120] if page_text else "")
-    unit = "HOUR" if _BUILTIN_HOURLY_RX.search(window2) else "YEAR"
-
-    # NEW: avoid .00 for annual salaries
-    if unit == "YEAR":
-        lo = int(lo)
-        hi = int(hi)
-
-    # NEW: format annual salaries without decimals
-    if unit == "YEAR":
-        salary_text = f"{cur + ' ' if cur else ''}{lo:,} - {hi:,}".strip()
-    else:
-        salary_text = f"{cur + ' ' if cur else ''}{lo:,.2f} - {hi:,.2f}".strip()
-
-    return {
-        "Salary From": lo,
-        "Salary To": hi,
-        "Salary Currency": cur,
-        "Salary Unit": unit,
-        "Salary Text": salary_text,
-        "Salary Range": salary_text,
-        "Salary Source": "builtin_text",
-    }
-
-
-def _money_to_int(s: str) -> Optional[int]:
-    if not s:
-        return None
-    # remove commas and currency symbols
-    s2 = re.sub(r"[^\d.]", "", s)
-    if not s2:
-        return None
-    # If it looks like a float, allow it but cast to int
-    try:
-        return int(float(s2))
-    except Exception:
-        return None
-
-def _normalize_salary_unit(unit_text: str) -> str:
-    u = (unit_text or "").strip().lower()
-    if "hour" in u:
-        return "hour"
-    if "week" in u:
-        return "week"
-    if "month" in u:
-        return "month"
-    if "year" in u or "ann" in u:
-        return "year"
-    return u or "year"
-
-def _format_salary(min_amt: Optional[int], max_amt: Optional[int], currency: str, unit: str) -> str:
-    cur = (currency or "").upper() or "CAD"
-    u = _normalize_salary_unit(unit)
-
-    if min_amt is None and max_amt is None:
-        return ""
-
-    # If only one side exists, treat it as a single value
-    if min_amt is None:
-        min_amt = max_amt
-    if max_amt is None:
-        max_amt = min_amt
-
-    if min_amt == max_amt:
-        return f"{cur} {min_amt:,}/{u}"
-
-    lo, hi = sorted([min_amt, max_amt])
-    return f"{cur} {lo:,}–{hi:,}/{u}"
-
-
-def extract_builtin_salary(
-    ld_json: Optional[Dict[str, Any]],
-    page_text: str = "",
-) -> Tuple[str, Optional[int], Optional[int], str, str]:
-    """
-    Returns:
-      salary_display, salary_min, salary_max, salary_currency, salary_unit
-    """
-    # 1) JSON-LD baseSalary
-    if isinstance(ld_json, dict):
-        bs = ld_json.get("baseSalary") or ld_json.get("estimatedSalary") or None
-        if isinstance(bs, dict):
-            currency = bs.get("currency") or bs.get("salaryCurrency") or "CAD"
-            unit = _normalize_salary_unit(
-                (bs.get("value") or {}).get("unitText") if isinstance(bs.get("value"), dict) else bs.get("unitText")
-            )
-
-            val = bs.get("value")
-            if isinstance(val, dict):
-                # Can be minValue/maxValue OR value
-                min_amt = _money_to_int(str(val.get("minValue") or ""))
-                max_amt = _money_to_int(str(val.get("maxValue") or ""))
-                if min_amt is None and max_amt is None:
-                    single = _money_to_int(str(val.get("value") or val.get("amount") or ""))
-                    min_amt = single
-                    max_amt = single
-
-                salary_display = _format_salary(min_amt, max_amt, currency, unit)
-                if salary_display:
-                    return salary_display, min_amt, max_amt, (currency or "CAD"), unit
-
-            # Sometimes baseSalary is flat
-            min_amt = _money_to_int(str(bs.get("minValue") or ""))
-            max_amt = _money_to_int(str(bs.get("maxValue") or ""))
-            if min_amt is None and max_amt is None:
-                single = _money_to_int(str(bs.get("value") or bs.get("amount") or ""))
-                min_amt = single
-                max_amt = single
-            salary_display = _format_salary(min_amt, max_amt, currency, unit)
-            if salary_display:
-                return salary_display, min_amt, max_amt, (currency or "CAD"), unit
-
-    # 2) Text fallback
-    t = page_text or ""
-    # Examples to catch:
-    # "Salary: $120,000 - $160,000"
-    # "$55–$70/hr"
-    # "CAD 110,000–140,000"
-    m = re.search(
-        r"(?i)\b(?:salary|pay)\b[^\d]{0,40}((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:-|–|to)\s*((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:/?\s*(hour|hr|year|yr|month|week))?",
-        t,
-    )
-    if m:
-        a, b, unit_raw = m.group(1), m.group(2), m.group(3)
-        currency = "CAD" if "CAD" in (a.upper() + b.upper()) else "USD" if "USD" in (a.upper() + b.upper()) else "CAD"
-        unit = _normalize_salary_unit(unit_raw or "year")
-        min_amt = _money_to_int(a)
-        max_amt = _money_to_int(b)
-        salary_display = _format_salary(min_amt, max_amt, currency, unit)
-        return salary_display, min_amt, max_amt, currency, unit
-
-    m2 = re.search(
-        r"(?i)\b((?:CAD|USD)?\s*\$?\s*[\d,]+(?:\.\d+)?)\s*(?:/?\s*(hour|hr|year|yr|month|week))\b",
-        t,
-    )
-    if m2:
-        a, unit_raw = m2.group(1), m2.group(2)
-        currency = "CAD" if "CAD" in a.upper() else "USD" if "USD" in a.upper() else "CAD"
-        unit = _normalize_salary_unit(unit_raw or "year")
-        amt = _money_to_int(a)
-        salary_display = _format_salary(amt, amt, currency, unit)
-        return salary_display, amt, amt, currency, unit
-
-    return "", None, None, "CAD", "year"
-
-
-def _is_country_only(loc: str | None) -> bool:
-    if not loc:
-        return True
-    s = loc.strip().lower()
-    return s in {"canada", "ca", "can", "us", "usa", "united states"}
-
-def _looks_richer(loc: str | None) -> bool:
-    if not loc:
-        return False
-    # commas or pipes usually means a multi location list
-    return ("," in loc) or ("|" in loc) or ("•" in loc)
-
-
-
-
-
-def _prefer_listing_location(details: dict, listing: dict) -> dict:
-    """
-    If the detail page gives us no location or only a generic collapse like 'Canada',
-    but the listing already captured a richer multi-location string, prefer the listing value.
-    """
-    if not isinstance(details, dict):
-        details = {}
-    if not isinstance(listing, dict):
-        return details
-
-    d_loc = (details.get("Location") or "").strip()
-    l_loc = (listing.get("Location") or "").strip()
-
-    # listing candidates that are "richer"
-    listing_has_multi = ("|" in l_loc) or (l_loc.count(",") >= 2) or (len(l_loc) > 25)
-
-    # detail is missing or too generic
-    detail_is_weak = (not d_loc) or (d_loc.lower() in {"canada", "ca", "can", "us", "usa", "united states"})
-
-    if l_loc and listing_has_multi and detail_is_weak:
-        details["Location"] = l_loc
-        details["Location Raw"] = listing.get("Location Raw") or l_loc
-
-    # also carry over chips or other location signals if they exist
-    for k in ["Location Chips", "Locations Text", "Applicant Regions", "Regions"]:
-        if listing.get(k) and not details.get(k):
-            details[k] = listing.get(k)
-
-    return details
-
-
-
-def apply_builtin_salary(details: Dict[str, Any]) -> None:
-    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
-    if "builtin" not in job_url:
-        return
-
-    # Do not overwrite an existing structured salary
-    if details.get("Salary Range") or details.get("Salary Text") or details.get("salary_min") or details.get("salary_max"):
-        return
-
-    page_text = details.get("page_text") or ""
-    # Built In Vancouver is overwhelmingly CAD, builtin.com is usually USD
-    fallback_currency = "CAD" if "builtinvancouver.org" in job_url else "USD"
-
-    page_text = details.get("page_text") or ""
-    html_raw = details.get("html_raw") or details.get("html") or ""
-
-    # 1) Try JSON LD from the HTML, not from page_text
-    sal = _extract_salary_from_jsonld(html_raw) if html_raw else None
-
-    # 2) If that fails, try visible text
-    if not sal:
-        sal = _extract_salary_from_visible_text(page_text, fallback_currency=fallback_currency)
-
-    if sal:
-        details.update(sal)
-
-        # Bridge to normalized keys if your pipeline uses them elsewhere
-        if not details.get("salary_min") and details.get("Salary From") is not None:
-            details["salary_min"] = details["Salary From"]
-        if not details.get("salary_max") and details.get("Salary To") is not None:
-            details["salary_max"] = details["Salary To"]
-        if not details.get("salary_raw"):
-            details["salary_raw"] = details.get("Salary Range") or details.get("Salary Text") or ""
-
-
-
-
-
-
 def extract_job_details(html: str, job_url: str) -> dict:
     """
     Generic page detail parser used by many boards.
@@ -2334,175 +1856,20 @@ def extract_job_details(html: str, job_url: str) -> dict:
     company_from_header = None
     board_from_header = None
     details: dict = {}
-    builtin_meta: dict = {}
-
 
     soup = BeautifulSoup(html or "", "html.parser")
     host = (up.urlparse(job_url).netloc or "").lower()
 
-
-    card = None
-
+    # Built In inline meta for title/company/location/salary where available
+    builtin_meta: dict = {}
     if "builtin.com" in host or "builtinvancouver.org" in host:
-        card = _builtin_job_card_scope(soup, job_url)
-        _debug_biv_loc("after card scope", details, {"card_found " : bool(card)})
-
         try:
-            builtin_meta = _extract_builtin_job_meta(card) or {}
+            builtin_meta = _extract_builtin_job_meta(soup) or {}
         except Exception:
             builtin_meta = {}
-        # IMPORTANT: remove Similar Jobs etc before any location scraping
-        _prune_non_job_sections(soup, host)
 
-        _debug_biv_loc("after builtin_meta", details, {"builtin_meta": builtin_meta})
-
-        # Built In Vancouver: multi-location list is stored in a tooltip "title" attribute as escaped HTML.
-        # Extract this EARLY so later fallbacks (meta description, single-location icon) do not lock us to one city.
-        if "builtinvancouver.org" in host and not details.get("BIV Tooltip Locations"):
-            try:
-                import html as _html
-
-                def _biv_tooltip_locations(soup0) -> list[str]:
-                    # Typical markup: <span ... data-bs-toggle="tooltip" title="&lt;div...&gt;">5 Locations</span>
-                    candidates = list(soup0.select("span[data-bs-toggle='tooltip'][title]"))
-                    if not candidates:
-                        candidates = list(soup0.find_all(attrs={"data-bs-toggle": "tooltip", "title": True}))
-
-                    best: list[str] = []
-                    for node in candidates:
-                        label = (node.get_text(" ", strip=True) or "")
-                        # Strong signal: visible text is "5 Locations" or similar
-                        if not re.search(r"\bLocations?\b", label, re.I):
-                            continue
-
-                        raw = (node.get("title") or "").strip()
-                        if not raw:
-                            continue
-
-                        # Double-unescape to handle nested entities (ex: Montr&amp;#233;al)
-                        unesc = _html.unescape(_html.unescape(raw))
-                        if "col-lg-6" not in unesc:
-                            continue
-
-                        inner = BeautifulSoup(unesc, "html.parser")
-                        locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
-                        locs = [x for x in locs if x]
-
-                        # De-dupe, preserve order
-                        seen = set()
-                        uniq: list[str] = []
-                        for x in locs:
-                            k = x.lower()
-                            if k not in seen:
-                                seen.add(k)
-                                uniq.append(x)
-
-                        if len(uniq) > len(best):
-                            best = uniq
-
-                    return best
-
-                best = _biv_tooltip_locations(soup)
-                if best and len(best) > 1:
-                    details["BIV Tooltip Locations"] = best
-                    details["Location"] = " / ".join(best)
-                    details.setdefault("Location Raw", details["Location"])
-                    # Keep as a LIST so downstream logic does not tokenize and lose city-level detail
-                    details["Location Chips"] = best
-                    _debug_biv_loc(
-                        "after tooltip locations early extract",
-                        details,
-                        {"tooltip_count": len(best), "tooltip_locs": best},
-                    )
-            except Exception as e:
-                _debug_biv_loc(
-                    "tooltip locations early extract failed",
-                    details,
-                    {"err": str(e)},
-                )
-
-        # Built In Vancouver fallback: meta description often contains "in City, ST, CAN"
-        if "builtinvancouver.org" in host and not (details.get("Location") or "").strip():
-            try:
-                desc = ""
-                md = soup.find("meta", attrs={"name": "description"})
-                if md and md.get("content"):
-                    desc = md["content"]
-
-                m = re.search(r"\bin\s+([A-Za-z .'-]+,\s*[A-Z]{2},\s*CAN)\b", desc)
-                if m:
-                    details["Location"] = m.group(1).strip()
-                    details.setdefault("Location Raw", details["Location"])
-                    _debug_biv_loc("after meta description fallback", details, {"meta_desc": desc})
-            except Exception:
-                pass
-
-        loc = _builtin_extract_location_from_card(card)
-
-        _debug_biv_loc("after location_from_card", details, {"loc_from_card": loc})
-        if loc:
-            cur = (details.get("Location") or "").strip()
-            loc_norm = loc.strip()
-
-            # only override when it adds detail
-            if (not cur) or (cur.lower() in {"canada", "ca", "can"} and loc_norm.lower() not in {"canada", "ca", "can"}):
-                details["Location"] = loc_norm
-                details.setdefault("Location Raw", loc_norm)
-                _debug_biv_loc("after setting Location", details)
-            else:
-                _debug_biv_loc("skipped card Location override (kept richer Location)", details, {"cur": cur, "card_loc": loc_norm})
-
-
-        rr = _builtin_extract_remote_rule_from_card(card)
-        _debug_biv_loc("after remote_rule_from_card", details, {"rr_from_card": rr})
-        if rr:
-            details["Remote Rule"] = rr
-            _debug_biv_loc("after setting Remote Rule", details)
-
-
-    if "dice.com" in host and "/job-detail/" in job_url:
-        details["Career Board"] = "Dice"
-        details.setdefault("Apply URL", job_url)
-        details = enrich_dice_fields(details, html)
-        return details
-
-
-    
-    # Final Built In Vancouver rule lock
-    if "builtinvancouver.org" in host:
-        loc_norm = (details.get("Location") or "").strip().lower()
-        rr_norm  = (details.get("Remote Rule") or "").strip().lower()
-
-        is_country_only = loc_norm in {"canada", "ca", "can"} or loc_norm == "canada"
-        looks_like_list = ("|" in loc_norm) or (loc_norm.count(",") >= 2)
-
-        # Only force Remote when it is actually remote (or explicitly "Hiring Remotely")
-        if is_country_only and not looks_like_list and rr_norm == "remote":
-            details["Location"] = "Canada"
-            details.setdefault("Location Raw", "Canada")
-            details["Remote Rule"] = "Remote"
-            _debug_biv_loc("after final biv rule lock", details)
-
-
-
-    if "builtinvancouver.org" in host:
-        hero_country = _builtin_hero_country(soup)
-        existing_loc = (details.get("Location") or "").strip()
-        _debug_biv_loc("before hero_country lock", details, {"hero_country ": hero_country, "existing_loc ": existing_loc})
-
-
-        loc_low = existing_loc.lower()
-        if hero_country and loc_low in {"", "canada", "ca", "can"}:
-
-            details["Location"] = hero_country
-            details["Location Raw"] = hero_country
-            details = _derive_location_rules(details)
-            _debug_biv(details, host, "after hero_country lock + derive")
-        else:
-            _debug_biv(details, host, "skipped hero_country lock (location already set)")
-
-
-
+    # Strip obvious sidebars and similar jobs before we do any parsing
+    _prune_non_job_sections(soup, host)
 
     def _strip_recommendations(soup_obj, page_host: str) -> None:
         """
@@ -2547,32 +1914,6 @@ def extract_job_details(html: str, job_url: str) -> dict:
     )
     page_text = main.get_text(" ", strip=True) if main else soup.get_text(" ", strip=True)
     details["page_text"] = page_text
-
-
-        # --- Hard stop on 404 or missing job pages (Built In and others) ---
-    pt_l = (page_text or "").lower()
-    if any(x in pt_l for x in [
-        "404",
-        "we can't seem to find the page",
-        "page you're looking for",
-        "page you’re looking for",
-    ]):
-        details.update({
-            "Title": "",
-            "Company": "",
-            "Career Board": infer_board_from_url(job_url),
-            "Job URL": job_url,
-            "job_url": job_url,
-            "apply_url": job_url,
-            "Apply URL": job_url,
-            "Apply URL Note": "Page not found (404)",
-            "Location": "",
-            "Remote Rule": "",
-            "Posting Date": "",
-            "Valid Through": "",
-        })
-        return details
-
 
     # Muse: location override
     if "themuse.com" in host:
@@ -2827,78 +2168,39 @@ def extract_job_details(html: str, job_url: str) -> dict:
     if cand:
         loc = cand.get_text(" ", strip=True)
 
-    locs_unique: list[str] = []
-
     # Built In tooltip locations (central and Vancouver)
     if "builtin.com" in host or "builtinvancouver.org" in host:
         import html as _html
 
         def _builtin_locations_from_title() -> list[str]:
             locs: list[str] = []
-
-            # Only look at tooltip nodes that have a title payload
-            nodes = list(soup.find_all(attrs={"data-bs-toggle": "tooltip", "title": True}))
-            nodes += list(soup.find_all(attrs={"data-bs-toggle": "tooltip", "data-bs-title": True}))
-
+            nodes = list(soup.find_all(attrs={"title": True}))
+            nodes += list(soup.find_all(attrs={"data-bs-toggle": "tooltip"}))
             for node in nodes:
-                # BuiltIn uses the HTML payload in the *title* attribute (escaped)
-                tattr = (node.get("title") or node.get("data-bs-title") or "").strip()
-                if not tattr:
-                    continue
-
-                # Only keep the "X Locations" tooltip, not random tooltips
-                node_text = (node.get_text(" ", strip=True) or "").lower()
-                if "location" not in node_text:
-                    continue
-
+                tattr = node.get("title") or ""
                 unesc = _html.unescape(tattr)
-
-                # Parse the tooltip HTML, then pull each cell
+                if "location" not in (node.get_text() or "").lower():
+                    continue
                 if "<div" in unesc:
                     try:
                         inner = BeautifulSoup(unesc, "html.parser")
-
-                        # BuiltIn renders each location in a col div
-                        for div in inner.select("div.col-lg-6"):
+                        for div in inner.find_all("div"):
                             txt = div.get_text(" ", strip=True)
                             if txt:
                                 locs.append(txt)
-
-                        # Fallback if class changes
-                        if not locs:
-                            for div in inner.find_all("div"):
-                                txt = div.get_text(" ", strip=True)
-                                if txt and "row g-" not in txt.lower():
-                                    locs.append(txt)
-
                     except Exception:
                         continue
                 else:
-                    # Non HTML tooltip fallback
                     for part in re.split(r"[;|]+", unesc):
                         txt = part.strip()
                         if txt:
                             locs.append(txt)
+            return locs
 
-            # Deduplicate while preserving order
-            seen = set()
-            unique = []
-            for x in locs:
-                k = x.lower()
-                if k not in seen:
-                    seen.add(k)
-                    unique.append(x)
-
-            return unique
-
-        locs_unique = _builtin_locations_from_title()
-
-        if locs_unique:
-            details["Location"] = " / ".join(locs_unique)
-            details["Location Chips"] = locs_unique  # optional, but useful
-            loc_text = details["Location"]  # prevents later single-location fallback from overwriting
-            details["BIV Tooltip Location Count"] = len(locs_unique)  # so your final preservation block actually fires
-
+        locs = _builtin_locations_from_title()
+        if locs:
+            loc = "; ".join(locs)
+            details["locations"] = locs
 
     # WTTJ special location
     if not loc and "welcometothejungle.com" in host:
@@ -2929,14 +2231,12 @@ def extract_job_details(html: str, job_url: str) -> dict:
         "Title": title,
         "Company": company,
         "Career Board": infer_board_from_url(job_url),
+        "Location": loc,
         "Description": desc,
         "Description Snippet": desc,
         "Job URL": job_url,
         "job_url": job_url,
     })
-
-    if loc and not details.get("Location"):
-        details["Location"] = loc
 
     # Built In remote flag from inline meta
     remote_flag = str(builtin_meta.get("remote") or "").strip().lower()
@@ -2953,14 +2253,12 @@ def extract_job_details(html: str, job_url: str) -> dict:
         details = _enrich_workday_location(details, html, job_url)
 
     # Capture full text lower for downstream rules
-    # Keep the main-scoped page_text we already set earlier
-    page_txt_lower = (details.get("page_text") or "").lower()
-
+    page_txt = soup.get_text(" ", strip=True).lower()
+    details["page_text"] = page_txt
     details["html_raw"] = html or ""
 
     # Optional Muse job id capture
-    m = re.search(r"\bJob\s*ID:\s*([A-Za-z0-9_-]+),?\s*(\d+)?", page_txt_lower, re.I)
-
+    m = re.search(r"\bJob\s*ID:\s*([A-Za-z0-9_-]+),?\s*(\d+)?", page_txt, re.I)
     if m:
         details["job_id_vendor"] = m.group(1)
         if m.group(2):
@@ -2981,296 +2279,88 @@ def extract_job_details(html: str, job_url: str) -> dict:
         details["apply_url"] = job_url
         details["Apply URL Note"] = "Apply link missing or job unavailable"
 
-    # Built In: trust inline meta location only when it makes sense
-    builtin_loc = (builtin_meta.get("location") or "").strip()
-
+    # Built In: trust inline meta location / salary where it looks sane
+    builtin_loc = (builtin_meta.get("location") or details.get("Location") or "").strip()
     if builtin_loc:
-        if "builtinvancouver.org" in host:
-            # Vancouver site: do not let meta override Canada with US noise
-            bl = builtin_loc.lower()
-            if any(x in bl for x in ["united states", "u.s.", "usa", "us", "united-states"]):
-                # ignore builtin_loc, keep whatever we already set (hero_country / JSON-LD / card)
-                pass
-            else:
-                details["Location"] = builtin_loc
-        else:
-            # Central Built In is ok to trust more often
-            details["Location"] = builtin_loc
-
-
+        details["Location"] = builtin_loc
     if not details.get("Salary Range") and (builtin_meta.get("salary_text") or builtin_meta.get("salary")):
         details["Salary Range"] = builtin_meta.get("salary_text") or builtin_meta.get("salary")
-
-    # Built In Vancouver: multi-location list is stored inside tooltip "title" as escaped HTML
-    # If we already extracted it earlier in the Built In block, do not redo or risk overwrites.
-    if "builtinvancouver.org" in host and not details.get("BIV Tooltip Locations"):
-        try:
-            import html as _html
-
-            # Look for the "5 Locations" tooltip span(s)
-            candidates = soup.select("span[data-bs-toggle='tooltip'][title]")
-            best: list[str] = []
-
-            for sp in candidates:
-                label = (sp.get_text(" ", strip=True) or "").lower()
-                m = re.search(r"\b(\d+)\s+locations?\b", label, re.I)
-                if m:
-                    details["BIV Locations Badge Count"] = int(m.group(1))
-                if "location" not in label:
-                    continue
-
-                raw = (sp.get("title") or sp.get("data-bs-title") or "").strip()
-                if not raw:
-                    continue
-
-                # Unescape twice because Built In sometimes nests escaping (Montr&amp;#233;al)
-                unesc = _html.unescape(_html.unescape(raw))
-
-                # Must look like their grid tooltip
-                if "col-lg-6" not in unesc:
-                    continue
-
-                inner = BeautifulSoup(unesc, "html.parser")
-                locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
-                locs = [x for x in locs if x]
-
-                # keep the largest list (in case multiple tooltips match)
-                if len(locs) > len(best):
-                    best = locs
-
-            # Promote tooltip list if it gives more detail than what we have now
-            if best:
-                cur = (details.get("Location") or "").strip()
-                if (" / " not in cur) and (len(best) > 1):
-                    details["BIV Tooltip Locations"] = best
-                    details["Location"] = " / ".join(best)
-                    details.setdefault("Location Raw", details["Location"])
-                    details["Location Chips"] = details.get("Location Chips") or "|".join(best)
-                    _debug_biv_loc("after tooltip locations promotion", details, {"tooltip_count": len(best), "tooltip_locs": best})
-
-        except Exception as e:
-            _debug_biv_loc("tooltip locations promotion failed", details, {"err": str(e)})
-
 
     # Base salary/location enrichment
     details = enrich_salary_fields(details, page_host=host)
     details = _derive_location_rules(details)
-    _debug_biv(details, host, "after base enrich + derive")
-
-    debug(f"[BIV DEBUG]......AFTER enrich_salary_fields: "
-          f"Status={details.get('Salary Status')} Placeholder={details.get('Salary Placeholder')} Salary={details.get('Salary')}")
-
 
     # Built In: for central site, prefer tooltip locations and add ", USA" when obviously missing.
     # For Built In Vancouver, prefer tooltip but never force USA.
     if "builtin.com" in host or "builtinvancouver.org" in host:
         try:
-            # 0) Scope to the main job header so we do NOT scrape Similar Jobs
-            scope = (
-                soup.select_one("div.job-header")
-                or soup.select_one("header")
-                or soup.select_one("main")
-                or soup
-            )
-
             loc_text = ""
+            tooltip_span = soup.find(
+                "span",
+                attrs={"data-bs-title": True},
+                string=re.compile(r"Locations?", re.I),
+            )
+            if tooltip_span:
+                raw_html = tooltip_span.get("data-bs-title") or ""
+                if raw_html:
+                    tooltip_soup = BeautifulSoup(raw_html, "html.parser")
+                    loc_divs = (
+                        tooltip_soup.select(".text-truncate")
+                        or tooltip_soup.find_all("div")
+                    )
+                    locs = [
+                        d.get_text(" ", strip=True)
+                        for d in loc_divs
+                        if d.get_text(strip=True)
+                    ]
+                    if locs:
+                        loc_text = " / ".join(locs)
 
-            # 1) Prefer tooltip locations inside the header scope only
-            import html as _html
-
-            def _extract_builtin_tooltip_locations(scope_soup) -> list[str]:
-                """Return list of locations embedded in Built In tooltip HTML.
-
-                Built In often stores the multi-location list inside a tooltip attribute
-                (title, data-bs-original-title, etc) as HTML that is HTML escaped.
-                """
-                import html as _html
-
-                # Collect candidate nodes that might carry the tooltip HTML.
-                candidates = []
-                try:
-                    candidates.extend(scope_soup.select("[data-bs-toggle='tooltip']"))
-                except Exception:
-                    pass
-
-                # Also include any node with a tooltip-like attribute, even if their selector changes.
-                try:
-                    candidates.extend(scope_soup.find_all(attrs={"title": True}))
-                    candidates.extend(scope_soup.find_all(attrs={"data-bs-original-title": True}))
-                    candidates.extend(scope_soup.find_all(attrs={"data-original-title": True}))
-                    candidates.extend(scope_soup.find_all(attrs={"data-bs-title": True}))
-                except Exception:
-                    pass
-
-                # De-dupe by object id
-                seen_ids = set()
-                uniq_candidates = []
-                for n in candidates:
-                    nid = id(n)
-                    if nid in seen_ids:
-                        continue
-                    seen_ids.add(nid)
-                    uniq_candidates.append(n)
-
-                best: list[str] = []
-
-                def _get_tooltip_attr(node) -> str:
-                    for k in ("title", "data-bs-original-title", "data-original-title", "data-bs-title"):
-                        v = node.get(k)
-                        if v:
-                            return str(v)
-                    return ""
-
-                for node in uniq_candidates:
-                    label = (node.get_text(" ", strip=True) or "").lower()
-
-                    # Strong signal: visible label says 'X Locations' or contains 'Locations'
-                    if "location" not in label:
-                        aria = (node.get("aria-label") or "").lower()
-                        if "location" not in aria:
-                            continue
-
-                    raw = _get_tooltip_attr(node).strip()
-                    if not raw:
-                        continue
-
-                    # Built In sometimes double-escapes entities (Montr&amp;#233;al)
-                    unesc = _html.unescape(_html.unescape(raw))
-
-                    # If we do not see their grid/cell markers, skip.
-                    if ("col-lg-6" not in unesc) and ("row" not in unesc) and ("<div" not in unesc):
-                        continue
-
-                    # Parse the embedded tooltip HTML.
-                    try:
-                        inner = BeautifulSoup(unesc, "html.parser")
-                    except Exception:
-                        continue
-
-                    # Primary: each location appears in a div.col-lg-6 cell.
-                    locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
-                    locs = [x for x in locs if x]
-
-                    # Built In Vancouver sometimes uses .text-truncate without commas (e.g., CA, MO).
-                    if not locs and "builtinvancouver.org" in host:
-                        locs = [d.get_text(" ", strip=True) for d in inner.select(".text-truncate")]
-                        locs = [x for x in locs if x]
-
-                    # Secondary: take any leaf div text that looks like a location
-                    if not locs:
-                        for div in inner.find_all("div"):
-                            txt = div.get_text(" ", strip=True)
-                            if txt and ("," in txt or "builtinvancouver.org" in host):
-                                locs.append(txt)
-
-                    # Last resort: any stripped string containing commas
-                    if not locs:
-                        if "builtinvancouver.org" in host:
-                            locs = [s.strip() for s in inner.stripped_strings if s]
-                        else:
-                            locs = [s.strip() for s in inner.stripped_strings if s and "," in s]
-
-                    # De-dupe, preserve order
-                    seen = set()
-                    uniq: list[str] = []
-                    for x in locs:
-                        k = x.lower()
-                        if k not in seen:
-                            seen.add(k)
-                            uniq.append(x)
-
-                    # Keep the largest list found (in case multiple tooltips match)
-                    if len(uniq) > len(best):
-                        best = uniq
-
-                return best
-
-
-            # If we already extracted the tooltip list earlier (preferred), reuse it.
-            if "builtinvancouver.org" in host and isinstance(details.get("BIV Tooltip Locations"), list) and details.get("BIV Tooltip Locations"):
-                locs_unique = details["BIV Tooltip Locations"]
-            else:
-                # Use main as the scope first because div.job-header is often too narrow
-                scope = soup.select_one("main") or soup
-                locs_unique = _extract_builtin_tooltip_locations(scope)
-
-            # Built In Vancouver fallback: use JSON-LD locations if tooltip extraction misses.
-            if "builtinvancouver.org" in host and not locs_unique:
-                ld_locs = details.get("locations")
-                if isinstance(ld_locs, list) and len(ld_locs) > 1:
-                    locs_unique = [x for x in ld_locs if x]
-
-
-            # DEBUG: show raw tooltip extraction result before setting Location
-            if "builtinvancouver.org" in host:
-                _debug_biv(
-                    {
-                        "Location": loc_text,
-                        "Location Chips": locs_unique,
-                        "Canada Rule": details.get("Canada Rule", ""),
-                        "US Rule": details.get("US Rule", ""),
-                        "WA Rule": details.get("WA Rule", ""),
-                        "Remote Rule": details.get("Remote Rule", ""),
-                        "Applicant Regions": details.get("Applicant Regions", ""),
-                    },
-                    host,
-                    "tooltip extraction raw",
-                )
-
-
-
-            if locs_unique:
-                details["BIV Tooltip Location Count"] = len(locs_unique)
-                details["Location"] = " / ".join(locs_unique)
-                details["Location Chips"] = "|".join(locs_unique)
-                loc_text = details["Location"]  # stop later fallbacks from overwriting
-                if "builtinvancouver.org" in host:
-                    details["BIV Tooltip Location Count"] = len(locs_unique)
-
-
-            # 2) Built In Vancouver specific: “Hiring Remotely in Canada”
-            #    (only check inside the header scope)
+            # Single location badge fallback
             if not loc_text:
-                header_text = scope.get_text(" ", strip=True)
-                m = re.search(r"Hiring\s+Remotely\s+in\s+([A-Za-z ]+)", header_text, re.I)
-                if m:
-                    loc_text = m.group(1).strip()
-                    details["Remote Rule"] = "Remote"
-
-            # 3) Single location icon fallback INSIDE the header scope only
-            if not loc_text:
-                loc_icon = scope.select_one("i.fa-location-dot")
+                loc_icon = soup.select_one("i.fa-location-dot")
                 container = None
                 if loc_icon:
-                    container = loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*align-items-start\b", re.I)) \
-                        or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*gap-sm\b", re.I)) \
-                        or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b", re.I))
-
+                    container = loc_icon.find_parent(
+                        "div",
+                        class_=re.compile(r"\bd-flex\b.*align-items-start\b", re.I),
+                    )
+                    if not container:
+                        container = loc_icon.find_parent(
+                            "div",
+                            class_=re.compile(r"\bd-flex\b.*gap-sm\b", re.I),
+                        )
+                    if not container:
+                        nearest = loc_icon.find_parent(
+                            "div", class_=re.compile(r"\bd-flex\b", re.I)
+                        )
+                        if nearest and nearest.parent and nearest.parent.name == "div":
+                            container = nearest.parent
                 if container:
-                    span_texts = [s.get_text(" ", strip=True) for s in container.find_all("span") if s.get_text(strip=True)]
-                    if span_texts:
+                    span_texts = [
+                        s.get_text(" ", strip=True)
+                        for s in container.find_all("span")
+                        if s.get_text(strip=True)
+                    ]
+                    for txt in span_texts:
+                        if "," in txt:
+                            loc_text = txt
+                            break
+                    if not loc_text and span_texts:
                         loc_text = span_texts[0]
+                    if loc_text and "builtin.com" in host:
+                        if not re.search(r"\b(US|USA|United States)\b", loc_text):
+                            loc_text = f"{loc_text}, USA"
 
             if loc_text:
                 details["Location"] = loc_text
-            
-            if "builtinvancouver.org" in host and loc_text:
-                details["BIV Tooltip Location Count"] = loc_text.count("/") + 1
-
-
         except Exception:
             pass
 
     # Re run location rules after Built In overrides
     details = _derive_location_rules(details)
 
-    # If we extracted full tooltip locations, keep them as the displayed Location
-    if details.get("BIV Tooltip Locations"):
-        details["Location"] = " / ".join(details["BIV Tooltip Locations"])
-    _debug_biv({"Location": f"tooltip_count={len(locs_unique)}", **details}, host, "tooltip extract check")
-    _debug_biv(details, host, "after tooltip/header overrides + derive")
-
-    # Built In Vancouver: normalize dates and treat Canada as remote
+        # Built In Vancouver: normalize dates and treat Canada as remote
     if "builtinvancouver.org" in host:
         try:
             # Walk JobPosting ld+json again in case parse_jobposting_ldjson
@@ -3310,10 +2400,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
                     # If the posting is country wide for Canada,
                     # treat it as a remote Canada role
                     if str(country).upper() in {"CAN", "CA"} or str(country).strip().lower() == "canada":
-                        existing = (details.get("Location") or "").lower()
-                        if existing in {"", "canada", "ca", "can"}:
-                            details["Location"] = "Canada"
-                            details["Remote Rule"] = "Remote"
+                        details["Location"] = "Canada"
+                        details["Remote Rule"] = "Remote"
 
                         # Make sure Canada is in Country Chips
                         existing = set()
@@ -3333,57 +2421,30 @@ def extract_job_details(html: str, job_url: str) -> dict:
             # Best effort only, do not break the scraper if Built In changes their JSON
             pass
 
-    # Final Built In Vancouver lock, after all other location sources
-    if "builtinvancouver.org" in host:
-        hero_country = _builtin_hero_country(soup)
-        loc = (details.get("Location") or "").lower()
-        if hero_country and loc in {"", "canada", "ca", "can"}:
-            details["Location"] = hero_country
-            details["Location Raw"] = hero_country
-            details = _derive_location_rules(details)
-            _debug_biv(details, host, "after hero_country lock + derive")
-
 
 
     # Location chips and country chips
-    # If tooltip locations were extracted, do NOT re-normalize Location/Chips later
-    _normalize_canada_provinces_in_details(details)
-    if details.get("BIV Tooltip Locations"):
-        # Keep Location and Location Chips exactly as the tooltip list
-        details["Location"] = " / ".join(details["BIV Tooltip Locations"])
-        # pick ONE format and stick to it:
-        # option A: pipe string
-        details["Location Chips"] = "|".join(details["BIV Tooltip Locations"])
-        return details
-
     chips = set()
     lc = details.get("Location Chips")
-
+    if isinstance(lc, (list, tuple)):
+        chips.update(str(x).lower() for x in lc if x)
+    elif isinstance(lc, str) and lc:
+        chips.update(x.strip().lower() for x in lc.split(",") if x.strip())
+    if "remote" in page_txt:
+        chips.add("remote")
+    if details.get("Location", "").lower() == "remote":
+        chips.add("remote")
     details["Location Chips"] = sorted(chips) if chips else []
 
     country = set()
     cc = details.get("Country Chips")
     if isinstance(cc, (list, tuple)):
         country.update(str(x).lower() for x in cc if x)
-
-
-    # Prefer structured country from Location, not page text
-    loc_norm = (details.get("Location") or "").strip().lower()
-    if "canada" in loc_norm or loc_norm in {"ca", "can"}:
-        country.add("canada")
-    elif any(x in loc_norm for x in ["united states", "usa", "u.s."]):
+    if any(t in page_txt for t in ("united states", "u.s.", "usa")):
         country.add("us")
-    else:
-        # fallback to page text only for non Built In pages
-        if "builtin.com" not in host and "builtinvancouver.org" not in host:
-            if any(t in page_txt_lower for t in ("united states", "u.s.", "usa")):
-                country.add("us")
-            if "canada" in page_txt_lower:
-                country.add("canada")
-
+    if "canada" in page_txt:
+        country.add("canada")
     details["Country Chips"] = sorted(country)
-    details["page_text_lower"] = page_txt_lower
-
 
     # Final company cleanup
     existing_company = _normalize_company_name(details.get("Company", ""))
@@ -3449,255 +2510,6 @@ def _title_from_url(job_url: str) -> str:
 
 BUILTIN_JOB_INIT_RX = re.compile(r"Builtin\.jobPostInit\((\{.*?\})\);?", re.S)
 BUILTIN_BRAND_RX   = re.compile(r"\s*\|\s*Built In\s*$", re.I)
-
-def _builtin_hero_country(soup: BeautifulSoup) -> str | None:
-    """
-    Built In pages often show:
-      <span>Hiring Remotely in </span><span>Canada</span>
-
-    We want the second span (Canada) and we want it from the hero area,
-    not from Similar Jobs.
-    """
-    if not soup:
-        return None
-
-    # Find the hero phrase anywhere in the main content
-    node = soup.find(string=re.compile(r"Hiring\s+Remotely\s+in", re.I))
-    if not node:
-        return None
-
-    # node is usually a NavigableString inside a <span>
-    span = node.parent if getattr(node, "parent", None) else None
-    if not span:
-        return None
-
-    # Next span after "Hiring Remotely in" is typically the country
-    nxt = span.find_next("span")
-    if not nxt:
-        return None
-
-    country = nxt.get_text(" ", strip=True)
-    if not country:
-        return None
-
-    # Safety: avoid accidentally re-grabbing the phrase
-    if re.search(r"Hiring\s+Remotely\s+in", country, re.I):
-        return None
-
-    return country
-
-
-def _builtin_job_card_scope(soup, job_url: str):
-    """
-    Return the BeautifulSoup node for the main job card, so we don't
-    accidentally parse Similar Jobs / Recommended Jobs blocks.
-    """
-    m = re.search(r"/(\d+)(?:[/?#]|$)", job_url or "")
-    if m:
-        card = soup.find(id=f"job-card-{m.group(1)}")
-        if card:
-            return card
-
-    # Fallback: Built In pages generally mark the main card with data-id="job-card"
-    card = soup.select_one('div[data-id="job-card"]')
-    return card or soup
-
-
-def _builtin_extract_location_from_card(card) -> str | None:
-    """
-    Extract location from the hero card only.
-
-    Handles:
-      - "Hiring Remotely in Canada"
-      - multi-location popovers (best effort)
-    """
-    if not card:
-        return None
-
-    text = card.get_text(" ", strip=True) if hasattr(card, "get_text") else ""
-    text = re.sub(r"\s+", " ", text).strip()
-
-    if DEBUG_LOCATION:
-        raw = str(card).replace("\n", " ")
-        raw = re.sub(r"\s+", " ", raw).strip()
-        log_line("BIV DEBUG", f"{DOTL}..card_html_len: {len(raw)}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_location_word: {('location' in raw.lower())}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_data_bs: {('data-bs' in raw.lower())}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_svg: {('<svg' in raw.lower())}")
-        if len(raw) > 600:
-            raw = raw[:600] + "...(trunc)"
-        log_line("BIV DEBUG", f"{DOTL}..card_html_head: {raw}")
-
-
-    # 1) Best case: exact phrase on Built In Vancouver page
-    m = re.search(r"Hiring\s+Remotely\s+in\s+([A-Za-z][A-Za-z\s]+)", text, re.I)
-    if m:
-        return m.group(1).strip()
-
-    # 1b) Multi-location list stored in a Bootstrap tooltip.
-    # Example: <span data-bs-toggle="tooltip" title="&lt;div ...&gt;...<div class='col-lg-6'>Toronto, ON, CAN</div>...">
-    try:
-        candidates = card.select("span[data-bs-toggle='tooltip'][title]")
-        best: list[str] = []
-
-        for sp in candidates:
-            label = (sp.get_text(" ", strip=True) or "").lower()
-            if ("location" not in label) and (not re.search(r"\b\d+\s+locations?\b", label)):
-                continue
-
-            raw = (sp.get("title") or "").strip()
-            if not raw:
-                continue
-
-            unesc = _html.unescape(_html.unescape(raw))
-            if ("col-lg-6" not in unesc) and ("row" not in unesc):
-                continue
-
-            inner = BeautifulSoup(unesc, "html.parser")
-            locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
-            locs = [x for x in locs if x]
-
-            if len(locs) > len(best):
-                best = locs
-
-        if best:
-            return " / ".join(best)
-    except Exception:
-        pass
-
-    # 2) icon based fallback (kept as a last resort)
-    # 2) Multi-location popover
-    # Built In often uses SVG icons, not <i class="fa-location-dot">
-    loc_icon = card.select_one("i.fa-location-dot")
-    if loc_icon:
-        container = (
-            loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*align-items-start\b", re.I))
-            or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b.*gap-sm\b", re.I))
-            or loc_icon.find_parent("div", class_=re.compile(r"\bd-flex\b", re.I))
-        )
-        if container:
-            spans = [s.get_text(" ", strip=True) for s in container.find_all("span") if s.get_text(strip=True)]
-            if spans:
-                return spans[0]
-
-    icon = (
-        card.select_one("i.fa-location-dot")
-        or card.select_one('svg[data-icon="location-dot"]')
-        or card.select_one('svg[aria-label*="location" i]')
-    )
-
-    # Find the most likely container near the icon, but do not depend on it
-    search_root = None
-    if icon:
-        search_root = icon.find_parent("div") or icon.parent
-    if not search_root:
-        search_root = card
-
-    # Popover content can live on a sibling/ancestor, or directly on a button/span
-    pop = (
-        search_root.find(attrs={"data-bs-content": True})
-        or search_root.find(attrs={"data-bs-title": True})
-        or search_root.find(attrs={"data-bs-original-title": True})
-        or card.find(attrs={"data-bs-content": True})
-        or card.find(attrs={"data-bs-title": True})
-        or card.find(attrs={"data-bs-original-title": True})
-    )
-
-    if DEBUG_LOCATION:
-        has_any = bool(card.find(attrs={"data-bs-content": True}) or card.find(attrs={"data-bs-title": True}) or card.find(attrs={"data-bs-original-title": True}))
-        log_line("BIV DEBUG", f"{DOTL}..loc_icon_found        : {bool(icon)}")
-        log_line("BIV DEBUG", f"{DOTL}..has_any_popover_attrs : {has_any}")
-        log_line("BIV DEBUG", f"{DOTL}..popover_node_found    : {bool(pop)}")
-
-    if not pop:
-        return None
-
-    # Combine possible attribute fields
-    blob = " ".join(
-        [
-            pop.get("data-bs-content", "") or "",
-            pop.get("data-bs-title", "") or "",
-            pop.get("data-bs-original-title", "") or "",
-        ]
-    ).strip()
-
-    if not blob:
-        return None
-
-    # Attributes often contain escaped HTML like &lt;br&gt;
-    try:
-        import html as _html
-        blob = _html.unescape(blob)
-    except Exception:
-        pass
-
-    # Convert HTML-ish separators into newlines, then strip tags
-    blob = re.sub(r"(?i)<br\s*/?>", "\n", blob)
-    blob = re.sub(r"(?i)</(div|li|p|span|tr|td)>", "\n", blob)
-    blob = re.sub(r"<[^>]+>", " ", blob)
-
-    # Preserve newlines, normalize whitespace within lines
-    blob = blob.replace("\r", "\n")
-    blob = re.sub(r"[ \t]+", " ", blob)
-    blob = re.sub(r"\n{2,}", "\n", blob).strip()
-
-    # Split into candidates
-    candidates = re.split(r"\n|\s*\|\s*|•|;", blob)
-    candidates = [c.strip(" ,") for c in candidates if c.strip()]
-
-    locs = []
-    for c in candidates:
-        if re.search(r"\bLocations?\b", c, re.I):
-            continue
-        if re.search(r"\b(remote|hybrid)\b", c, re.I):
-            continue
-
-        # Strong pattern: "City, Region, CountryCode"
-        if c.count(",") >= 2 and re.search(r"\b(CAN|CA|USA|US|UK)\b", c, re.I):
-            locs.append(c)
-            continue
-
-        # Useful: "City, Province" or similar, but avoid junk
-        if c.count(",") >= 1 and len(c) >= 5:
-            locs.append(c)
-
-    # De-dupe, preserve order
-    deduped = []
-    seen = set()
-    for l in locs:
-        key = l.lower()
-        if key not in seen:
-            seen.add(key)
-            deduped.append(l)
-
-    if deduped:
-        return " | ".join(deduped)
-
-    # Country collapse fallback
-    if re.search(r"\bcanada\b|\bCAN\b", blob, re.I):
-        return "Canada"
-    if re.search(r"\bunited states\b|\bUSA\b|\bUS\b", blob, re.I):
-        return "US"
-
-    return blob or None
-
-
-
-
-def _builtin_extract_remote_rule_from_card(card) -> str | None:
-    icon = card.select_one("i.fa-house-building")
-    if not icon:
-        return None
-    container = icon.find_parent("div")
-    if not container:
-        return None
-
-    label = container.get_text(" ", strip=True)
-    mode = classify_work_mode(label)
-
-    return None if mode == "Unknown" else mode
-
-
 
 def _extract_builtin_job_meta(soup: BeautifulSoup) -> dict[str, str]:
     """
@@ -3845,15 +2657,27 @@ def _is_target_role(d: dict) -> bool:
     return False
 
 def _is_remote(d: dict) -> bool:
-    rr  = str(d.get("Remote Rule") or "")
-    loc = str(d.get("Location") or "")
+    rr  = str(d.get("Remote Rule") or "").lower()
+    loc = str(d.get("Location") or "").lower()
     chips_val = d.get("Location Chips")
-    chips = " ".join(map(str, chips_val)) if isinstance(chips_val, (list, tuple)) else str(chips_val or "")
+    chips = " ".join(map(str, chips_val)).lower() if isinstance(chips_val, (list, tuple)) else str(chips_val or "").lower()
 
-    text = " ".join([rr, loc, chips]).strip()
-    mode = classify_work_mode(text).lower()
-    return mode in ("remote", "hybrid")
+    text = " ".join([chips, loc, rr])
 
+    # new fast-paths
+    if "flexible / remote" in text or "flexible remote" in text:
+        return True
+    if " remote" in text or text.startswith("remote") or "/remote" in text:
+        return True
+
+    # keep your existing allow/deny patterns below
+    if re.search(r"\bremote\b", text) or "anywhere" in text or "global" in text:
+        return True
+    if re.search(r"\b(on[-\s]?site|in[-\s]?office|hybrid)\b", text):
+        return False
+
+    # Default: treat missing/unknown signals as NOT remote so location rules still apply.
+    return False
 
 # Shared Seattle/WA locality hints
 SEATTLE_TERMS = [
@@ -4368,7 +3192,7 @@ def _fmt_salary_line(row: dict) -> str:
         parts.append(placeholder)
     
     if status == "signal_only":
-        parts.append("salary mentioned")
+        parts[0] = "signal-only"
 
     # If we assembled anything at all, join with separators
     if parts:
@@ -4618,8 +3442,8 @@ STARTING_PAGES = [
     #"https://www.themuse.com/jobs?categories=product&location=remote",
 
 
-    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
-    "https://www.dice.com/jobs?q=product+owner",
+    #Testing link- broken!!!
+    "https://www.dice.com/jobs?q=product+owner"
     
 
     # HubSpot (server-rendered listings; crawl like a board)
@@ -4643,7 +3467,6 @@ STARTING_PAGES = [
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
     "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
-    #"https://builtinvancouver.org/jobs/product-management/product-manager",
     "https://builtinvancouver.org/jobs?search=Business+Analyst",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
 
@@ -4693,6 +3516,7 @@ STARTING_PAGES = [
     "https://www.builtin.com/jobs?search=product%20owner&remote=true",
     "https://builtinvancouver.org/jobs?search=Product+Manager",
     "https://builtinvancouver.org/jobs?search=Product+Owner",
+    #"https://builtinvancouver.org/jobs",
 
 
     # HubSpot (server-rendered listings; crawl like a board)
@@ -5909,59 +4733,7 @@ def normalize_title(t: str, company: str | None = None) -> str:
 
 PLACEHOLDER_RX = re.compile(r"search by company rss feeds public api", re.I)
 
-COUNTRY_RX = {
-    "CANADA": re.compile(r"\b(canada|can)\b", re.I),
-    "US": re.compile(r"\b(united states|usa|us)\b", re.I),
-    "MEXICO": re.compile(r"\bmexico\b", re.I),
-    "UK": re.compile(r"\buk|united kingdom\b", re.I),
-}
-
-def _countries_in(values: list[str]) -> set[str]:
-    out: set[str] = set()
-    for v in values or []:
-        if not v:
-            continue
-        s = v.strip()
-
-        # Canada (do NOT treat "CA" as Canada)
-        if re.search(r"\bcanada\b", s, re.I) or re.search(r"\bCAN\b", s):
-            out.add("CANADA")
-
-        # United States
-        if re.search(r"\bunited states\b", s, re.I) or re.search(r"\bUSA\b", s) or re.search(r"\bUS\b", s):
-            out.add("US")
-
-    return out
-
-def infer_default_country(job_url: str) -> str:
-    host = (urlparse(job_url).netloc or "").lower()
-
-    # Built In Vancouver is Canada
-    if "builtinvancouver" in host:
-        return "Canada"
-
-    # Dice is US default
-    if host.endswith("dice.com"):
-        return "US"
-
-    # Optional: .ca domains default to Canada
-    if host.endswith(".ca"):
-        return "Canada"
-
-    # Safe default
-    return "US"
-
-def best_location_for_display(ld: dict, chips: str, scraped_loc: str, default_country: str = "US") -> str:
-    def _all_canadian_locs(values: list[str]) -> bool:
-        """Return True when we have multiple locations and they are all Canada-coded."""
-        vals = [v for v in values if v]
-        if len(vals) < 2:
-            return False
-        return all(
-            re.search(r"\bcan(?:ada)?\b", v, re.I) or re.search(r"\bCAN\b", v)
-            for v in vals
-        )
-
+def best_location_for_display(ld: dict, chips: str, scraped_loc: str) -> str:
     def _looks_specific(loc: str) -> bool:
         """Heuristic: prefer city/state strings over generic region tokens."""
         if not loc:
@@ -5976,59 +4748,33 @@ def best_location_for_display(ld: dict, chips: str, scraped_loc: str, default_co
             return True
         return False
 
-    locs_from_ld = ld.get("locations") or []
-    scraped_parts = [p.strip() for p in re.split(r"[;/|]", scraped_loc) if p.strip()] if scraped_loc else []
-
-    # If scraped location is explicitly Canada, do not let chip noise override it
-    if scraped_loc and re.search(r"\bcan(?:ada)?\b", scraped_loc, re.I):
-        return scraped_loc if _looks_specific(scraped_loc) else "Canada"
-
-
-    # Collapse multi-province Canada lists down to a country-level label
-    if _all_canadian_locs(locs_from_ld):
-        return "Canada"
-    if scraped_parts and _all_canadian_locs(scraped_parts):
-        return "Canada"
-
     # 1) Prefer explicit region tokens in chips (skip pure "Remote")
     if chips:
-        tokens = [p.strip() for p in re.split(r"[|/;,]", chips) if p.strip()]
-        #tokens = [p.strip() for p in chips.split("|") if p.strip()]        Original line
+        tokens = [p.strip() for p in chips.split("|") if p.strip()]
         tokens = [t for t in tokens if t.lower() not in ("remote", "global", "anywhere")]
-
-        countries = _countries_in(tokens + ([scraped_loc] if scraped_loc else []))
-
-        # Only collapse to Canada if Canada is the only detected country
-        if countries == {"CANADA"}:
-            return scraped_loc if _looks_specific(scraped_loc) else "Canada"
-
-        # If multiple countries exist, prefer the more specific scraped_loc
-        if _looks_specific(scraped_loc):
-            return scraped_loc
-
-        # Otherwise return the most informative token (or the first)
+        for key in ("US", "USA", "United States", "Canada", "North America", "Europe", "EU", "EMEA", "UK"):
+            for t in tokens:
+                if key.lower() in t.lower():
+                    # If scraped_loc is more specific than a generic region token, keep the specific one
+                    if _looks_specific(scraped_loc):
+                        return scraped_loc
+                    return t
         if tokens:
             return tokens[0]
-        
 
     # 2) LD-JSON locations
     locs = ld.get("locations") or []
     if locs:
         nice = [l for l in locs if l and l.lower() not in ("remote", "global", "anywhere")]
         if nice:
-            job_url = (
-                (ld.get("job_url") or ld.get("Job URL") or ld.get("url") or ld.get("URL") or "")
-            )
-            if "builtinvancouver.org" in str(job_url).lower():
-                return ", ".join(nice)        # keep all locations for Built In Vancouver
-            return ", ".join(nice[:2])        # keep short version elsewhere
+            return ", ".join(nice[:2])
 
     # 3) Scraped location unless it was the crawler placeholder
     if scraped_loc and not PLACEHOLDER_RX.search(scraped_loc):
         return scraped_loc
 
-    # 4) Last resort: site default country
-    return default_country
+    # 4) Last resort
+    return "Remote"
 
 import re
 
@@ -6124,8 +4870,6 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
     chips = []
     low = (loc or "").lower()
     text = (page_text or "").lower()
-    up_loc = (loc or "").upper()
-    up_text = (page_text or "").upper()
 
     if "remote" in low or "remote" in text:
         chips.append("Remote")
@@ -6133,10 +4877,6 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
     for token, label in REGION_TOKENS.items():
         if token in low or token in text:
             chips.append(label)
-
-    # Recognize ISO country code CAN (Canada) when boards use abbreviations
-    if re.search(r"\bCAN\b", up_loc) or re.search(r"\bCAN\b", up_text):
-        chips.append("CA")
 
     for token in US_STATES:
         if token in low:
@@ -6158,12 +4898,9 @@ def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
 def _detect_applicant_regions(text: str) -> list[str]:
     regions = []
     low = (text or "").lower()
-    up = (text or "").upper()
     for token, label in REGION_TOKENS.items():
         if token in low:
             regions.append(label)
-    if re.search(r"\bCAN\b", up):
-        regions.append("CA")
     # Deduplicate
     seen = set()
     out = []
@@ -6204,215 +4941,61 @@ def _apply_path_location_hint(details: dict, url: str | None = None) -> None:
         pass
 
 
-CAN_PROV_RX = re.compile(r"\b(BC|AB|SK|MB|ON|QC|NB|NS|NL|PE|YT|NT|NU)\b", re.I)
-CAN_PROV_MAP = {
-    "alberta": "AB",
-    "british columbia": "BC",
-    "manitoba": "MB",
-    "new brunswick": "NB",
-    "newfoundland and labrador": "NL",
-    "nova scotia": "NS",
-    "ontario": "ON",
-    "prince edward island": "PE",
-    "quebec": "QC",
-    "saskatchewan": "SK",
-    "northwest territories": "NT",
-    "nunavut": "NU",
-    "yukon": "YT",
-}
-
-def _fold_ascii(value: str) -> str:
-    """Lowercase and strip diacritics for robust province matching."""
-    import unicodedata
-    return "".join(
-        ch for ch in unicodedata.normalize("NFKD", value)
-        if not unicodedata.combining(ch)
-    ).lower()
-
-def _normalize_canada_province_tokens(loc: str) -> str:
-    tokens = [t.strip() for t in (loc or "").split(",") if t.strip()]
-    if not tokens:
-        return (loc or "").strip()
-    changed = False
-    out: list[str] = []
-    for tok in tokens:
-        abbr = CAN_PROV_MAP.get(_fold_ascii(tok))
-        if abbr:
-            out.append(abbr)
-            changed = True
-        else:
-            out.append(tok)
-    if not changed:
-        return (loc or "").strip()
-    return ", ".join(out)
-
-def _normalize_canada_provinces_value(value: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        return value
-    parts = re.split(r"\s*/\s*", value)
-    normalized = [_normalize_canada_province_tokens(p) for p in parts]
-    return " / ".join(normalized) if len(parts) > 1 else normalized[0]
-
-def _normalize_canada_provinces_in_details(details: dict) -> None:
-    for key in ("Location", "Location Raw"):
-        if isinstance(details.get(key), str):
-            details[key] = _normalize_canada_provinces_value(details[key])
-
-    for list_key in ("BIV Tooltip Locations", "locations"):
-        vals = details.get(list_key)
-        if isinstance(vals, list):
-            details[list_key] = [_normalize_canada_provinces_value(v) for v in vals if v]
-
-    chips = details.get("Location Chips")
-    if isinstance(chips, list):
-        details["Location Chips"] = [_normalize_canada_provinces_value(v) for v in chips if v]
-    elif isinstance(chips, str) and chips.strip():
-        parts = [p.strip() for p in chips.split("|") if p.strip()]
-        parts = [_normalize_canada_provinces_value(p) for p in parts]
-        details["Location Chips"] = "|".join(parts)
-
 def _derive_location_rules(details: dict) -> dict:
     loc = details.get("Location", "") or details.get("display_location", "")
-    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
-
     text = " ".join([
         details.get("page_text") or "",
         details.get("Description") or "",
         details.get("Description Snippet") or "",
     ])
-
-    loc_low = (loc or "").lower()
-
-    # Built In Vancouver: do not let page chrome pollute chip generation
-    text_for_rules = text
-    text_for_chips = "" if "builtinvancouver.org" in job_url else text
-
-    chips = _tokenize_location_chips(loc, text_for_chips)
-    applicant_regions = _detect_applicant_regions(text_for_rules)
-
-    # Built In Vancouver: detect Canada using multiple signals
-    is_biv = "builtinvancouver.org" in job_url
-    is_canada = False
-    if is_biv:
-        is_canada = bool(
-            re.search(r"\bcanada\b", loc_low)
-            or re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low)  # ", CAN"
-            or CAN_PROV_RX.search(loc_low)
-            or any(str(c).lower() == "canada" for c in chips)
-        )
-
-    if is_biv and is_canada:
-        details["US Rule"] = "Fail"
-        details["WA Rule"] = "Fail"
-        details["Canada Rule"] = "Pass"
-
-        chips = [c for c in chips if c not in {"US", "NA"}]
-        applicant_regions = [r for r in applicant_regions if r not in {"US", "NA"}]
-
-        if not any(str(c).lower() == "canada" for c in chips):
-            chips.append("Canada")
-
-        # Only default to Remote for Canada when the listing is country-wide
-        rr = (details.get("Remote Rule") or "").strip()
-
-        # "Langley, British Columbia, CAN" is a specific onsite location, not country-wide remote
-        loc_specific = bool(re.search(r",\s*(bc|british columbia|on|ontario|qc|quebec|ab|alberta|mb|manitoba|sk|saskatchewan|ns|nova scotia|nb|new brunswick|nl|newfoundland|pe|prince edward island)\b", loc_low))
-
-        country_wide = (loc_low in {"canada", "can", "ca"} or loc_low.strip() == "")
-
-        if rr not in {"Remote", "Hybrid", "Onsite"}:
-            if country_wide and not loc_specific:
-                details["Remote Rule"] = "Remote"
-            else:
-                # If they gave a specific city/province, do not assume remote
-                details["Remote Rule"] = "Onsite"
+    chips = _tokenize_location_chips(loc, text)
+    applicant_regions = _detect_applicant_regions(text)
 
     # Apply URL/path-based hint (e.g., Workday campus names)
     _apply_path_location_hint(details)
 
-    # Merge chips if something already wrote Location Chips as a string
+    # Re-evaluate chips if path hint added one
     chips_field = details.get("Location Chips") or ""
-    if isinstance(chips_field, str) and chips_field.strip():
-        extra = [c for c in re.split(r"[|,]", chips_field) if c.strip()]
-        chips = list({*chips, *extra})
+    if chips_field and isinstance(chips_field, str):
+        chips = list({*chips, *[c for c in chips_field.split('|') if c]})
 
-    # Start with any explicit remote rule we already extracted (Built In badge parsing)
     remote_rule = details.get("Remote Rule") or details.get("remote_flag") or "Unknown"
-
-    badge_text = " ".join([
-        details.get("workplace_type") or "",
-        details.get("work_mode") or "",
-        details.get("workplace_badge") or "",
-    ]).strip()
-
-    is_biv = "builtinvancouver.org" in job_url
-
-    # If we already have an explicit rule (Remote/Hybrid/Onsite), do not overwrite it
-    if remote_rule in {"Remote", "Hybrid", "Onsite"}:
-        pass
-    else:
-        if is_biv:
-            # For BIV, avoid page_text (nav contains "REMOTE"). Use badge_text if present.
-            if badge_text:
-                remote_rule = classify_work_mode(badge_text)
-            else:
-                remote_rule = "Unknown"
-        else:
-            remote_rule = classify_work_mode(f"{text} {badge_text}".lower())
-
-
-
-    onsite_terms = ("in-office", "in office", "onsite", "on-site", "on site")
-
-    """if "hybrid" in t or "telework" in t:
+    t = text.lower()
+    # If page explicitly says hybrid, prefer that even if a remote flag was set earlier
+    if "hybrid" in t or "telework" in t:
         remote_rule = "Hybrid"
-    if any(term in t for term in onsite_terms):
-        remote_rule = "Onsite"
     if remote_rule.lower() in ("default", "unknown_or_onsite", "unknown", "no_remote_signal"):
-        if "remote" in t:
+        if "in-office" in t or "in office" in t:
+            remote_rule = "Onsite"
+        elif "remote" in t:
             remote_rule = "Remote"
-        elif "hybrid" in t or "telework" in t or "a few days at home" in t:
+        elif "hybrid" in t or "A few days at home" in t or "telework" in t:
             remote_rule = "Hybrid"
-        elif any(term in t for term in onsite_terms):
+        elif "onsite" in t or "on-site" in t or "on site" in t:
             remote_rule = "Onsite"
         else:
             remote_rule = "Unknown"
-    elif remote_rule.lower() == "remote" and ("hybrid" in t or "telework" in t):
-        remote_rule = "Hybrid"
-    elif any(term in t for term in onsite_terms):
-        remote_rule = "Onsite" """
+    elif remote_rule.lower() == "remote":
+        # Upgrade to Hybrid if page text explicitly mentions hybrid/telework
+        if "hybrid" in t or "telework" in t:
+            remote_rule = "Hybrid"
 
-    # US rule
+    # US rule: pass if chips/regions mention US/NA or location has US/state; fail if we see non-US regions without US
     us_rule = details.get("US Rule") or ""
     if not us_rule or us_rule.lower() == "default":
-        if any(c in {"US", "NA"} for c in chips) or (not loc and any(r in {"US", "NA"} for r in applicant_regions)):
+        if any(c in {"US", "NA"} for c in chips + applicant_regions):
             us_rule = "Pass"
         elif any(c in {"EU", "UK", "EMEA", "APAC", "LATAM"} for c in chips + applicant_regions):
             us_rule = "Fail"
         else:
+            # look for explicit US signals in location
             low_loc = (loc or "").lower()
             if any(tok in low_loc for tok in ("united states", "usa", "u.s.")) or any(s in low_loc for s in US_STATES):
                 us_rule = "Pass"
             else:
                 us_rule = "Fail"
 
-    # Canada rule
-    canada_rule = details.get("Canada Rule") or ""
-    if not canada_rule or canada_rule.lower() == "default":
-        low_loc = (loc or "").lower()
-        chips_text = "|".join(chips).lower()
-        if (
-            "canada" in low_loc
-            or CAN_PROV_RX.search(low_loc)
-            or low_loc.endswith(", ca")
-            or "canada" in chips_text
-            or "|ca|" in f"|{chips_text}|"
-        ):
-            canada_rule = "Pass"
-        else:
-            canada_rule = "Fail"
-
-    # WA rule
+    # WA rule: pass if explicit WA/Seattle signals OR the role is fully Remote in the US/CA
     wa_rule = details.get("WA Rule") or ""
     if not wa_rule or wa_rule.lower() == "default":
         low_loc = (loc or "").lower()
@@ -6428,22 +5011,13 @@ def _derive_location_rules(details: dict) -> dict:
 
     details["Remote Rule"] = remote_rule
     details["US Rule"] = us_rule
-    details["Canada Rule"] = canada_rule
     details["WA Rule"] = wa_rule
-
-    # Keep these consistently pipe delimited since the rest of the pipeline expects that often
     details["Location Chips"] = details.get("Location Chips") or "|".join(chips)
     details["Applicant Regions"] = details.get("Applicant Regions") or "|".join(applicant_regions)
-
-    # If we already have multiple locations, keep them
-    if isinstance(details.get("Location"), str) and " / " in details["Location"]:
-        return details
-
     try:
         details["Location"] = best_location_for_display(details, details.get("Location Chips", ""), loc)
     except Exception:
         pass
-
     return details
 
 
@@ -6478,39 +5052,6 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     page_text = str(d.get("page_text") or "")
     phost     = (page_host or "").lower()
 
-    def _fmt_est(cur: str | None, lo: int | None, hi: int | None) -> str:
-        cur = (cur or "").upper().strip()
-        if lo and hi:
-            # Matches your existing "CAD 69,450 - 119,450" style
-            return f"{cur} {lo:,} - {hi:,}" if cur else f"{lo:,} - {hi:,}"
-        if hi:
-            return f"{cur} ≈ {hi:,}" if cur else f"≈ {hi:,}"
-        return ""
-
-    def _salary_rule_from_status(status: str, source: str = "") -> str:
-        # One label you can filter on without re parsing status text
-        source = (source or "").lower()
-        if "builtin" in source:
-            return "builtin_range"
-        if status in ("at_or_above", "near_min", "below_floor"):
-            return "floor_check"
-        if status == "signal_only":
-            return "signal_only"
-        return "missing_salary"
-    
-    def _salary_variants(n: int) -> list[str]:
-        # Variants you will commonly see in HTML
-        return [
-            str(n),                       # 96400
-            f"{n:,}",                     # 96,400
-            f"{n:,.2f}",                  # 96,400.00
-            f"${n}",                      # $96400
-            f"${n:,}",                    # $96,400
-            f"${n:,.2f}",                 # $96,400.00
-        ]
-
-
-
     # --- Built In (incl. city sites like Built In Vancouver) ---
     # If Built In did NOT give us a structured salary, be conservative:
     # don't keep tiny or obviously bogus dollar amounts scraped from the text.
@@ -6537,136 +5078,44 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     if "edtech.com" in phost:
         page_text = ""
 
-    blob_parts = [
-        d.get("page_text") or "",
-        d.get("Description") or "",
-        d.get("Description Snippet") or "",
-    ]
-
-    # Built In: include raw HTML because salary ranges are often split across spans
-    if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
-        blob_parts.append(d.get("html_raw") or "")
-
-    blob = " ".join(str(x or "") for x in blob_parts)
+    blob = " ".join(str(p or "") for p in (sr_text, full_desc, snippet, title, page_text))
     blob_lower = blob.lower()
 
-    # DEBUG: confirm what salary text we are scanning
-    if page_host and "builtinvancouver.org" in page_host:
 
-        range_rx = re.compile(
-            r"\$\s*(?P<min>[\d,]+(?:\.\d+)?)\s*"
-            r"(?:-|–|—|to|\u2014|\u2013)\s*"
-            r"\$\s*(?P<max>[\d,]+(?:\.\d+)?)\s*"
-            r"(?P<cur>cad|usd)?",
-            re.IGNORECASE
-        )
+    # ==== WORKDAY salary extraction (simple and robust) ====
+    workday_min = None
+    workday_max = None
 
-        flat = blob
-        flat = re.sub(r"</span>\s*<span[^>]*>", "", flat, flags=re.I)
-        flat = re.sub(r"<[^>]+>", " ", flat)
-        flat = re.sub(r"\s+", " ", flat)
-        flat_lower = flat.lower()
+    # Use the already-normalized page_text we built above
+    workday_text = page_text
 
-        m = range_rx.search(flat)
-        if m:
-            lo = int(float(m.group("min").replace(",", "")))
-            hi = int(float(m.group("max").replace(",", "")))
+    # Look for Workday-style "Pay Range Minimum / Maximum" blocks
+    if "Pay Range Minimum" in workday_text or "Pay Range Maximum" in workday_text:
+        import re
 
-            window = flat_lower[max(0, m.start() - 160): min(len(flat_lower), m.end() + 160)]
+        m1 = re.search(r"Pay Range Minimum.*?([\d,]+)", workday_text, re.I | re.S)
+        m2 = re.search(r"Pay Range Maximum.*?([\d,]+)", workday_text, re.I | re.S)
 
-            if any(w in window for w in ("compensation", "pay range", "salary", "base salary", "annual")):
+        def _to_int(x: str | None) -> int | None:
+            if not x:
+                return None
+            try:
+                return int(x.replace(",", ""))
+            except Exception:
+                return None
 
-                cur = (m.group("cur") or "").upper()
-                if not cur:
-                    cur = "CAD" if ("cad" in window or "cad" in blob_lower) else "USD"
+        workday_min = _to_int(m1.group(1) if m1 else None)
+        workday_max = _to_int(m2.group(1) if m2 else None)
 
-                d["Salary From"] = lo
-                d["Salary To"] = hi
-                d["salary_min"] = lo
-                d["salary_max"] = hi
-                d["Salary Currency"] = cur
-                d["Salary Unit"] = "YEAR"
-
-                d["Salary Range"] = f"{cur} {lo:,} - {hi:,}"
-                d["Salary Text"] = d["Salary Range"]
-                d["Salary Source"] = d.get("Salary Source") or "builtin_range"
-                d["Salary Placeholder"] = ""
-
-                d["Salary Max Detected"] = hi
-                d["Salary Status"] = "detected_range"
-                d["Salary Note"] = "Built In Vancouver pay range detected"
-
-                # Fill the extra columns you want in Sheets
-                d["Salary Rule"] = d.get("Salary Rule") or "builtin_range"
-
-                if SALARY_FLOOR and hi < SALARY_FLOOR and (not SOFT_SALARY_FLOOR or hi >= SOFT_SALARY_FLOOR):
-                    d["Salary Near Min"] = hi
-                else:
-                    d["Salary Near Min"] = ""
-
-                d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur, lo, hi)
-
-                try:
-                    log_line("BIV DEBUG", f"{DOT6}✅ Promoted range: {d['Salary Range']}")
-                except Exception:
-                    pass
-
-                return d
-
-            else:
-                try:
-                    log_line("BIV DEBUG", f"⚠️ Range matched but context gate failed: {window!r}")
-                except Exception:
-                    pass
-
-        else:
-            # No range matched at all
-            first_dollar = flat_lower.find("$")
-            if first_dollar != -1:
-                preview = flat_lower[max(0, first_dollar - 80) : first_dollar + 180]
-            else:
-                preview = flat_lower[:220]
-
-            log_line(
-                "BIV DEBUG",
-                f"⚠️ No range match in flat blob preview={preview!r}"
-            )
-
-
-
-        # ==== WORKDAY salary extraction (simple and robust) ====
-        workday_min = None
-        workday_max = None
-        workday_text = page_text  # you already defined page_text above
-
-        if "Pay Range Minimum" in workday_text or "Pay Range Maximum" in workday_text:
-            m1 = re.search(r"Pay Range Minimum.*?([\d,]+)", workday_text, re.I | re.S)
-            m2 = re.search(r"Pay Range Maximum.*?([\d,]+)", workday_text, re.I | re.S)
-
-            def _to_int(x: str | None) -> int | None:
-                if not x:
-                    return None
-                try:
-                    return int(x.replace(",", ""))
-                except Exception:
-                    return None
-
-            workday_min = _to_int(m1.group(1) if m1 else None)
-            workday_max = _to_int(m2.group(1) if m2 else None)
-
-            if workday_max is not None:
-                # Feed Workday into the generic path consistently
-                d["Salary Max Detected"] = workday_max
-                d["Salary Near Min"] = workday_min or ""
-                d["Salary Status"] = "at_or_above"
-                d["Salary Note"] = "Workday min/max detected"
-                d["Salary Rule"] = d.get("Salary Rule") or "workday_range"
-
-                cur_for_est = d.get("Salary Currency") or ("CAD" if "cad" in blob_lower else "")
-                d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur_for_est, workday_min, workday_max)
-
-                return d
-
+        # If we found a max value from Workday, feed it into the generic logic
+        if workday_max is not None:
+            max_detected = workday_max
+            # If Workday gives a real salary, trust it completely
+            d["Salary Max Detected"] = workday_max
+            d["Salary Status"] = "at_or_above"
+            d["Salary Note"] = "Workday min/max detected"
+            d["Salary Near Min"] = workday_min or ""
+            return d
 
 
     def _looks_like_job_count(span: tuple[int, int]) -> bool:
@@ -6701,33 +5150,6 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         )
     )
 
-    # If we have salary language but no numbers, preserve the signal
-    has_numeric = bool(
-        isinstance(d.get("Salary From"), (int, float))
-        or isinstance(d.get("Salary To"), (int, float))
-        or d.get("salary_min")
-        or d.get("salary_max")
-        or d.get("Salary Max Detected")
-    )
-
-
-    if has_signal and not has_numeric:
-        # Do not overwrite a better existing text value
-        if not (d.get("Salary Text") or "").strip():
-            # Pick a friendly label based on what we saw
-            if "competitive" in signal_blob:
-                d["Salary Text"] = "Competitive salary (no range listed)"
-                d["Salary Range"] = "Competitive salary"
-            elif "pay range" in signal_blob or "salary range" in signal_blob:
-                d["Salary Text"] = "Salary range mentioned (no numbers listed)"
-                d["Salary Range"] = "Salary range mentioned"
-            else:
-                d["Salary Text"] = "Compensation mentioned (no numbers listed)"
-                d["Salary Range"] = "Compensation mentioned"
-
-            d["Salary Source"] = d.get("Salary Source") or "signal_only"
-
-
     # Collect known job-id numbers so we can filter them out of salary candidates.
     job_id_numbers: set[int] = set()
     job_id_raw = d.get("job_id_numeric")
@@ -6758,13 +5180,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     # Pattern like "$120,000" or "120,000".
     # On The Muse *and* Remotive we require an actual "$" so footer ZIPs
     # and "Unlock 69,133 Remote Jobs" do not get picked up.
-    force_dollar = (
-        ("themuse.com" in phost)
-        or ("remotive.com" in phost)
-        or ("builtin.com" in phost)
-        or ("builtinvancouver.org" in phost)
-    )
-
+    force_dollar = ("themuse.com" in phost) or ("remotive.com" in phost)
     if force_dollar:
         dollar_pattern = r"\$\s*([\d][\d,]{2,})"   # require '$' for Muse + Remotive
     else:
@@ -6846,9 +5262,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         # as salary. Only keep max_detected if it appears in valid salary context.
         if max_detected:
             try:
-                variants = _salary_variants(int(max_detected))
-
-                if not any(_salary_number_has_good_context(blob, v) for v in variants):
+                if not _salary_number_has_good_context(blob, max_detected):
                     max_detected = None
                     near_min_val = ""
                     status = "missing"
@@ -6860,53 +5274,28 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
                 status = "missing"
                 note = "Salary context check failed"
 
-        # Only finalize numeric salary fields if we still have a numeric salary
-        if max_detected:
-            d["Salary Max Detected"] = max_detected or ""
-            d["Salary Near Min"]     = near_min_val
-            d["Salary Status"]       = status
-            d["Salary Note"]         = note
-            d["Salary Placeholder"]  = ""  # real number beats placeholder
-
-            # Fill the extra columns you want in Sheets
-            d["Salary Rule"] = d.get("Salary Rule") or _salary_rule_from_status(status, d.get("Salary Source") or "")
-
-            cur_for_est = d.get("Salary Currency") or ("CAD" if "cad" in blob_lower else "")
-            d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur_for_est, None, int(max_detected))
-
-            return d
-
+        d["Salary Max Detected"] = max_detected or ""
+        d["Salary Near Min"]     = near_min_val
+        d["Salary Status"]       = status
+        d["Salary Note"]         = note
+        d["Salary Placeholder"]  = ""  # real number beats placeholder
+        return d
 
     # 6) No usable numeric salary: fall back to signal-only / missing
-    already_numeric = bool(
-        d.get("Salary Max Detected")
-        or d.get("salary_max")
-        or d.get("salary_min")
-        or d.get("Salary To")
-        or d.get("Salary From")
-    )
-
-    if has_signal and not already_numeric:
+    if has_signal:
         status      = "signal_only"
         placeholder = placeholder or "Competitive salary"
         note        = "Salary language present but no concrete numbers"
-
-        # NEW: treat signal as a real salary artifact for UI + BuiltIn checks
-        d["Salary"]        = d.get("Salary") or placeholder
-        d["Salary Text"]   = d.get("Salary Text") or placeholder
-        d["Salary Range"]  = d.get("Salary Range") or placeholder
-        d["Salary Source"] = d.get("Salary Source") or "signal_only"
     else:
         status      = "missing"
         placeholder = ""
         note        = "No salary information detected"
 
-    if status in ("missing", "signal_only"):
-        d["Salary Max Detected"] = ""
-        d["Salary Near Min"]     = ""
-        d["Salary Status"]       = status
-        d["Salary Note"]         = note
-        d["Salary Placeholder"]  = placeholder
+    d["Salary Max Detected"] = ""
+    d["Salary Near Min"]     = ""
+    d["Salary Status"]       = status
+    d["Salary Note"]         = note
+    d["Salary Placeholder"]  = placeholder
 
     return d
 
@@ -6965,11 +5354,6 @@ TRANSIENT_NET_MARKERS = (
     "ERR_CONNECTION_CLOSED",
     "ERR_TIMED_OUT",
 )
-
-PW_SUCCESS = 0
-PW_FAIL = 0
-REQ_FALLBACK = 0
-
 
 def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
     """
@@ -7038,7 +5422,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                     parsed = up.urlparse(url)
                     host = parsed.netloc.lower()
                     path = parsed.path or "/"
-                    #log_event("DEBUG", f"Playwright host={host} path={path} url={url}")    ignored 20251215    
+                    log_event("DEBUG", f"Playwright host={host} path={path} url={url}")
                 except Exception:
                     host = ""
                     path = "/"
@@ -7206,7 +5590,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 except Exception:
                     pass
 
-                #log_event("DEBUG", f"Playwright returned HTML for {url}")       ignored 20251215    
+                log_event("DEBUG", f"Playwright returned HTML for {url}")
                 return html
 
             finally:
@@ -7604,6 +5988,7 @@ INCLUDE_TITLES_EXACT = [
     r"\bbusiness analyst\b",
     r"\bsystems analyst\b",
     r"\bbusiness systems analyst\b",
+    r"\bbusiness system analyst\b",
     r"\bbusiness systems engineer\b",
     r"\bscrum master\b",
     r"\brelease train engineer\b", r"\brte\b",
@@ -7616,7 +6001,6 @@ INCLUDE_TITLES_FUZZY = [
     r"\bprod\s*ops\b",
     r"\bproduct\s+analyst\b",
     r"\bbusiness\s+analyst\b",
-    r"\bbusiness\s+system\s+analyst\b",
     r"\brequirements?\s+(?:analyst|engineer)\b",
     r"\bsolutions?\s+analyst\b",
     r"\bimplementation\s+analyst\b",
@@ -7655,7 +6039,6 @@ EXCLUDE_TITLES = [
     r"\bhr|recruiter|talent|people\s+ops\b",
     r"\b(finance|payroll|bookkeep|accountant)\b(?!.*\bproduct\b)",
     r"\boperations?\b(?!.*\bproduct\b)",
-    r"\bintern\b",
 ]
 
 # responsibility signals that look like PO/PM/BA/BSA/Scrum Master work
@@ -8483,21 +6866,22 @@ def _normalize_job_defaults(d: dict) -> dict:
     Normalize field names and basic defaults so downstream code
     can treat every board the same.
 
-    Also normalizes date fields:
-      - posting_date / Posting Date / date_posted
-      - valid_through / Valid Through
+    This version also normalizes date fields:
 
-    Produces:
-      - d["posting_date"], d["valid_through"] as YYYY-MM-DD when possible
-      - d["Posting Date"], d["Valid Through"] for CSV
-      - d["Posted"] as a relative label when possible
+        - accepts any of:
+            * posting_date
+            * Posting Date
+            * date_posted            (ISO from JSON-LD etc.)
+            * valid_through
+            * Valid Through
+
+        - sets all of:
+            * d["posting_date"]      internal canonical date string (YYYY-MM-DD)
+            * d["valid_through"]     internal canonical date string (YYYY-MM-DD)
+            * d["Posting Date"]      value used for the CSV column
+            * d["Valid Through"]     value used for the CSV column
+            * d["Posted"]            human label like "1 week ago" if possible
     """
-    
-    print("[TRACE] entered _normalize_job_defaults")
-    d = dict(d or {})
-        
-    from datetime import datetime
-
     d = dict(d or {})
 
     # Basic fields used everywhere
@@ -8505,41 +6889,55 @@ def _normalize_job_defaults(d: dict) -> dict:
     d.setdefault("Reason", "")
     d.setdefault("Date Scraped", now_ts())
 
-    d["Title"]            = d.get("Title") or d.get("title") or ""
-    d["Job ID (Vendor)"]  = d.get("Job ID (Vendor)") or d.get("job_id_vendor") or ""
-    d["Job ID (Numeric)"] = d.get("Job ID (Numeric)") or d.get("job_id_numeric") or ""
-    d["Job Key"]          = d.get("Job Key") or d.get("job_key") or ""
+    d["Title"]           = d.get("Title")           or d.get("title")        or ""
+    d["Job ID (Vendor)"] = d.get("Job ID (Vendor)") or ""
+    d["Job ID (Numeric)"]= d.get("Job ID (Numeric)")or ""
+    d["Job Key"]         = d.get("Job Key")         or ""
 
-    d["Company"]      = d.get("Company") or d.get("company") or ""
-    d["Career Board"] = d.get("Career Board") or d.get("career_board") or ""
-    d["Location"]     = d.get("Location") or d.get("display_location") or d.get("location") or ""
+#    d["Posted"]          = d.get("Posted")          or period,
+#    d["Posting Date"]    = d.get("Posting Date")    or row.get("Posted") or period,
+
+    d["Company"]      = d.get("Company")            or d.get("company")      or ""
+    d["Career Board"] = d.get("Career Board")       or d.get("career_board") or ""
+    d["Location"]     = d.get("Location")           or d.get("display_location") or d.get("location", "")
 
     # ---------- dates ----------
-    posting_date_raw = d.get("posting_date") or d.get("Posting Date") or ""
-    date_posted_raw = d.get("date_posted") or ""  # JSON-LD ISO string if available
-    valid_through_raw = d.get("valid_through") or d.get("Valid Through") or ""
 
-    # Prefer explicit JSON-LD ISO date_posted when present
+    # Raw sources from extractors / schema
+    posting_date_raw = (
+        d.get("posting_date")
+        or d.get("Posting Date")
+    )
+    date_posted_raw = d.get("date_posted")  # JSON-LD ISO string if available
+    valid_through_raw = (
+        d.get("valid_through")
+        or d.get("Valid Through")
+    )
+
+    # Prefer explicit "date_posted" ISO when present
     if date_posted_raw and not posting_date_raw:
         posting_date_raw = date_posted_raw
 
+    # Strip any time part, keep only YYYY-MM-DD when possible
     def _strip_time(s: str) -> str:
         if not s:
             return ""
-        s = str(s).strip()
+        s = str(s)
         for sep in ("T", " "):
             if sep in s:
                 return s.split(sep, 1)[0].strip()
-        return s
+        return s.strip()
 
-    posting_date_str = _strip_time(posting_date_raw)
-    valid_through_str = _strip_time(valid_through_raw)
+    posting_date_str = _strip_time(posting_date_raw) if posting_date_raw else ""
+    valid_through_str = _strip_time(valid_through_raw) if valid_through_raw else ""
 
-    # If still missing, fall back to Date Scraped date portion
+    # Fallback when we could not recover a posting date at all
     if not posting_date_str:
-        ds = str(d.get("Date Scraped") or "").strip()
+        ds = d.get("Date Scraped") or ""
         if ds:
-            posting_date_str = ds.split(" ", 1)[0].strip()  # e.g. "11/30/2025"
+            # Date Scraped looks like "11/30/2025 03:01:25 PM"
+            posting_date_str = ds.split(" ", 1)[0].strip()
+
 
     # Store internal canonical keys
     if posting_date_str:
@@ -8547,39 +6945,66 @@ def _normalize_job_defaults(d: dict) -> dict:
     if valid_through_str:
         d["valid_through"] = valid_through_str
 
-    # Store CSV keys
-    d["Posting Date"] = posting_date_str or ""
-    d["Valid Through"] = valid_through_str or ""
+    # Store human-facing CSV keys
+    d["Posting Date"] = posting_date_str
+    d["Valid Through"] = valid_through_str
+
+    # Preserve existing sheet values when re-running, without corrupting types
+    if row:
+        # If the sheet already had a Posting Date, keep it
+        prior_pd = row.get("Posting Date")
+        if prior_pd:
+            d["Posting Date"] = prior_pd
+
+        # For Posted (relative label), prefer:
+        # 1) what we just parsed into d["Posted"] (if any)
+        # 2) else whatever was on the sheet already
+        if row.get("Posted") and not d.get("Posted"):
+            d["Posted"] = row["Posted"]
+
 
     # ---------- Posted (relative label) ----------
-    # Respect an upstream label if present
-    posted_label = d.get("Posted") or d.get("posted_label") or d.get("posted") or ""
-    if not posted_label and d.get("Period"):
-        posted_label = d.get("Period") or ""
 
-    # Otherwise derive from posting_date_str if it looks like ISO
+    # If an upstream parser already gave us a label like "1 week ago" or "2wks ago", keep it.
+    posted_label = d.get("Posted") or d.get("posted_label") or ""
+    if not posted_label and d.get("Period"):
+        posted_label = d["Period"]
+    if posted_label:
+        d["Posted"] = posted_label
+
+    # Final fallback: never leave Posted blank if we have Period
+    period = d.get("Period", "")
+
+    if not d.get("Posted") and period:
+        d["Posted"] = period
+
+    # Do NOT backfill Posting Date from Posted/Period.
+    # Posting Date should only come from real dates (JSON-LD, schema, etc.).
+
+    # If the board already gives us a label like "1 week ago" or "2wks ago", keep it.
+    posted_label = d.get("Posted") or d.get("posted")
+
+    # Otherwise derive it from the posting date
     if not posted_label and posting_date_str:
         try:
-            # Only attempt isoformat parsing on YYYY-MM-DD
-            if len(posting_date_str) == 10 and posting_date_str[4] == "-" and posting_date_str[7] == "-":
-                dt_posted = datetime.fromisoformat(posting_date_str)
-                days = (datetime.now().date() - dt_posted.date()).days
+            dt_posted = datetime.fromisoformat(posting_date_str)
+            days = (datetime.now().date() - dt_posted.date()).days
 
-                if days <= 0:
-                    posted_label = "Today"
-                elif days == 1:
-                    posted_label = "1 day ago"
-                elif days < 7:
-                    posted_label = f"{days} days ago"
-                elif days < 30:
-                    weeks = days // 7
-                    posted_label = f"{weeks} week{'s' if weeks != 1 else ''} ago"
-                else:
-                    months = days // 30
-                    posted_label = f"{months} month{'s' if months != 1 else ''} ago"
+            if days <= 0:
+                posted_label = "Today"
+            elif days == 1:
+                posted_label = "1 day ago"
+            elif days < 7:
+                posted_label = f"{days} days ago"
+            elif days < 30:
+                weeks = days // 7
+                posted_label = f"{weeks} week{'s' if weeks != 1 else ''} ago"
+            else:
+                months = days // 30
+                posted_label = f"{months} month{'s' if months != 1 else ''} ago"
         except Exception:
-            # If anything goes sideways, do not crash normalization
-            posted_label = posted_label or ""
+            # If parsing fails for any reason, just fall back to the raw date
+            posted_label = posting_date_str
 
     d["Posted"] = posted_label or ""
 
@@ -8587,49 +7012,16 @@ def _normalize_job_defaults(d: dict) -> dict:
     d["Job URL"] = d.get("Job URL") or d.get("job_url") or ""
     if not d.get("Career Board") and d["Job URL"]:
         d["Career Board"] = infer_board_from_url(d["Job URL"])
-    d["Apply URL"] = d.get("Apply URL") or d.get("apply_url") or d.get("Job URL") or ""
+    d["Apply URL"] = d.get("Apply URL") or d.get("apply_url") or d.get("Job URL")
     d["Apply URL Note"] = d.get("Apply URL Note") or ""
 
     # Text and rules
-    d["Description Snippet"] = d.get("Description Snippet") or d.get("description_snippet") or ""
-    d["WA Rule"]             = d.get("WA Rule") or d.get("wa_rule") or "Default"
-    d["Remote Rule"]         = d.get("Remote Rule") or d.get("remote_rule") or "Default"
-    d["US Rule"]             = d.get("US Rule") or d.get("us_rule") or "Default"
+    d["Description Snippet"] = d.get("Description Snippet") or d.get("description_snippet", "")
+    d["WA Rule"]             = d.get("WA Rule")             or d.get("wa_rule", "Default")
+    d["Remote Rule"]         = d.get("Remote Rule")         or d.get("remote_rule", "Default")
+    d["US Rule"]             = d.get("US Rule")             or d.get("us_rule", "Default")
 
     return d
-
-
-
-
-def link_key(u: str) -> str:
-    """
-    Stable key so duplicate listing and detail URLs collapse across boards.
-    - lowercases host and path
-    - strips 'www.' and trailing slashes
-    - drops tracking or paging query params (utm_*, ref, source, page, p, start)
-    - ignores fragments
-    """
-    p = urlparse(str(u or ""))
-    host = (p.netloc or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-
-    path = (p.path or "").rstrip("/").lower()
-
-    drop = {
-        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-        "ref", "source", "src", "page", "p", "start"
-    }
-
-    kept = []
-    for k, v in parse_qsl(p.query or "", keep_blank_values=False):
-        if (k or "").lower() in drop:
-            continue
-        kept.append(((k or "").lower(), v))
-
-    q = urlencode(kept, doseq=True)
-    return f"{host}{path}?{q}" if q else f"{host}{path}"
-
 
 def _title_for_log(d: dict, link: str) -> str:
     # normalize first so trailing " @Company" / "[Hiring]" etc. are removed
@@ -8885,14 +7277,14 @@ def log_event(level: str,
         #company = (job_dict.get("Company") or "Missing Company").strip()
         #board   = (job_dict.get("Career Board") or "Missing Board").strip()
         progress_clear_if_needed()
-        for ln in _wrap_lines(f"{color}{board}{DOT6}{company}{RESET}", width=width):
-            log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+        for ln in _wrap_lines(f"{board}{DOT6}{company}", width=width):
+            log_print(f"{keep_tag}{DOT3}{ln}", color=keep_body_color)
 
         # --- URL line ---
         if url:
             for ln in _wrap_lines(url, width=width):
                 progress_clear_if_needed()
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+                log_print(f"{keep_tag}{DOT3}{ln}", color=keep_body_color)
         loc = (job_dict.get("Location") or "").strip()
         if loc:
             remote_term = (
@@ -8902,26 +7294,24 @@ def log_event(level: str,
                 or job_dict.get("remote_flag")
                 or "Remote"
             )
-            loc_line = f"{color}{remote_term} Location: {loc}."
+            loc_line = f"{remote_term} Location: {loc}."
             for ln in _wrap_lines(loc_line, width=width):
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+                log_print(f"{keep_tag}{DOT3}{ln}", color=keep_body_color)
         apply_note = job_dict.get("Apply URL Note", "")
         if apply_note:
             for ln in _wrap_lines(f"Apply note: {apply_note}", width=width):
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+                log_print(f"{keep_tag}{DOT3}{ln}", color=keep_body_color)
 
         # --- Always show Salary line with fixed 22-cell width ---
-        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
-        log_print(f"{color}{_box('SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
-        #log_line("SALARY", {DOT3}_vis_fit(salary_str or "Missing or Unknown", 22))
-
+        log_print(f"{_box('$ SALARY ')}{DOT3}{_salary_payload_22(job_dict)}", color=keep_body_color)
 
 
         #if vis or score or mark:
         #    log_print(f"{color}{_conf_box(vis, score, mark)}.{RESET}")
 
         _print_debug_rows_for(job_dict, color=keep_body_color)
-        log_print(f"{color}{_box('DONE ')}.✅ {RESET}")
+        log_print(f"{_box('DONE ')}.✅", color=keep_body_color)
+        #refresh_progress()
         return
 
     if lvl == "SKIP":
@@ -8953,13 +7343,11 @@ def log_event(level: str,
             )
             loc_line = f"{remote_term} Location: {loc}."
             for ln in _wrap_lines(loc_line, width=width):
-                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
         
         # --- Always show Salary line with fixed 22-cell width ---
-        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
-        log_print(f"{color}{_box('SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
-        #log_line("SALARY", {DOT3} _vis_fit(salary_str or "Missing or Unknown", 22))
-
+        log_print(f"{color}{_box('$ SALARY ')}...{_salary_payload_22(job_dict)}{RESET}")
+        
 
 
         # use the explicit reason parameter if provided, otherwise the dict
@@ -9168,13 +7556,9 @@ def _progress_after_decision() -> None:
 def _debug_single_url(url: str):
     """Fetch and parse a single job URL, then pretty-print the details."""
     html = get_html(url)
-    #if not html:
-        #_bk_log_wrap("ERROR", ".Failed to fetch {url}")
-    if not html or "we can't seem to find the page" in html.lower() or "<title>404" in html.lower():
-        log_line("WARN", "Test URL returned a 404 page. Check the job URL.")
+    if not html:
+        _bk_log_wrap("ERROR", ".Failed to fetch {url}")
         return
-
-
 
     # Standard pipeline: extract → enrich salary → normalize
     details = extract_job_details(html, url)
@@ -9184,6 +7568,9 @@ def _debug_single_url(url: str):
     import json
     pretty = json.dumps(details, indent=2, sort_keys=True)
     log_print(f"❖ DEBUG single-url …Parsed details:\n{pretty}")
+    #log_print("👀 DEBUG single-url", ".Parsed details:\n"
+    #   + json.dumps(details, indent=2, sort_keys=True)
+    #)
 
 
 
@@ -9225,9 +7612,9 @@ def main(args: argparse.Namespace | None = None) -> None:
     SOFT_SALARY_FLOOR = args.soft_floor or 0
     SALARY_CEIL  = args.ceil or None
 
-#    PW_SUCCESS = 0
-#    PW_FAIL = 0
-#    REQ_FALLBACK = 0
+    PW_SUCCESS = 0
+    PW_FAIL = 0
+    REQ_FALLBACK = 0
 
     global kept_count, skip_count
     _seen_job_keys = set()
@@ -9264,13 +7651,13 @@ def main(args: argparse.Namespace | None = None) -> None:
   
     # 1) Build the final set of listing pages
     pages = list(STARTING_PAGES)
-
     # Temporarily disable HubSpot listings until title parsing is fixed
     pages = [p for p in pages if "hubspot.com/careers/jobs" not in p]
-
+    # Skip the slower career-source expansion during default smoke runs
     if not (SMOKE and not args.limit_pages):
         pages += expand_career_sources()
 
+    # 2) Optional caps and filters (driven by CLI flags)
     if ONLY_KEYS:
         pages = [u for u in pages if any(k in u.lower() for k in ONLY_KEYS)]
 
@@ -9278,12 +7665,9 @@ def main(args: argparse.Namespace | None = None) -> None:
         pages = pages[:PAGE_CAP]
 
     total_pages = len(pages)
-    all_detail_links = []
 
     # 3) Collect detail links from each listing page (your existing loop stays here)
     all_detail_links = []
-    listing_ctx_by_url: dict[str, dict] = {}
-
 
     # Keep only selected sites when --only is used
     if ONLY_KEYS:
@@ -9295,7 +7679,23 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     total_pages = len(pages)
 
+    pages = list(STARTING_PAGES)
+    if not (SMOKE and not args.limit_pages):
+        pages += expand_career_sources()
+    if ONLY_KEYS:
+        pages = [u for u in pages if any(k in u.lower() for k in ONLY_KEYS)]
+    if PAGE_CAP:
+        pages = pages[:PAGE_CAP]
+        if SMOKE and not args.limit_pages and pages:
+            host = up.urlparse(pages[0]).netloc or pages[0]
+            info(f".SMOKE run: only probing {host} before stopping.")
+    total_pages = len(pages)
 
+    #if SMOKE:
+    #   pages = pages[:1]          # one listing source only
+    #    total_pages = len(pages)
+
+    # --- Normalize & dedupe all collected job URLs ---
     def _norm_url(u: str) -> str:
         from urllib.parse import urlparse, urlunparse, parse_qsl
 
@@ -9322,14 +7722,37 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     from urllib.parse import urlparse, parse_qsl, urlencode  # (at top of file if not already imported)
 
-    
-    
+    def link_key(u: str) -> str:
+        """
+        Produce a stable key so duplicate listing/detail URLs collapse across boards.
+        - lowercases host and path
+        - strips 'www.' and trailing slashes
+        - drops tracking/pagination query params (utm_*, ref, source, page, p, start)
+        - ignores fragments
+        """
+        p = urlparse(str(u))
+        host = p.netloc.lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = p.path.rstrip("/").lower()
+
+        # keep only meaningful query params
+        drop = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                "ref", "source", "src", "page", "p", "start"}
+        kept = []
+        for k, v in parse_qsl(p.query, keep_blank_values=False):
+            if k.lower() in drop:
+                continue
+            kept.append((k.lower(), v))
+        q = urlencode(kept, doseq=True)
+
+        return f"{host}{path}?{q}" if q else f"{host}{path}"
 
     # De-duplicate by normalized link key
     _seen = set()
     deduped_links = []
     for u in all_detail_links:
-        k = link_key(u)
+        k = _link_key(u)
         if not k or k in _seen:
             continue
         _seen.add(k)
@@ -9363,12 +7786,6 @@ def main(args: argparse.Namespace | None = None) -> None:
             progress_clear_if_needed()
             continue
 
-        if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
-            links = collect_dice_links(listing_url, max_pages=25)
-            all_detail_links.extend(links)
-            continue
-
-        
         # Workday listing → detail expansion (Ascensus and similar tenants)
         if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
             # First try JSON expansion
@@ -9413,11 +7830,6 @@ def main(args: argparse.Namespace | None = None) -> None:
 
             else:
                 links = find_job_links(html, listing_url)
-            
-            if "dice.com/jobs" in listing_url:
-                links = collect_dice_links(listing_url, max_pages=25)
-            elif "hubspot.com/careers/jobs" in listing_url:
-                links = collect_hubspot_links(listing_url, max_pages=25)
 
 
         # HubSpot pagination (page=1..N)
@@ -9520,7 +7932,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         deduped.append(link)
 
     after_unique = len(deduped)
-    #log_line("DE-DUPE", f"{DOT3}{DOTR} Reduced {before_total} → {after_unique} unique URLs")   ignored 20251215
+    log_line("DE-DUPE", f"{DOT3}{DOTR} Reduced {before_total} → {after_unique} unique URLs")
 
     # use the cleaned list from here on
     all_detail_links = deduped
@@ -9600,15 +8012,6 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                 # B) we have HTML -> parse details and enrich salary
                 details = extract_job_details(html, link)
-
-                listing = listing_ctx_by_url.get(link, {})
-                details = _prefer_listing_location(details, listing)
-
-                if DEBUG_LOCATION and "builtinvancouver.org" in link:
-                    host = (urlparse(link).netloc or "").lower()
-                    log_line("BIV DEBUG", f"{DOTL}..prefer_listing: detail_loc={details.get('Location')!r} listing_loc={listing.get('Location')!r}")
-
-
 
                 # 1) Try to pull structured JobPosting data (datePosted, validThrough, etc.)
                 schema_bits = parse_jobposting_ldjson(html)
@@ -9755,38 +8158,20 @@ def main(args: argparse.Namespace | None = None) -> None:
                 keep_row["remote_flag"] = details.get("remote_flag") or details.get("is_remote_flag") or remote_rule
                 keep_row["Remote Flag"] = keep_row["remote_flag"]
 
-
-                # IMPORTANT: carry Canada Rule into the row used by the classifier
-                keep_row["Canada Rule"] = keep_row_normalized.get("Canada Rule") or details.get("Canada Rule", "")
-
-                
                 # Classification via the new rules helper
                 row_for_classification = {
                     **keep_row,
                     "Salary Status": details.get("Salary Status", ""),
-                    "Canada Rule": keep_row.get("Canada Rule") or details.get("Canada Rule", ""),
                 }
-
-
-
-                if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
-                    log_print(f"{_box('ROW CHECK ')}{DOT6}WA Rule= {row_for_classification.get('WA Rule')} "
-                        f" |  Remote Rule= {row_for_classification.get('Remote Rule')} "
-                        f" |  Canada Rule= {row_for_classification.get('Canada Rule')} "
-                    )
-
-                if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
-                    log_line("ROW CHECK", f"{DOT6}US Rule= {row_for_classification.get('US Rule')} "
-                        f" |  Location= {row_for_classification.get('Location')}"
-                        f" |  US Rule= {row_for_classification.get('US Rule')} "
-                    )
-
 
                 is_keep, reason = classify_keep_or_skip(
                     row_for_classification,
                     CLASSIFIER_CONFIG,
                     seen_keys_this_run,
                 )
+
+                #keep_row["Reason"] = reason
+                #_log_keep_to_terminal(keep_row)
 
 
                 if not is_keep:
@@ -9928,7 +8313,7 @@ def main(args: argparse.Namespace | None = None) -> None:
 
 
     info(
-        f".Playwright success {PW_SUCCESS}, failures {PW_FAIL}, fallbacks {REQ_FALLBACK}",
+        f"Playwright success {PW_SUCCESS}, failures {PW_FAIL}, fallbacks {REQ_FALLBACK}",
     )
     done_log(f".Kept {kept_count}, Skipped {skip_count} "
           f"in {(datetime.now() - start_ts).seconds}s")
@@ -10018,8 +8403,10 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
     _git_run("git pull --rebase", cwd=root)
     code, out = _git_run("git push", cwd=root)
     if code == 0:
+        #progress_clear_if_needed()
         info(f".Pushed to GitHub.")
     else:
+        #progress_clear_if_needed()
         log_print("⚠️ WARN",".Push failed:\n" + out)
 
 

@@ -802,7 +802,8 @@ ALLOW_PM = True  # set True if you want Product Manager roles too
 # Sites that are *boards/aggregators* (do NOT use their site_name as company)
 BOARD_HOSTS = {
     "remotive.com", "weworkremotely.com", "nodesk.co", "workingnomads.com",
-    "remoteok.com", "builtin.com", "simplyhired.com", "themuse.com",
+    "remoteok.com", "builtin.com", "simplyhired.com", 
+    # "themuse.com",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
     "ycombinator.com", "remote.co"
 }
 
@@ -4683,13 +4684,13 @@ STARTING_PAGES = [
 
 
     # Ascensus (Workday tenant) — focused role searches
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20manager",
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20owner",
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=business%20analyst",
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=systems%20analyst",
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=scrum%20master",
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20manager",                   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=product%20owner",                     # 20251227- removed to lesson the amount of jobs scraped can add back if desired
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=business%20analyst",                  # 20251227- removed to lesson the amount of jobs scraped can add back if desired
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=systems%20analyst",                   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers?q=scrum%20master",                      # 20251227- removed to lesson the amount of jobs scraped can add back if desired
     # optional: release train engineer / RTE
-    "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers/search?q=release%20train%20engineer",
+    # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers/search?q=release%20train%20engineer",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
 
     "https://jobs.ashbyhq.com/zapier",
 
@@ -6478,6 +6479,9 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     """
     import re
     global SALARY_FLOOR, SOFT_SALARY_FLOOR
+    workday_min: int | None = None
+    workday_max: int | None = None
+
 
     # 1) Normalize Salary Range to plain text
     sr = d.get("Salary Range", "")
@@ -6650,8 +6654,8 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
 
 
         # ==== WORKDAY salary extraction (simple and robust) ====
-        workday_min = None
-        workday_max = None
+        #workday_min = None
+        #workday_max = None
         workday_text = page_text  # you already defined page_text above
 
         if "Pay Range Minimum" in workday_text or "Pay Range Maximum" in workday_text:
@@ -6763,11 +6767,25 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     # 4) Numeric candidates
     dollar_candidates: list[int] = []
     k_candidates: list[int] = []
-    # Seed candidates with any explicit Workday min / max if present
-    if workday_min:
-        candidates.append(workday_min)
-    if workday_max:
-        candidates.append(workday_max)
+
+    
+    # Seed candidates with any explicit Workday min / max if present.
+    # Some runs hit an UnboundLocalError on workday_min/workday_max due to scoping,
+    # so guard access and fall back to None.
+    try:
+        wm = workday_min
+    except UnboundLocalError:
+        wm = None
+
+    try:
+        wx = workday_max
+    except UnboundLocalError:
+        wx = None
+
+    if isinstance(wm, int) and wm > 0:
+        candidates.append(wm)
+    if isinstance(wx, int) and wx > 0:
+        candidates.append(wx)
 
 
     # Pattern like "$120,000" or "120,000".
@@ -9868,6 +9886,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                 tb_str = traceback.format_exc()
                 err_msg = f"ERROR during job processing: {e}"
 
+
+                log_line(link, err_msg)
+                log_line(link, f"{DOTL} Traceback (trimmed): {tb_str[-800:]}")
+
+
                 # Minimal row: we always keep the Job URL and error reason
                 error_row = {
                     "Title": "",
@@ -9894,8 +9917,10 @@ def main(args: argparse.Namespace | None = None) -> None:
                 # Attach a trimmed traceback to debug rows so you can inspect later
                 _append_debug_row(error_row, f"{DOTL} Traceback (trimmed): {tb_str[-800:]}")
 
+                # NEW: print the debug rows immediately for error rows
+                _print_debug_rows_for(error_row)
+
                 log_event(link, err_msg, error_row)
-                # continue with the next job instead of killing the whole run
                 continue
 
 

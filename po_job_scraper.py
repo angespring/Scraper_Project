@@ -4618,8 +4618,17 @@ STARTING_PAGES = [
     #"https://www.themuse.com/jobs?categories=product&location=remote",
 
 
+
+    # Product Manager / Product Owner
+    "https://www.themuse.com/search/location/remote-flexible/keyword/product+manager",
+    "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=product%20manager",
+    "https://www.builtin.com/jobs?search=product%20manager&remote=true",
+    "https://builtinvancouver.org/jobs?search=Product+Manager",
+    "https://www.simplyhired.com/search?q=product+manager&l=remote",
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+manager",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
-    "https://www.dice.com/jobs?q=product+owner",
+    "https://builtinvancouver.org/jobs/product-management/product-manager",
+
     
 
     # HubSpot (server-rendered listings; crawl like a board)
@@ -4643,13 +4652,19 @@ STARTING_PAGES = [
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
     "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
-    #"https://builtinvancouver.org/jobs/product-management/product-manager",
     "https://builtinvancouver.org/jobs?search=Business+Analyst",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=systems+analyst",
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=business+analyst",
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=business+systems+analyst",
+
+
 
     # Scrum Master / RTE
     "https://remotive.com/remote-jobs/product?search=scrum%20master",
     "https://www.builtin.com/jobs?search=scrum%20master&remote=true",
+    "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=scrum+master",
+
 
 
 

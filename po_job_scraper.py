@@ -2755,8 +2755,10 @@ def extract_job_details(html: str, job_url: str) -> dict:
         rel_span = soup.find("span", string=re.compile(r"\d+\s*(day|week|month)s?\s*ago", re.I))
         if rel_span:
             details["Posted"] = rel_span.get_text(strip=True)
-    if details.get("Posted") and not details.get("Posting Date"):
-        details["Posting Date"] = details["Posted"]
+    # Do not backfill Posting Date from Posted.
+    # If Posting Date cannot be scraped, it must remain blank.
+    if not details.get("Posting Date"):
+        details["Posting Date"] = ""
 
     # Company basic detection
     company = ""
@@ -8549,12 +8551,12 @@ def _normalize_job_defaults(d: dict) -> dict:
 
     # ---------- dates ----------
     posting_date_raw = d.get("posting_date") or d.get("Posting Date") or ""
-    date_posted_raw = d.get("date_posted") or ""  # JSON-LD ISO string if available
+    posting_date_raw = str(posting_date_raw).strip()  # JSON-LD ISO string if available
     valid_through_raw = d.get("valid_through") or d.get("Valid Through") or ""
 
     # Prefer explicit JSON-LD ISO date_posted when present
-    if date_posted_raw and not posting_date_raw:
-        posting_date_raw = date_posted_raw
+    if posting_date_raw.lower().startswith("posted "):
+        posting_date_raw = ""
 
     def _strip_time(s: str) -> str:
         if not s:

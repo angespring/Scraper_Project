@@ -26,6 +26,9 @@ python po_job_scraper.py --test-url "https://app.welcometothejungle.com/jobs/Pyb
 
 
 
+#Capture logs to a file so you can scan failures fast in the morning:
+PW_FAST_MODE=1 python po_job_scraper.py | tee run_$(date +%Y%m%d_%H%M%S).log
+
 
 
 python -m pip install gspread google-auth

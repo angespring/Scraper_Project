@@ -316,9 +316,7 @@ def to_keep_sheet_row(keep_row, applied="", reason=""):
         "Career Board": _normalize_sheet_value(keep_row.get("Career Board", "")),
         "Location": _normalize_sheet_value(keep_row.get("Location", "")),
         "Posted": _normalize_sheet_value(keep_row.get("Posted") or period),
-        "Posting Date": _normalize_sheet_value(
-            keep_row.get("Posting Date") or keep_row.get("Posted") or period
-        ),
+        "Posting Date": _normalize_sheet_value(keep_row.get("Posting Date", "")),
         "Valid Through": _normalize_sheet_value(keep_row.get("Valid Through", "")),
         "Job URL": _normalize_sheet_value(keep_row.get("Job URL", "")),
         "Apply URL": _normalize_sheet_value(keep_row.get("Apply URL", "")),

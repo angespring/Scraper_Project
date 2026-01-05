@@ -6,18 +6,24 @@ import textwrap
 import builtins
 import logging
 import traceback
+import csv
+import json
+import urllib.parse as up
 
 
 import json
 import re
 
 
-
-
+from contextlib import contextmanager
+from urllib import robotparser
+from playwright.sync_api import sync_playwright
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse, urljoin, urlsplit, parse_qs, urlunparse, parse_qsl, urlencode
 from pathlib import Path
 from datetime import datetime, timedelta
+from dateutil import parser as dateparser
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
 from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode
@@ -65,7 +71,7 @@ import threading
 # --- Unified CLI args & run configuration (single parse, early) ---
 import argparse
 
-DEBUG_LOCATION = True
+DEBUG_LOCATION = False
 
 
 
@@ -166,17 +172,19 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         pass
     # Avoid double timestamps if msg is already prefixed (e.g., upstream logger)
     #already_ts = bool(re.match(r"\[\d{4}-\d{2}-\d{2}", str(msg).lstrip()))
-    ts = _dt.datetime.now().strftime("[%Y-%m-%d %H:%M:%S]")
-    head = f"{ts} {section:<22}"  # 22 keeps your label column tidy
+    head = f"{section:<22}"  # log_print already adds the timestamp
+    
+    TS_PREFIX_WIDTH = 22  # "[YYYY-MM-DD HH:MM:SS] " (added by log_print)
+    sub_indent = " " * (TS_PREFIX_WIDTH + len(head))
+
     width = width or shutil.get_terminal_size(fallback=(120, 22)).columns
     body = textwrap.fill(
         str(msg),
         width=width,
-        subsequent_indent=" " * len(head),
+        subsequent_indent=sub_indent,
         break_long_words=False,
         break_on_hyphens=False,
     )
-
     line = f"{head}{body}"
 
     # Color the entire line when ANSI is OK, using the level token inside section.
@@ -186,7 +194,7 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         color = LEVEL_COLOR.get(label, RESET)
         line = f"{color}{line}{RESET}"
 
-    builtins.print(line)
+    log_print(line)
     try:
         progress_refresh_after_log()
     except NameError:
@@ -702,7 +710,8 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                     backup(f"{DOT3}Pruned by count {old.name}")
                 except OSError as e:
                     progress_clear_if_needed()
-                    builtins.print(f"{_bkts()} [⚠️ WARN               ].Could not remove {old.name}: {e}")
+                    log_line("WARN", f".Could not remove {old.name}: {e}")
+
 
 # --- HOW TO USE (uncomment exactly one) ---
 backup_all_py_to_archive()                  # 1) keep ALL backups
@@ -715,7 +724,6 @@ backup_all_py_to_archive()                  # 1) keep ALL backups
 
 # --- Auto-install dependencies if missing (venv-friendly) ---
 import sys, subprocess, os
-from datetime import datetime
 import builtins, datetime as _dt
 _builtin_print = builtins.print
 
@@ -802,9 +810,13 @@ ALLOW_PM = True  # set True if you want Product Manager roles too
 # Sites that are *boards/aggregators* (do NOT use their site_name as company)
 BOARD_HOSTS = {
     "remotive.com", "weworkremotely.com", "nodesk.co", "workingnomads.com",
-    "remoteok.com", "builtin.com", "simplyhired.com", 
+    "remoteok.com", "builtin.com", "builtinvancouver.com", "simplyhired.com", 
     # "themuse.com",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
-    "ycombinator.com", "remote.co"
+    "ycombinator.com", "remote.co", "angel.co", "wellfound.com", "stackoverflow.com",
+    "jobspresso.co", "powertofly.com", "landing.jobs", "careerjet.com",
+    "jobboard.io", "authenticjobs.com", "jobbatical.com", "workew.com",
+    "techfetch.com", "dice.com", "jobserve.com", "jobs.github.com",
+    "edtech.com", "edtechjobs.com", "hired.com", "talent.com", "joblift.com",
 }
 
 # Common ATS/company career hosts (OK to use site_name as company)
@@ -892,15 +904,69 @@ def parse_date_relaxed(s):
     except Exception:
         return s
 
+import re
 
-from urllib import robotparser
-from playwright.sync_api import sync_playwright
+UTC_ISO_RX = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+)
 
-import csv
-from pathlib import Path
-# --- Workday (generic) --------------------------------------------------------
-import json
-import urllib.parse as up
+DATE_ONLY_RX = re.compile(r"\d{4}-\d{2}-\d{2}$")
+
+
+# Date normalization rule:
+# Canonical "Posting Date" and "Valid Through" are computed using the UTC day encoded
+# in ISO timestamps. This avoids timezone drift across machines and locales.
+
+def utc_date_from_iso(value: str) -> str | None:
+    if not value:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+
+    # Already YYYY-MM-DD
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-" and "T" not in s:
+        return s[:10]
+
+    s2 = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s2)
+    except Exception:
+        try:
+            d = parse_date_relaxed(s)
+            return d if d else None
+        except Exception:
+            return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return dt.astimezone(timezone.utc).date().isoformat()
+
+
+def normalize_posted_label(value: str) -> str:
+    """
+    Normalizes 'Posted' text for consistency across boards.
+    Examples:
+      'Job Posted 16 Days' -> 'Posted 16 Days'
+      'Job posted 6 days ago |' -> 'Posted 6 days ago'
+      'Posted 12 days ago |' -> 'Posted 12 days ago'
+    """
+    s = (value or "").strip()
+    if not s:
+        return ""
+
+    # Remove trailing separators Dice style
+    s = s.replace("|", " ").strip()
+
+    # Remove leading 'Job ' only when it is part of 'Job Posted ...'
+    s = re.sub(r"(?i)^\s*job\s+posted\s+", "Posted ", s).strip()
+
+    # Collapse whitespace
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 
 def progress(i: int, total: int, kept: int, skipped: int) -> None:
     """
@@ -966,43 +1032,92 @@ def company_from_jsonld(soup) -> str:
 
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
-    Convert a Workday listing URL into real job detail links by querying the cxs JSON API.
+    Convert a Workday listing URL into job detail links by querying the cxs JSON API.
     Handles both myworkdaysite and myworkdayjobs patterns.
     """
+    # If this is already a detail page, just return it
+    if "/job/" in (p.path or ""):
+        return [listing_url]
+
+
     p = up.urlparse(listing_url)
-    host = p.netloc
-    parts = [s for s in p.path.split("/") if s]
+    host = (p.netloc or "").lower()
+    parts = [s for s in (p.path or "").split("/") if s]
     qs = up.parse_qs(p.query)
     search = " ".join(qs.get("q", [])).strip() or ""
-    search_encoded = up.quote(search) if search else ""
 
-    # tenant rules:
-    # - /recruiting/<tenant>/<site> → take <tenant> from the path
-    # - <tenant>.wdX.myworkdayjobs.com/<site> → take subdomain as tenant
-    # - wdX.myworkdaysite.com/recruiting/<tenant>/<site> → still take from path
+    # Normalize locale prefix in path: /en-us/recruiting/... -> /recruiting/...
+    if parts and re.fullmatch(r"[a-z]{2}-[a-z]{2}", parts[0], re.I):
+        parts = parts[1:]
+
+
+    def _html_fallback_links(listing_url: str) -> list[str]:
+        html = get_html(listing_url) or ""
+        if not html:
+            return []
+        links = find_job_links(html, listing_url) or []
+        # keep only likely Workday detail links
+        out = []
+        for lk in links:
+            if "/job/" in lk or "/details/" in lk:
+                out.append(lk)
+
+        # de-dupe preserve order
+        seen, deduped = set(), []
+        for u in out:
+            if u not in seen:
+                seen.add(u)
+                deduped.append(u)
+        return deduped
+
+    # If host is wdN.myworkdayjobs.com, try to discover the real tenant host
+    if re.fullmatch(r"wd\d+\.myworkdayjobs\.com", host, re.I):
+        try:
+            html = get_html(listing_url) or ""
+            if not html:
+                log_line("WARN", f".[WORKDAY] Could not fetch listing HTML for tenant sniff (url={listing_url})")
+            else:
+                # Sniff a tenant host from HTML (embedded URLs)
+                m = re.search(r'https?://([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com', html, re.I)
+                if m:
+                    tenant_guess, wd_num = m.group(1), m.group(2)
+                    host = f"{tenant_guess}.{wd_num}.myworkdayjobs.com"
+                    # optional: log_line("DEBUG", f".[WORKDAY] Sniffed tenant host: {host}")
+        except Exception as e:
+            log_line("WARN", f".[WORKDAY] tenant sniff failed (error={e}, url={listing_url})")
+
+    # Infer tenant and site
     tenant = None
     site = None
+
     if parts and parts[0] == "recruiting" and len(parts) >= 3:
         tenant = parts[1]
         site = parts[2]
     else:
         sub = host.split(".")[0]
-        # sub like "wd5" is not a tenant; only use subdomain when it’s not wdN
         if not re.fullmatch(r"wd\d+", sub, re.I):
             tenant = sub
-        # fallback for rare /<tenant>/<site> on myworkdayjobs.com
         if not tenant and len(parts) >= 2:
             tenant = parts[0]
         if len(parts) >= 1:
             site = parts[0]
 
     if not tenant:
-        return []
+        log_line(
+            "WARN",
+            f".[WORKDAY] Could not infer tenant (host={host}, parts={parts}, url={listing_url}). "
+            "Falling back to HTML link extraction (page 1 only)."
+        )
+        return _html_fallback_links(listing_url)
 
     if not site:
         site = tenant
 
-    jobs = _wd_jobs(host, tenant, site, search, limit=50, max_results=max_results)
+    api_host = _workday_api_host(host)
+    jobs = _wd_jobs(api_host, tenant, site, search, limit=50, max_results=max_results)
+
+    if not jobs:
+        return _html_fallback_links(listing_url)
 
     out: list[str] = []
     for j in jobs:
@@ -1011,7 +1126,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
             continue
         out.append(up.urljoin(f"https://{host}/", ext))
 
-    # de-dupe while preserving order
+    # De-dupe while preserving order
     seen, deduped = set(), []
     for u in out:
         if u not in seen:
@@ -1019,12 +1134,31 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
             deduped.append(u)
     return deduped
 
+def _workday_api_host(ui_host: str) -> str:
+    """
+    Convert a Workday UI host to the likely API host.
+    Examples:
+      velera.wd5.myworkdayjobs.com -> wd5.myworkday.com
+      wd5.myworkdaysite.com        -> wd5.myworkday.com
+      wd5.myworkday.com            -> wd5.myworkday.com
+    """
+    h = (ui_host or "").lower()
+
+    m = re.search(r"(wd\d+)\.", h)
+    if m:
+        return f"{m.group(1)}.myworkday.com"
+
+    # last resort, keep original
+    return ui_host
+
 
 def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, max_results: int = 250) -> list[dict]:
     """
     Query Workday cxs jobs endpoint and return raw job dicts.
     Correct path is: /wday/cxs/{tenant}/jobs
     """
+    #log_line("DEBUG", f".[WORKDAY] _wd_jobs entered (tenant={tenant}, site={site}, host={host})")
+
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     out, offset = [], 0
     headers = {
@@ -1032,37 +1166,51 @@ def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, ma
         "Content-Type": "application/json;charset=UTF-8",
         "User-Agent": "Mozilla/5.0"
     }
+
     while True:
         remaining = max_results - len(out)
         if remaining <= 0:
             break
+
         current_limit = min(limit, remaining)
         payload = {"limit": current_limit, "offset": offset, "searchText": search}
+
         r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
-        if r.status_code != 200:
-            break
-        data = r.json() or {}
+
+        data = _safe_resp_json(r, context=f".[WORKDAY] cxs jobs (api={url})")
+        if not data:
+            # returning [] triggers your HTML fallback upstream
+            return []
+
         total_hint = (
             data.get("total")
             or data.get("totalCount")
             or data.get("totalHits")
             or data.get("totalRecords")
         )
-        items = data.get("jobPostings", []) or []
+
+        items = data.get("jobPostings") or data.get("jobs") or data.get("data") or []
+        if isinstance(items, dict):
+            items = []
+        if not isinstance(items, list):
+            items = []
         if not items:
             break
+
         out.extend(items)
+
         if len(out) >= max_results:
             break
         if total_hint is not None and len(out) >= int(total_hint):
             break
         if total_hint is None and len(items) < current_limit:
             break
+
         offset += len(items)
+
     return out
 
 
-#from urllib.parse import urlparse as _urlparse, parse_qs, urljoin
 
 def _set_qp(url: str, **updates) -> str:
     p = up.urlparse(url)
@@ -1127,6 +1275,11 @@ def parse_remotive(soup, job_url):
     if m and not out.get("posting_date"):
         out["posting_date"] = m.group(1).split("T", 1)[0]
 
+    if out.get("posting_date") and not out.get("Posting Date"):
+        out["Posting Date"] = out["posting_date"]
+    if out.get("valid_through") and not out.get("Valid Through"):
+        out["Valid Through"] = out["valid_through"]
+
     return out
 
 def collect_dice_links(listing_url: str, max_pages: int = 25) -> list[str]:
@@ -1167,31 +1320,66 @@ def collect_dice_links(listing_url: str, max_pages: int = 25) -> list[str]:
     return out
 
 
+
 def parse_dice(soup, job_url):
     out = {}
+
+    # 1) JSON-LD (keep this)
     for obj in _extract_json_ld(soup):
-        # Dice typically uses JobPosting
         if obj.get("@type") == "JobPosting":
+            # Keep raw ISO strings (do not split here)
             dt = obj.get("datePosted") or obj.get("datePublished")
             if dt:
-                out["posting_date"] = dt.split("T", 1)[0]
+                out["posting_date"] = str(dt).strip()
+
             vt = obj.get("validThrough")
             if vt:
-                out["valid_through"] = vt.split("T", 1)[0]
+                out["valid_through"] = str(vt).strip()
+
+            # NEW CODE GOES RIGHT HERE (you did this correctly)
+            if not out.get("valid_through"):
+                dd = obj.get("dateDeactivated")
+                if dd:
+                    out["valid_through"] = str(dd).strip()
+
             posted_label = obj.get("publishedLabel")
             if posted_label:
                 out["Posted"] = posted_label
-            # company info
-            org = obj.get("hiringOrganization") or obj.get("hiringOrganization", {})
-            if isinstance(org, dict):
-                if org.get("name"):
-                    out["Company"] = org.get("name")
-            return out
 
-    # fallback: meta tags
-    meta_pub = soup.find("meta", {"name": "date"})
-    if meta_pub and meta_pub.get("content"):
-        out["posting_date"] = meta_pub["content"].split("T", 1)[0]
+            org = obj.get("hiringOrganization") or {}
+            if isinstance(org, dict) and org.get("name"):
+                out["Company"] = org["name"]
+
+            break
+
+    # 2) Dice-specific fallback: <dhi-time-ago posted-date="...">
+    if not out.get("posting_date"):
+        tag = soup.select_one("dhi-time-ago[posted-date]")
+        if tag:
+            raw = (tag.get("posted-date") or "").strip()
+            if raw:
+                out["posting_date"] = raw   # keep raw, do not split
+
+    # 3) Dice pages often also include JSON with "datePosted"
+    if not out.get("posting_date"):
+        html = soup.decode() if hasattr(soup, "decode") else str(soup)
+        m = re.search(r'"datePosted"\s*:\s*"([^"]+)"', html)
+        if m:
+            out["posting_date"] = m.group(1).strip()
+
+    # 4) meta fallback
+    if not out.get("posting_date"):
+        meta_pub = soup.find("meta", {"name": "date"})
+        if meta_pub and meta_pub.get("content"):
+            out["posting_date"] = meta_pub["content"].split("T", 1)[0]
+
+    # 5) Dice-specific: dateDeactivated → Valid Through (HTML regex fallback)
+    if not out.get("valid_through"):
+        html = soup.decode() if hasattr(soup, "decode") else str(soup)
+        m = re.search(r'"dateDeactivated"\s*:\s*"([^"]+)"', html)
+        if m:
+            out["valid_through"] = m.group(1).strip()
+
     return out
 
 
@@ -1296,7 +1484,7 @@ def collect_hubspot_links(listing_url: str, max_pages: int = 25) -> list[str]:
 
         html = get_html(url)
         if not html:
-            log_print("[WARN", f"]{DOT3}{DOTW} Warning: Failed to GET listing page: {listing_url}")
+            #log_print("[WARN", f"]{DOT3}{DOTW} Warning: Failed to GET listing page: {listing_url}")
             progress_clear_if_needed()
             break
 
@@ -1418,9 +1606,6 @@ from datetime import datetime
 from html import unescape
 
 
-import re
-from html import unescape
-
 
 def enrich_dice_fields(details: dict, raw_html: str) -> dict:
     """
@@ -1430,7 +1615,23 @@ def enrich_dice_fields(details: dict, raw_html: str) -> dict:
     - `raw_html` should be the full HTML (what you see in view-source).
     """
 
-    html = raw_html
+    html = raw_html or ""
+    soup = BeautifulSoup(html, "html.parser")
+
+    try:
+        board_data = parse_dice(soup, details.get("Job URL") or details.get("Apply URL") or "") or {}
+
+        # Safer merge: do not overwrite canonical fields
+        for k, v in board_data.items():
+            if not v:
+                continue
+            if k in ("Posting Date", "Valid Through"):
+                continue
+            details.setdefault(k, v)
+
+    except Exception as e:
+        log_line("WARN", f"parse_dice failed in enrich_dice_fields: {e}")
+
 
     # 1. Title / Company / Location from og:title
     #    Example:
@@ -1822,7 +2023,7 @@ def collect_simplyhired_links(listing_url: str) -> list[str]:
         set_source_tag(listing_url)
         html = get_html(page_url)
         if not html:
-            log_print("[WARN", f" ]{DOT3}{DOTW} Warning: Failed to GET listing page: {listing_url}")
+            #log_print("[WARN", f" ]{DOT3}{DOTW} Warning: Failed to GET listing page: {listing_url}")
             break
 
         soup = BeautifulSoup(html, "html.parser")
@@ -1933,21 +2134,21 @@ def _debug_biv(details: dict, host: str, label: str) -> None:
         return
 
 
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Location              : {details.get('Location')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Location              : {details.get('Location')}")
 
     # ✅ ADD THIS
     biv_locs = details.get("BIV Tooltip Locations")
     biv_count = details.get("BIV Tooltip Location Count")
     if biv_count is None and isinstance(biv_locs, list):
         biv_count = len(biv_locs)
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}BIV Location Count    : {biv_count}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}BIV Location Count    : {biv_count}")
 
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada                : {details.get('Canada Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}US                    : {details.get('US Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                    : {details.get('WA Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote                : {details.get('Remote Rule')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips                 : {details.get('Location Chips')}")
-    log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions               : {details.get('Applicant Regions')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Canada                : {details.get('Canada Rule')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}US                    : {details.get('US Rule')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}WA                    : {details.get('WA Rule')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Remote                : {details.get('Remote Rule')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Chips                 : {details.get('Location Chips')}")
+    #log_print(f"{_box('BIV DEBUG ')}{DOT6}Regions               : {details.get('Applicant Regions')}")
     #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary             : {details.get('Salary Range')}")
     #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Text        : {details.get('Salary Text')}")
     #log_print(f"{_box('BIV DEBUG ')}{DOT6}💲 Salary Range       : {details.get('Salary Range')}")
@@ -1959,19 +2160,19 @@ def _debug_biv_loc(stage: str, details: dict, extra: dict | None = None) -> None
     if not DEBUG_LOCATION:
         return
     extra = extra or {}
-    log_line("BIV DEBUG", f"{DOTL}LOC STAGE          : {stage}")
-    log_line("BIV DEBUG", f"{DOTL}..Location         : {details.get('Location')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Location Raw     : {details.get('Location Raw')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Remote Rule      : {details.get('Remote Rule')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Location Chips   : {details.get('Location Chips')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Locations Text   : {details.get('Locations Text')!r}")
-    log_line("BIV DEBUG", f"{DOTL}..Regions          : {details.get('Regions')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}LOC STAGE          : {stage}")
+    #log_line("BIV DEBUG", f"{DOTL}..Location         : {details.get('Location')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}..Location Raw     : {details.get('Location Raw')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}..Remote Rule      : {details.get('Remote Rule')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}..Location Chips   : {details.get('Location Chips')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}..Locations Text   : {details.get('Locations Text')!r}")
+    #log_line("BIV DEBUG", f"{DOTL}..Regions          : {details.get('Regions')!r}")
 
     for k, v in extra.items():
         s = str(v)
         if len(s) > 220:
             s = s[:220] + "...(trunc)"
-        log_line("BIV DEBUG", f"{DOTL}..{k:<16}: {s}")
+        #log_line("BIV DEBUG", f"{DOTL}..{k:<16}: {s}")
 
 
 
@@ -2461,10 +2662,29 @@ def extract_job_details(html: str, job_url: str) -> dict:
             _debug_biv_loc("after setting Remote Rule", details)
 
 
+    board_data = {}
     if "dice.com" in host and "/job-detail/" in job_url:
         details["Career Board"] = "Dice"
         details.setdefault("Apply URL", job_url)
+
         details = enrich_dice_fields(details, html)
+
+    if "dice.com" in host and "/job-detail/" in job_url:
+        details["Career Board"] = "Dice"
+        details.setdefault("Apply URL", job_url)
+
+        #Enrich from Dice JSON blobs, if present
+        details = enrich_dice_fields(details, html)
+
+
+        # Bridge Dice internal keys into canonical sheet fields using UTC date rules.
+        if details.get("posting_date") and not details.get("Posting Date"):
+            raw = details["posting_date"]
+            details["Posting Date"] = utc_date_from_iso(raw) or parse_date_relaxed(raw) or ""
+
+        if details.get("valid_through") and not details.get("Valid Through"):
+            raw = details["valid_through"]
+            details["Valid Through"] = utc_date_from_iso(raw) or parse_date_relaxed(raw) or ""
         return details
 
 
@@ -2742,7 +2962,10 @@ def extract_job_details(html: str, job_url: str) -> dict:
         "hubspot.com": parse_hubspot_detail,
         "www.hubspot.com": parse_hubspot_detail,
     }
+
+    board_data = {}
     parser = board_extractors.get(host)
+
     if parser:
         try:
             board_data = parser(soup, job_url) or {}
@@ -2750,15 +2973,66 @@ def extract_job_details(html: str, job_url: str) -> dict:
         except Exception as e:
             log_line("WARN", f"board parser failed for {host}: {e}")
 
+        # Generic JSON-LD + HTML date extraction (covers boards like nodesk.co)
+    # Only fills when missing, so it will not disrupt board-specific parsers.
+    try:
+        schema_bits = parse_jobposting_ldjson(str(soup))
+        if schema_bits:
+            if schema_bits.get("posting_date") and not details.get("posting_date"):
+                details["posting_date"] = schema_bits["posting_date"]
+            if schema_bits.get("valid_through") and not details.get("valid_through"):
+                details["valid_through"] = schema_bits["valid_through"]
+            if schema_bits.get("posted") and not details.get("Posted"):
+                details["Posted"] = schema_bits["posted"]
+
+        # Extra safety net for weirdly embedded / escaped JSON-LD
+        html_dates = _extract_dates_from_html(str(soup))
+        if html_dates:
+            if html_dates.get("posting_date") and not details.get("posting_date"):
+                details["posting_date"] = html_dates["posting_date"]
+            if html_dates.get("valid_through") and not details.get("valid_through"):
+                details["valid_through"] = html_dates["valid_through"]
+
+    except Exception as e:
+        log_line("DEBUG", f"[DATES] generic extraction failed for {host}: {e}")
+
+
+    # Bridge board-specific date keys into canonical sheet fields (UTC-first)
+    raw_posting = (board_data.get("posting_date") if isinstance(board_data, dict) else None) or details.get("posting_date")
+    raw_valid   = (board_data.get("valid_through") if isinstance(board_data, dict) else None) or details.get("valid_through")
+
+    if raw_posting and not details.get("Posting Date"):
+        bridged = (
+            utc_date_from_iso(raw_posting)
+            or parse_date_relaxed(raw_posting)
+            or str(raw_posting).strip()
+        )
+        details["Posting Date"] = bridged
+        #log_line("DEBUG", f"[DATES] {host} bridged posting_date -> Posting Date: {raw_posting} -> {bridged} ({job_url})")
+
+    if raw_valid and not details.get("Valid Through"):
+        bridged = (
+            utc_date_from_iso(raw_valid)
+            or parse_date_relaxed(raw_valid)
+            or str(raw_valid).strip()
+        )
+        details["Valid Through"] = bridged
+        #log_line("DEBUG", f"[DATES] {host} bridged valid_through -> Valid Through: {raw_valid} -> {bridged} ({job_url})")
+
     # Fallback relative Posted text
     if not details.get("Posted"):
         rel_span = soup.find("span", string=re.compile(r"\d+\s*(day|week|month)s?\s*ago", re.I))
         if rel_span:
-            details["Posted"] = rel_span.get_text(strip=True)
-    # Do not backfill Posting Date from Posted.
-    # If Posting Date cannot be scraped, it must remain blank.
-    if not details.get("Posting Date"):
-        details["Posting Date"] = ""
+            details["Posted"] = rel_span.get_text(strip=True).replace("|", "").strip()
+
+    # Normalize Posted label across boards (remove leading "Job " in "Job Posted ...")
+    if details.get("Posted"):
+        details["Posted"] = normalize_posted_label(details["Posted"])
+
+    # Ensure keys exist as strings for Sheets
+    details.setdefault("Posting Date", "")
+    details.setdefault("Valid Through", "")
+
 
     # Company basic detection
     company = ""
@@ -3335,6 +3609,16 @@ def extract_job_details(html: str, job_url: str) -> dict:
         except Exception:
             # Best effort only, do not break the scraper if Built In changes their JSON
             pass
+    
+    # If we have a Posted label but no Posting Date, derive it
+    if not (details.get("Posting Date") or "").strip():
+        posted = (details.get("Posted") or details.get("posted") or "").strip()
+        iso = _posted_label_to_iso_date(posted)
+        if iso:
+            details["posting_date"] = details.get("posting_date") or iso
+            details["Posting Date"] = iso
+            #log_line("DEBUG", f"[DATES] bridged Posted -> Posting Date: {posted!r} -> {iso} ({job_url})")
+
 
     # Final Built In Vancouver lock, after all other location sources
     if "builtinvancouver.org" in host:
@@ -3523,13 +3807,13 @@ def _builtin_extract_location_from_card(card) -> str | None:
     if DEBUG_LOCATION:
         raw = str(card).replace("\n", " ")
         raw = re.sub(r"\s+", " ", raw).strip()
-        log_line("BIV DEBUG", f"{DOTL}..card_html_len: {len(raw)}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_location_word: {('location' in raw.lower())}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_data_bs: {('data-bs' in raw.lower())}")
-        log_line("BIV DEBUG", f"{DOTL}..card_has_svg: {('<svg' in raw.lower())}")
+        #log_line("BIV DEBUG", f"{DOTL}..card_html_len: {len(raw)}")
+        #log_line("BIV DEBUG", f"{DOTL}..card_has_location_word: {('location' in raw.lower())}")
+        #log_line("BIV DEBUG", f"{DOTL}..card_has_data_bs: {('data-bs' in raw.lower())}")
+        #log_line("BIV DEBUG", f"{DOTL}..card_has_svg: {('<svg' in raw.lower())}")
         if len(raw) > 600:
             raw = raw[:600] + "...(trunc)"
-        log_line("BIV DEBUG", f"{DOTL}..card_html_head: {raw}")
+        #log_line("BIV DEBUG", f"{DOTL}..card_html_head: {raw}")
 
 
     # 1) Best case: exact phrase on Built In Vancouver page
@@ -3606,11 +3890,11 @@ def _builtin_extract_location_from_card(card) -> str | None:
         or card.find(attrs={"data-bs-original-title": True})
     )
 
-    if DEBUG_LOCATION:
-        has_any = bool(card.find(attrs={"data-bs-content": True}) or card.find(attrs={"data-bs-title": True}) or card.find(attrs={"data-bs-original-title": True}))
-        log_line("BIV DEBUG", f"{DOTL}..loc_icon_found        : {bool(icon)}")
-        log_line("BIV DEBUG", f"{DOTL}..has_any_popover_attrs : {has_any}")
-        log_line("BIV DEBUG", f"{DOTL}..popover_node_found    : {bool(pop)}")
+    #if DEBUG_LOCATION:
+        #has_any = bool(card.find(attrs={"data-bs-content": True}) or card.find(attrs={"data-bs-title": True}) or card.find(attrs={"data-bs-original-title": True}))
+        #log_line("BIV DEBUG", f"{DOTL}..loc_icon_found        : {bool(icon)}")
+        #log_line("BIV DEBUG", f"{DOTL}..has_any_popover_attrs : {has_any}")
+        #log_line("BIV DEBUG", f"{DOTL}..popover_node_found    : {bool(pop)}")
 
     if not pop:
         return None
@@ -4611,8 +4895,27 @@ BLOCKED_URL_PREFIXES = [
     "https://nodesk.co/remote-jobs/product-manager",
     "https://nodesk.co/remote-jobs/data/",
     "https://nodesk.co/remote-jobs/ai/",
+    "https://weworkremotely.com/remote-jobs/new",
     "https://weworkremotely.com/remote-jobs/new?utm_content=post-job-cta&utm_source=wwr-accounts-nav-mobile",
     "https://dhigroupinc.com/careers/default.aspx",
+    "https://main.hercjobs.org/jobs/saved",
+    "https://main.hercjobs.org/jobs/dualsearch",
+    "https://edtechjobs.io/jobs/product-management",
+    "https://edtechjobs.io/jobs/contract",
+    "https://edtechjobs.io/jobs/higher-ed",
+    "https://edtechjobs.io/jobs/leadership",
+    "https://edtechjobs.io/jobs/technical-leadership",
+    "https://edtechjobs.io/jobs/remote-position"
+    "https://edtechjobs.io/jobs/ai-driven-products",
+    "https://edtechjobs.io/jobs/educational-innovation"
+    "https://edtechjobs.io/jobs/technology-leadership",
+    "https://edtechjobs.io/jobs/digital-transformation",
+    "https://edtechjobs.io/jobs/artificial-intelligence",
+    "https://edtechjobs.io/jobs/design-leadership",
+    "https://edtechjobs.io/jobs/early-childhood-education",
+    "https://edtechjobs.io/jobs/saas-leadership",
+    "https://edtechjobs.io/jobs/stakeholder-management",
+
 ]
 
 STARTING_PAGES = [
@@ -4621,6 +4924,8 @@ STARTING_PAGES = [
     #"https://www.themuse.com/jobs?categories=product&location=remote",
 
 
+
+    "https://main.hercjobs.org/jobs?keywords=Business+Analyst&place=canada%2Cnationwide",
 
     # Product Manager / Product Owner
     "https://www.themuse.com/search/location/remote-flexible/keyword/product+manager",
@@ -5027,8 +5332,7 @@ def fetch_workday_json_jobs(api_base, payload):
     """
     Wrapper around the Workday CXS endpoint.
 
-    If the endpoint returns 4xx or 5xx, log and return an empty dict
-    so the caller can fall back to the HTML scraper.
+    Returns {} on any failure or non-JSON response so the caller can fall back to HTML.
     """
     try:
         resp = requests.post(
@@ -5037,26 +5341,57 @@ def fetch_workday_json_jobs(api_base, payload):
             data=json.dumps(payload),
             timeout=30,
         )
-        # On 404/403/500 etc this will raise
-        resp.raise_for_status()
-        return resp.json() or {}
+    except Exception as e:
+        log_line("WARN", f".[WORKDAY] Request failed (api={api_base}, error={type(e).__name__}: {e})")
+        return {}
 
-    except requests.HTTPError as e:
-        warn(
-            ".[WORKDAY] Could not use the Workday JSON jobs API "
-            f"({type(e).__name__}: {e}). "
-            "Falling back to the normal page-1 HTML scrape, so only the first ~20 jobs "
-            "for this search will be visible. "
-            "If you care about older postings past page 1, re-run this search manually "
-            "in the browser or revisit the Workday pagination logic. "
-            f"(status={getattr(e.response, 'status_code', 'n/a')}, api={api_base})"
+    return _safe_resp_json(resp, context=f".[WORKDAY] api json (api={api_base})") or {}
+
+    
+
+
+def _safe_resp_json(resp, context: str = "") -> dict:
+    """
+    Safely parse JSON from a requests response.
+    Returns {} if response is not JSON or cannot be parsed.
+    """
+    if resp is None:
+        log_line("WARN", f"{context} No response object; returning empty JSON")
+        return {}
+
+    # Pull body once so logs and heuristics are consistent
+    body = (getattr(resp, "text", "") or "")
+    preview = body.strip().replace("\n", " ")[:200]
+
+    try:
+        resp.raise_for_status()
+    except Exception as e:
+        log_line(
+            "WARN",
+            f"{context} HTTP failed (status={getattr(resp,'status_code','n/a')}, "
+            f"url={getattr(resp,'url','')}, error={e}, preview='{preview}')"
         )
         return {}
+
+    ctype = (resp.headers.get("content-type") or "").lower()
+    looks_like_json = body.lstrip().startswith(("{", "["))
+
+    # Prefer header, but allow content sniffing fallback
+    if ("json" not in ctype) and (not looks_like_json):
+        log_line(
+            "WARN",
+            f"{context} Non-JSON response (status={resp.status_code}, url={getattr(resp,'url','')}, "
+            f"content-type='{ctype}', preview='{preview}')"
+        )
+        return {}
+
+    try:
+        return resp.json() or {}
     except Exception as e:
-        warn(
-            ".[WORKDAY] Unexpected error calling the Workday JSON jobs API "
-            f"({type(e).__name__}: {e}). "
-            "Using the HTML fallback, which only sees the first page of results."
+        log_line(
+            "WARN",
+            f"{context} JSON parse failed (status={resp.status_code}, url={getattr(resp,'url','')}, "
+            f"error={e}, preview='{preview}')"
         )
         return {}
 
@@ -5080,8 +5415,10 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
         tenant, site = parts[0], parts[1]
 
     if not (tenant and site):
-        warn(f".[WORKDAY] Could not infer tenant/site from {listing_url}; skipping JSON API.")
+        log_line("WARN", f".[WORKDAY] Could not infer tenant/site from {listing_url}; skipping JSON API.")
         return []
+
+
 
     api_base = f"https://{api_host}/wday/cxs/{tenant}/{site}/jobs"
 
@@ -5444,7 +5781,7 @@ def career_board_name(url: str) -> str:
     # Friendly names for common hosts
     KNOWN = {
         "nodesk.co": "NoDesk",
-        "careerb​uilder.com": "CareerBuilder",
+        "careerbuilder.com": "CareerBuilder",
         "weworkremotely.com": "We Work Remotely",
         "remoteok.com": "Remote OK",
         "remotive.com": "Remotive",
@@ -6627,18 +6964,18 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
 
                 d["Salary Est. (Low-High)"] = d.get("Salary Est. (Low-High)") or _fmt_est(cur, lo, hi)
 
-                try:
-                    log_line("BIV DEBUG", f"{DOT6}✅ Promoted range: {d['Salary Range']}")
-                except Exception:
-                    pass
+                #try:
+                    #log_line("BIV DEBUG", f"{DOT6}✅ Promoted range: {d['Salary Range']}")
+                #except Exception:
+                    #pass
 
                 return d
 
-            else:
-                try:
-                    log_line("BIV DEBUG", f"⚠️ Range matched but context gate failed: {window!r}")
-                except Exception:
-                    pass
+            #else:
+                #try:
+                    #log_line("BIV DEBUG", f"⚠️ Range matched but context gate failed: {window!r}")
+                #except Exception:
+                    #pass
 
         else:
             # No range matched at all
@@ -7310,7 +7647,7 @@ def expand_career_sources():
         _bk_log_wrap("[CAREERS", f" ]{DOT3}Probing {url}")
         html = get_html(url)
         if not html:
-            log_print("[WARN", f" ]{DOT3}{DOTW}Warning: Failed to GET listing page: {url}")
+            #log_print("[WARN", f" ]{DOT3}{DOTW}Warning: Failed to GET listing page: {url}")
 
             progress_clear_if_needed()
             _bk_log_wrap("[WARN", f" ]{DOT3}{DOTW}Could not fetch: {url}")
@@ -7400,6 +7737,69 @@ def _coerce_list(x): return x if isinstance(x, list) else ([] if x is None else 
 def _short(s, width=100):
     s = " ".join((s or "").split())
     return (s[: width - 1] + "…") if len(s) > width else s
+
+_POSTED_REL_RX = re.compile(
+    r"^\s*(?:about\s+|approximately\s+)?(\d+)\s*(minute|minutes|hour|hours|day|days|week|weeks|month|months|year|years)\s*(?:ago)?\s*$",
+    re.I,
+)
+
+def _posted_label_to_iso_date(posted: str, now: datetime | None = None) -> str | None:
+    """
+    Convert labels like:
+      - "Posted 5 days ago"
+      - "5 days ago"
+      - "Today" / "Posted Today"
+      - "Yesterday" / "Posted Yesterday"
+      - "Jan 3, 2026"
+    into "YYYY-MM-DD".
+    """
+    if not posted:
+        return None
+
+    s = " ".join(str(posted).strip().split())
+    if not s:
+        return None
+
+    # Normalize common prefixes
+    low = s.lower()
+    if low.startswith("posted "):
+        s = s[7:].strip()
+        low = s.lower()
+
+    now = now or datetime.now()
+
+    if low in ("today", "just now"):
+        return now.strftime("%Y-%m-%d")
+
+    if low == "yesterday":
+        return (now - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    m = _POSTED_REL_RX.match(low)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+
+        if "minute" in unit or "hour" in unit:
+            return now.strftime("%Y-%m-%d")
+        if "day" in unit:
+            return (now - timedelta(days=n)).strftime("%Y-%m-%d")
+        if "week" in unit:
+            return (now - timedelta(days=7 * n)).strftime("%Y-%m-%d")
+        if "month" in unit:
+            return (now - timedelta(days=30 * n)).strftime("%Y-%m-%d")
+        if "year" in unit:
+            return (now - timedelta(days=365 * n)).strftime("%Y-%m-%d")
+
+    # Absolute dates fallback
+    try:
+        dt = dateparser.parse(s, fuzzy=True)
+        if dt:
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+
+    return None
+
 
 def parse_jobposting_ldjson(html: str) -> dict:
     """Parse schema.org JobPosting JSON-LD and pull out title, company, locations, dates."""
@@ -7640,6 +8040,8 @@ INCLUDE_TITLES_EXACT = [
     r"\bsystems analyst\b",
     r"\bbusiness systems analyst\b",
     r"\bbusiness systems engineer\b",
+    r"\bproduct business analyst\b",
+    #r"\bbusiness technology analyst\b",
     r"\bscrum master\b",
     r"\brelease train engineer\b", r"\brte\b",
     
@@ -7654,6 +8056,7 @@ INCLUDE_TITLES_FUZZY = [
     r"\bbusiness\s+system\s+analyst\b",
     r"\brequirements?\s+(?:analyst|engineer)\b",
     r"\bsolutions?\s+analyst\b",
+    r"\bbusiness?\s+technology\s+analyst\b",
     r"\bimplementation\s+analyst\b",
     r"\btechnical\s+program\s+manager\b",       # only with responsibilities (see _is_target_role)
     r"\bbusiness\s+systems?\s+analyst\b",       # Business System(s) Analyst
@@ -7892,7 +8295,6 @@ def _done_box() -> str:
 # =====================================================================
 # 🔍 Remote / Onsite detection + confidence constants
 # =====================================================================
-from datetime import datetime
 
 
 KEEP_REASON_FIELD = "Reason"           # lives only in Table1
@@ -8046,17 +8448,42 @@ def company_from_url_fallback(url):
         return parts[1]
     return None
 
-REL_POSTED_RE = re.compile(r"(\d+)\s*(day|days|d|hour|hours|h|minute|minutes|min)s?\s*ago", re.I)
-def compute_posting_date_from_relative(rel_text):
-    m = REL_POSTED_RE.search(rel_text or ""); 
-    if not m: return None
-    n, unit = int(m.group(1)), m.group(2).lower()
-    today = datetime.now(timezone.utc).date()
-    if unit.startswith(("day","d")): return (today - timedelta(days=n)).isoformat()
-    return today.isoformat()
+REL_POSTED_RE = re.compile(
+    r"\b(\d+)\s*(minute|min|hour|hr|day|d|week|wk|month|mo)s?\b\s*ago\b",
+    re.I,
+)
 
 
-# --- Salary helpers ---
+def compute_posting_date_from_relative(rel_text: str, anchor_date=None) -> str | None:
+    """
+    Convert a relative label like:
+      "Posted 6 days ago", "6 days ago", "2 weeks ago", "1 month ago", "12 hours ago"
+    into YYYY-MM-DD, anchored to anchor_date.
+    If anchor_date is None, defaults to LOCAL today (not UTC) to avoid date surprises.
+    """
+    m = REL_POSTED_RE.search(rel_text or "")
+    if not m:
+        return None
+
+    n = int(m.group(1))
+    unit = m.group(2).lower()
+
+    base = anchor_date or datetime.now().date()
+
+    if unit in ("day", "d"):
+        return (base - timedelta(days=n)).isoformat()
+    if unit in ("hour", "hr"):
+        return base.isoformat()
+    if unit in ("minute", "min"):
+        return base.isoformat()
+    if unit in ("week", "wk"):
+        return (base - timedelta(days=7 * n)).isoformat()
+    if unit in ("month", "mo"):
+        return (base - timedelta(days=30 * n)).isoformat()
+
+    return None
+
+
 # --- Salary helpers (replace the old versions with these) ---
 def _money_to_number(num_str, has_k=False):
     s = num_str.replace(",", "").strip()
@@ -8482,9 +8909,8 @@ def _center_fit(label: str, width: int) -> str:
 
 def _progress_print(msg: str) -> None:
     """Draw/overwrite the single progress line in-place."""
-    sys.stdout.write("\r" + msg + "\r")
+    sys.stdout.write("\r\033[2K" + msg)
     sys.stdout.flush()
-
 
 import atexit
 
@@ -8528,7 +8954,9 @@ def _normalize_job_defaults(d: dict) -> dict:
       - d["Posted"] as a relative label when possible
     """
     
-    print("[TRACE] entered _normalize_job_defaults")
+    #if DEBUG_LOCATION:
+        #log_line("DEBUG", "[TRACE] entered _normalize_job_defaults")
+
     d = dict(d or {})
         
     from datetime import datetime
@@ -8570,11 +8998,39 @@ def _normalize_job_defaults(d: dict) -> dict:
     posting_date_str = _strip_time(posting_date_raw)
     valid_through_str = _strip_time(valid_through_raw)
 
-    # If still missing, fall back to Date Scraped date portion
+    # ---------- Posted (relative label) ----------
+    posted_label = d.get("Posted") or d.get("posted_label") or d.get("posted") or ""
+    if not posted_label and d.get("Period"):
+        posted_label = d.get("Period") or ""
+
+    # Normalize Posted label early (so date math sees clean input)
+    if posted_label:
+        posted_label = str(posted_label).strip()
+        posted_label = re.sub(r"^\s*job\s+", "", posted_label, flags=re.I)
+        posted_label = re.sub(r"^\s*posted\s+", "Posted ", posted_label, flags=re.I)
+        posted_label = posted_label.replace("|", " ").strip()
+        posted_label = re.sub(r"\s{2,}", " ", posted_label).strip()
+
+    # If still missing, try to compute Posting Date from a relative Posted label (anchored to Date Scraped)
     if not posting_date_str:
+        rel = str(posted_label or "").strip()
+
+        # Anchor to Date Scraped when available
         ds = str(d.get("Date Scraped") or "").strip()
+        anchor = None
         if ds:
-            posting_date_str = ds.split(" ", 1)[0].strip()  # e.g. "11/30/2025"
+            ds_iso = parse_date_relaxed(ds)
+            if ds_iso:
+                anchor = ds_iso[:10]
+
+        try:
+            anchor_date = datetime.fromisoformat(anchor).date() if anchor else None
+        except Exception:
+            anchor_date = None
+
+        computed = compute_posting_date_from_relative(rel, anchor_date=anchor_date)
+        if computed:
+            posting_date_str = computed
 
     # Store internal canonical keys
     if posting_date_str:
@@ -8586,16 +9042,9 @@ def _normalize_job_defaults(d: dict) -> dict:
     d["Posting Date"] = posting_date_str or ""
     d["Valid Through"] = valid_through_str or ""
 
-    # ---------- Posted (relative label) ----------
-    # Respect an upstream label if present
-    posted_label = d.get("Posted") or d.get("posted_label") or d.get("posted") or ""
-    if not posted_label and d.get("Period"):
-        posted_label = d.get("Period") or ""
-
-    # Otherwise derive from posting_date_str if it looks like ISO
+    # If Posted is still missing, derive it from posting_date_str
     if not posted_label and posting_date_str:
         try:
-            # Only attempt isoformat parsing on YYYY-MM-DD
             if len(posting_date_str) == 10 and posting_date_str[4] == "-" and posting_date_str[7] == "-":
                 dt_posted = datetime.fromisoformat(posting_date_str)
                 days = (datetime.now().date() - dt_posted.date()).days
@@ -8613,10 +9062,46 @@ def _normalize_job_defaults(d: dict) -> dict:
                     months = days // 30
                     posted_label = f"{months} month{'s' if months != 1 else ''} ago"
         except Exception:
-            # If anything goes sideways, do not crash normalization
             posted_label = posted_label or ""
 
     d["Posted"] = posted_label or ""
+
+
+    posting_date_str = _strip_time(posting_date_raw)
+    valid_through_str = _strip_time(valid_through_raw)
+
+    # If still missing, try to compute from a relative Posted label (anchored to Date Scraped)
+    if not posting_date_str:
+        rel = str(posted_label or "").strip()
+
+        # Anchor to Date Scraped when available
+        ds = str(d.get("Date Scraped") or "").strip()
+        anchor = None
+        if ds:
+            # parse_date_relaxed returns ISO YYYY-MM-DD when possible
+            ds_iso = parse_date_relaxed(ds)
+            if ds_iso:
+                anchor = ds_iso[:10]
+
+        try:
+            anchor_date = datetime.fromisoformat(anchor).date() if anchor else None
+        except Exception:
+            anchor_date = None
+
+        computed = compute_posting_date_from_relative(rel, anchor_date=anchor_date)
+        if computed:
+            posting_date_str = computed
+
+    # Store internal canonical keys
+    if posting_date_str:
+        d["posting_date"] = posting_date_str
+    if valid_through_str:
+        d["valid_through"] = valid_through_str
+
+    # Store CSV keys
+    d["Posting Date"] = posting_date_str or ""
+    d["Valid Through"] = valid_through_str or ""
+
 
     # URLs
     d["Job URL"] = d.get("Job URL") or d.get("job_url") or ""
@@ -9218,7 +9703,7 @@ def _debug_single_url(url: str):
 
     import json
     pretty = json.dumps(details, indent=2, sort_keys=True)
-    log_print(f"❖ DEBUG single-url …Parsed details:\n{pretty}")
+    #log_print(f"❖ DEBUG single-url …Parsed details:\n{pretty}")
 
 
 
@@ -9422,17 +9907,6 @@ def main(args: argparse.Namespace | None = None) -> None:
                 progress_clear_if_needed()
                 continue
 
-            try:
-                wd_detail_links = workday_links_from_listing(listing_url, max_results=250)
-                if wd_detail_links:
-                    all_detail_links.extend(wd_detail_links)
-
-                    # NEW: print a FOUND line for Workday expansions too
-                    elapsed = time.time() - t0
-                    progress_clear_if_needed()
-                    continue
-            except Exception as e:
-                warn(f".{DOT3}{DOTW}403 Client Error (Workday expansion failed): {e} for URL: {u}")
 
 
         else:
@@ -9641,7 +10115,7 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                 if DEBUG_LOCATION and "builtinvancouver.org" in link:
                     host = (urlparse(link).netloc or "").lower()
-                    log_line("BIV DEBUG", f"{DOTL}..prefer_listing: detail_loc={details.get('Location')!r} listing_loc={listing.get('Location')!r}")
+                    #log_line("BIV DEBUG", f"{DOTL}..prefer_listing: detail_loc={details.get('Location')!r} listing_loc={listing.get('Location')!r}")
 
 
 
@@ -9649,7 +10123,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                 schema_bits = parse_jobposting_ldjson(html)
                 if schema_bits:
                     # Only copy fields we care about; avoid overwriting with None
-                    for key in ("Title", "Company", "date_posted", "valid_through"):
+                    for key in ("Title", "Company", "posting_date", "valid_through", "posted"):
                         val = schema_bits.get(key)
                         if val:
                             details[key] = val

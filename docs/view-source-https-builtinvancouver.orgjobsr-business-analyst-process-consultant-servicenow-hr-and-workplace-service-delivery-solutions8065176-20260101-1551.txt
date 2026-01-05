@@ -1,0 +1,389 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="description" content="ServiceNow is hiring for a Remote Sr. Business Analyst/Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions in Vancouver, BC, CAN. Find more details about the job and how to apply at Built In Vancouver."/>
+        <meta name="robots" content="noindex, nofollow"/>
+    <title>Sr. Business Analyst/Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions - ServiceNow | Built In Vancouver</title>
+    <link rel="icon" type="image/x-icon" href="https://static.builtin.com/dist/images/favicon.png">
+        <link rel="canonical" href="https://builtinvancouver.org/job/sr-business-analyst-process-consultant-servicenow-hr-and-workplace-service-delivery-solutions/8065176"/>
+    <link rel="dns-prefetch" href="https://www.googletagmanager.com/">
+    <link rel="preload" href="https://static.builtin.com/dist/fonts/barlow-condensed-v12-latin-regular.woff2" as="font"
+          type="font/woff2" crossorigin>
+    <link rel="preload" href="https://static.builtin.com/dist/fonts/montserrat-v25-latin-regular.woff2" as="font"
+          type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="https://static.builtin.com/jobs/css/main.bundle.7561e9a1673b2a55adb9.css">
+    <script>
+        (function (w, d, s, l, i) {
+            w[l] = w[l] || [];
+            w[l].push({
+                'gtm.start':
+                    new Date().getTime(), event: 'gtm.js'
+            });
+            var f = d.getElementsByTagName(s)[0],
+                j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : '';
+            j.async = true;
+            j.src =
+                'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+            f.parentNode.insertBefore(j, f);
+        })(window, document, 'script', 'dataLayer', 'GTM-P66QT7FC');
+    </script>
+    
+    <link rel="stylesheet" href="https://static.builtin.com/dist/blaze/blaze.css" media="print"
+          onload="this.media='all'">
+        <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@graph": [{"EducationRequirements":{"@type":"EducationalOccupationalCredential","credentialCategory":"Bachelor Degree","@context":"https://schema.org"},"@type":"JobPosting","title":"Sr. Business Analyst/Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions","description":"<b>Company Description</b><br>It all started in sunny San Diego, California in 2004 when a visionary engineer, Fred Luddy, saw the potential to transform how we work. Fast forward to today - ServiceNow stands as a global market leader, bringing innovative AI-enhanced technology to over 8,100 customers, including 85% of the Fortune 500®. Our intelligent cloud-based platform seamlessly connects people, systems, and processes to empower organizations to find smarter, faster, and better ways to work. But this is just the beginning of our journey. Join us as we pursue our purpose to make the world work better for everyone.<br><b>Job Description</b><br>Job Title: Sr. Business Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions<br>The Role A Business Process Consultant (BPC) for ServiceNow is a functional and process expert in the ServiceNow Expert Services Team on customer engagement teams - consulting with customers and guiding them in the endeavor of transitioning business requirements to configuration requirements for a selection of the ServiceNow Core Business Services Products (which includes HR Service Delivery (HRSD), Workplace/Facilty Service Delivery (WSD), Employee Service Management Solutions, and Legal Service Delivery (LSD)) - all with the goal of accelerating and driving customer business outcomes.<br>What you get to do in this role:•    Be the process expert for HR, Workplace/Facility and/or Legal departments using ServiceNow products and ServiceNow best practices focused on configuration vs. customization, to drive business outcomes•    Driving HR, Workplace/Facility and/or Legal-specific process definition, re-engineering, improvement and gap analysis of current/future-state processes during workshops with key customer sponsors and stakeholders•    Lead customers in their efforts to take advantage of the ServiceNow Solution's standard capabilities in their efforts to improve their processes•    Lead customer design workshops focused on ServiceNow Platform and Solution functionality•    Own support of key customer process owners/Subject Matter Experts (SMEs) to obtain business requirements using ServiceNow standard materials and collateral•    Guide customers in completing required documentation such as business requirement workbooks for functional aspects of the solution•    Draft persona-based and functionality-focused user stories, their acceptance criteria, testing strategy and knowledge transfer while supporting customers in reviewing and approving them. The BPC owns the lifecycle of all user stories workflow in engagements - from draft to completion.•    Guide and advocate for the customer's needs throughout the engagement•    Support internal unit testing of developed solution during the development stage of the engagement, in partnership with Technical Resources•    Drive customer unit and user-acceptance testing requirements throughout and at key stages of an engagement•    Be a lead member of an overall engagement project team focused on delivering successful and substantive customer outcomes•    Prepare all customer-facing deliverables focused on process•    Juggle multiple and complex projects/initiatives•    Promote continuous improvement practices for delivery/engagement materials•    Support specific sales activities when required•    Provide training and mentoring to other members of the ServiceNow delivery team and partner ecosystem upon request•    Up to 50% travel annually, driven by customer needs and internal meetings•    Must be a Canadian Citizen, with ability to obtain and maintain a Canadian security clearance (if required for a project)•    At least 8+ years of consulting experience for complex, global organizations in the HR, Workplace/Facility &amp; Legal operations/technology departments (e.g., HRIS, Legal Operations, Space Management, etc.) •  Must hold ServiceNow certifications such as a current ServiceNow Certified System Administrator (CSA) certification, HR Professional Suite Certification, Workplace Service Delivery Accreditation, Legal Service Delivery Acceditation, Certified Application Developer certification as well).•    Demonstrated ability to influence and consult (providing options with pros, cons and risks) in HR, Workplace/Facility Service Delivery and/or Legal organizations, while providing thought leadership in solving business process and/or technical problems•    Proven experience in defining and deploying future-state processes and in identifying solutions from a people, process and technology perspective with a focused prowess on implementation of technology•    Strong understanding with leading HR, IWMS (Integrated Workplace Management System), and/or Legal and related systems and tools such as Workday, Oracle / PeopleSoft, SAP SuccessFactors, UltiPro, Infor, IBM Maximo/TRIRIGA, Nuvolo, etc.•    Solid experience in converting business requirements to configuration requirements by authoring user stories that support Agile Development•    Excellent communication skills (both written and verbal) with strong presentation and facilitation skills (proficiency in Visio, Word and PowerPoint)•    Experience in providing Knowledge-Centered Service / Support using technologies•    Experience in analyzing and recommending HR, Workplace/Facility and/or Legal strategies based on business priorities•    Strong interpersonal skills, customer-centric attitude, ability to deal with cultural diversity•    Proven team player and team build<br><b>Qualifications</b><br><strong>To be successful in this role you have:</strong>•    Must be a Canadian Citizen, with ability to obtain and maintain a Canadian security clearance (if required for a project)•    At least 8+ years of consulting experience for complex, global organizations in the HR, Workplace/Facility &amp; Legal operations/technology departments (e.g., HRIS, Legal Operations, Space Management, etc.) •  Must hold ServiceNow certifications such as a current ServiceNow Certified System Administrator (CSA) certification, HR Professional Suite Certification, Workplace Service Delivery Accreditation, Legal Service Delivery Acceditation, Certified Application Developer certification as well).•    Demonstrated ability to influence and consult (providing options with pros, cons and risks) in HR, Workplace/Facility Service Delivery and/or Legal organizations, while providing thought leadership in solving business process and/or technical problems•    Proven experience in defining and deploying future-state processes and in identifying solutions from a people, process and technology perspective with a focused prowess on implementation of technology•    Strong understanding with leading HR, IWMS (Integrated Workplace Management System), and/or Legal and related systems and tools such as Workday, Oracle / PeopleSoft, SAP SuccessFactors, UltiPro, Infor, IBM Maximo/TRIRIGA, Nuvolo, etc.•    Solid experience in converting business requirements to configuration requirements by authoring user stories that support Agile Development•    Excellent communication skills (both written and verbal) with strong presentation and facilitation skills (proficiency in Visio, Word and PowerPoint)•    Experience in providing Knowledge-Centered Service / Support using technologies•    Experience in analyzing and recommending HR, Workplace/Facility and/or Legal strategies based on business priorities•    Strong interpersonal skills, customer-centric attitude, ability to deal with cultural diversity•    Proven team player and team build<br><b>Additional Information</b><br><strong>Work Personas</strong><br>We approach our distributed world of work with flexibility and trust. Work personas (flexible, remote, or required in office) are categories that are assigned to ServiceNow employees depending on the nature of their work and their assigned work location. Learn more here . To determine eligibility for a work persona, ServiceNow may confirm the distance between your primary residence and the closest ServiceNow office using a third-party service.<br><strong>Equal Opportunity Employer</strong><br>ServiceNow is an equal opportunity employer. All qualified applicants will receive consideration for employment without regard to race, color, creed, religion, sex, sexual orientation, national origin or nationality, ancestry, age, disability, gender identity or expression, marital status, veteran status, or any other category protected by law. In addition, all qualified applicants with arrest or conviction records will be considered for employment in accordance with legal requirements. <br><strong>Accommodations</strong><br>We strive to create an accessible and inclusive experience for all candidates. If you require a reasonable accommodation to complete any part of the application process, or are unable to use this online application and need an alternative method to apply, please contact globaltalentss@servicenow.com for assistance. <br><strong>Export Control Regulations</strong><br>For positions requiring access to controlled technology subject to export control regulations, including the U.S. Export Administration Regulations (EAR), ServiceNow may be required to obtain export control approval from government authorities for certain individuals. All employment is contingent upon ServiceNow obtaining any export license or other approval that may be required by relevant export control authorities. <br>From Fortune. ©2025 Fortune Media IP Limited. All rights reserved. Used under license.","directApply":false,"jobLocationType":"TELECOMMUTE","identifier":{"@type":"PropertyValue","name":"ServiceNow","value":"8065176"},"datePosted":"2025-12-24","employmentType":"FULL_TIME","experienceRequirements":{"@type":"OccupationalExperienceRequirements","monthsOfExperience":108},"applicantLocationRequirements":{"@type":"Country","name":"CAN"},"hiringOrganization":{"@type":"Organization","name":"ServiceNow","sameAs":"https://builtin.com/company/servicenow","logo":{"@type":"ImageObject","url":"https://builtin.com/sites/www.builtin.com/files/2025-05/ServiceNow.png","representativeOfPage":true}},"industry":["Artificial Intelligence","Cloud","HR Tech","Information Technology","Productivity","Software","Automation"],"jobBenefits":"401(K), 401(K) matching, Adoption Assistance, Childcare benefits, Commuter benefits, Company equity, Company-sponsored outings, Company sponsored family events, Customized development tracks, Dental insurance, Disability insurance, Volunteer in local community, Employee stock purchase plan, Family medical leave, Flexible Spending Account (FSA), Flexible work schedule, Generous parental leave, Generous PTO, Company-sponsored happy hours, Health insurance, Open door policy, Life insurance, Charitable contribution matching, Mentorship program, Paid volunteer time, Online course subscriptions available, Onsite gym, Open office floor plan, Paid holidays, Paid sick days, Onsite office parking, Partners with nonprofits, Performance bonus, Pet insurance, Promote from within, Relocation assistance, Remote work program, Free snacks and drinks, Team based strategic planning, Tuition reimbursement, Vision insurance, Wellness programs, Mental health benefits, Home-office stipend for remote employees, Fertility benefits, Employee resource groups, Employee-led culture committees, Hybrid work model, In-person all-hands meetings, In-person revenue kickoff, Employee awards, Transgender health care benefits, Wellness days, Mother's room, Personal development training, Virtual coaching services, Flexible time off, Bereavement leave benefits, Company-wide vacation","jobLocation":{"@type":"Place","address":{"@type":"PostalAddress","addressCountry":"CAN","addressLocality":"Vancouver","addressRegion":"British Columbia"},"geo":{"@type":"GeoCoordinates","latitude":49.261636,"longitude":-123.11335}},"validThrough":"2026-01-23T09:55:32+00:00"}]
+    }
+        </script>
+
+</head>
+<body>
+<noscript>
+    <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-P66QT7FC" height="0" width="0"
+            style="display:none;visibility:hidden"></iframe>
+</noscript>
+<header class="header sticky-top">
+    <div id="international-header" class="bg-app-primary text-white nav-height d-flex align-items-center" data-site-id="27" data-external-api="https://api.builtin.com"><div class="container d-flex justify-content-between"><div class="d-flex align-items-center"><a href="/"><img class="d-block d-lg-none" src="https://static.builtin.com/dist/images/bi-header-logo.svg" height="32" width="71" alt="Built In Logo" />
+                <img class="d-none d-lg-block" src="https://static.builtin.com/dist/images/bi-header-logo.svg" height="48" width="108" alt="Built In Logo" /></a><div class="d-inline"><button id="header-site-dropdown" type="button" class="btn btn-lg dropdown-toggle text-white p-sm border-0" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="-120,23" data-bs-auto-close="outside" aria-label="Site Dropdown button"><span>Vancouver</span></button>
+                    <div class="dropdown-menu tech-hub-menu"><button type="button" class="btn btn-lg position-absolute end-0 top-0" onclick="document.getElementById('header-site-dropdown').click()" aria-label="Close"><i class="fa-regular fa-close fs-2xl text-black"></i></button>
+                        <div class="row gx-0"><div class="col-12 col-lg-4 global-tech-container p-lg bg-gray-01-highlight"><div class="header-text">
+                                    Global Tech Hub
+                                </div>
+                                <hr>
+                                <div class="fs-md fw-semibold mb-lg"><span class="fw-bold">BuiltIn.com</span> is the global destination for tech professionals.
+                                </div>
+                                <a href="https://builtin.com" class="btn btn-lg btn-primary w-100 w-md-50 w-lg-100"><span class="me-sm">builtin.com</span>
+                                    <i class="fa-solid fa-arrow-right fs-sm text-white"></i></a></div>
+                            <div class="col-12 col-lg-8 popular-tech-container p-lg"><div class="header-text">
+                                    Popular Tech Hubs
+                                </div>
+                                <hr><div class="row gx-0"><div class="col-6"><div class="row gx-0"><div class="col-12 col-md-6"><div class="mb-lg mb-md-0"><span class="text-uppercase fw-black fs-xs text-gray-04">United States</span><a href="https://builtin.com/jobs?city=Austin&amp;state=Texas&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Austin</a><a href="https://builtin.com/jobs?city=Boston&amp;state=Massachusetts&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Boston</a><a href="https://builtin.com/jobs?city=Chicago&amp;state=Illinois&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Chicago</a><a href="https://builtin.com/jobs?state=Colorado&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Colorado</a><a href="https://builtin.com/jobs?city=Los&#x2B;Angeles&amp;state=California&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Los Angeles</a><a href="https://builtin.com/jobs?city=New&#x2B;York&amp;state=New&#x2B;York&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">New York City</a><a href="https://builtin.com/jobs?city=Seattle&amp;state=Washington&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Seattle</a><a href="https://builtin.com/jobs?city=San&#x2B;Francisco&amp;state=California&amp;country=USA&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">San Francisco</a></div></div>
+                                                <div class="col-12 col-md-6"><div class="mb-lg"><span class="text-uppercase fw-black fs-xs text-gray-04">Australia</span><a href="https://builtin.com/jobs?city=Sydney&amp;state=New&#x2B;South&#x2B;Wales&amp;country=AUS&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Sydney</a><a href="https://builtin.com/jobs?city=Melbourne&amp;state=Victoria&amp;country=AUS&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Melbourne</a></div>
+                                                    <div class=""><span class="text-uppercase fw-black fs-xs text-gray-04">Canada</span><a href="https://builtin.com/jobs?city=Calgary&amp;state=Alberta&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Calgary</a><a href="https://builtin.com/jobs?city=Montr&#xE9;al&amp;state=Qu&#xE9;bec&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Montreal</a><a href="https://builtin.com/jobs?city=Ottawa&amp;state=Ontario&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Ottawa</a><a href="https://builtin.com/jobs?city=Qu&#xE9;bec&amp;state=Qu&#xE9;bec&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Quebec</a><a href="https://builtin.com/jobs?city=Toronto&amp;state=Ontario&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Toronto</a><a href="https://builtin.com/jobs?city=Vancouver&amp;state=British&#x2B;Columbia&amp;country=CAN&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs fw-bold text-pretty-blue">Vancouver</a></div></div></div></div>
+                                        <div class="col-6 gx-0"><div class="row gx-0"><div class="col-12 col-md-6"><div class="mb-lg"><span class="text-uppercase fw-black fs-xs text-gray-04">India</span><a href="https://builtin.com/jobs?city=Bengaluru&amp;state=Karnataka&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Bengaluru</a><a href="https://builtin.com/jobs?city=Chennai&amp;state=Tamil&#x2B;Nadu&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Chennai</a><a href="https://builtin.com/jobs?city=New&#x2B;Delhi&amp;state=Delhi&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Delhi</a><a href="https://builtin.com/jobs?city=Hyderabad&amp;state=Telangana&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Hyderabad</a><a href="https://builtin.com/jobs?city=Kolkata&amp;state=Bengal&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Kolkata</a><a href="https://builtin.com/jobs?city=Mumbai&amp;state=Maharashtra&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Mumbai</a><a href="https://builtin.com/jobs?city=Pune&amp;state=Mah&#x101;r&#x101;shtra&amp;country=IND&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Pune</a></div>
+                                                    <div class="mb-lg mb-md-0"><span class="text-uppercase fw-black fs-xs text-gray-04">Ireland</span><a href="https://builtin.com/jobs?city=Dublin&amp;state=Dublin&amp;country=IRL&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Dublin</a></div></div>
+                                                <div class="col-12 col-md-6"><div class="mb-lg"><span class="text-uppercase fw-black fs-xs text-gray-04">Singapore</span><a href="https://builtin.com/jobs?city=Singapore&amp;state=Singapore&amp;country=SGP&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Singapore</a></div>
+                                                    <div class=""><span class="text-uppercase fw-black fs-xs text-gray-04">United Kingdom</span><a href="https://builtin.com/jobs?city=London&amp;state=England&amp;country=GBR&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">London</a><a href="https://builtin.com/jobs?city=Cambridge&amp;state=England&amp;country=GBR&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Cambridge</a><a href="https://builtin.com/jobs?city=Manchester&amp;state=England&amp;country=GBR&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Manchester</a><a href="https://builtin.com/jobs?city=Birmingham&amp;state=England&amp;country=GBR&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Birmingham</a><a href="https://builtin.com/jobs?city=Bristol&amp;state=England&amp;country=GBR&amp;searcharea=25mi" class="fs-sm d-block hover-underline mb-xs text-gray-04 fw-semibold">Bristol</a></div></div></div></div></div></div></div></div></div></div>
+        <div class="d-flex"><div class="search me-sm" x-data="headerSearch()"><button id="header-search-dropdown" type="button" class="btn h-100 p-xs p-md-sm" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0" data-bs-auto-close="outside" aria-label="search button"><i class="fa-solid fa-magnifying-glass fs-md fs-lg-2xl text-white"></i></button>
+    <div class="dropdown-menu"><div class="input-group mb-md px-md"><span class="input-group-text bg-white"><i class="fa-solid fa-magnifying-glass fs-xl text-midnight"></i></span>
+            <input autofocus type="text" id="header-search-input" name="search jobs input" class="form-control border-start-0" x-model="searchTerm" x-on:input.debounce.100ms="updateCompanies()" x-on:keydown.enter="goToJobSearch" placeholder="Search"></div>
+        <div class="bg-gray-01-highlight px-md mb-md"><a :href="jobSearchUrl" x-text="searchTerm + ' In Jobs'"></a></div>
+        <template x-for="company in companies"><a :href="company.alias" class="text-decoration-none"><div class="mb-md"><div class="d-flex align-items-center bg-gray-01 mx-md rounded-1 px-md py-sm"><div class="rounded-circle bg-white h-4xl w-4xl d-flex align-items-center justify-content-center" style="flex-basis: auto"><img class="object-fit-contain" loading="lazy" width="42" height="42" alt="Company Photo" :src="company.logo"></div>
+                        <div class="ms-lg fill-even"><div x-text="company.title" class="text-midnight fw-semibold"></div>
+                            <div x-text="company.industries" class="font-montserrat-button text-uppercase fs-xs"></div></div></div></div></a></template>
+        <template x-if="searchTerm.length &gt; 0 &amp;&amp; companies.length === 0"><a class="text-decoration-none" href="https://builtin.com/node/add/company"><div class="border border-gray-02 d-flex gap-lg p-md m-md rounded-1 align-items-center"><div class="bg-gray-01 rounded-circle h-4xl w-4xl d-flex align-items-center justify-content-center"><i class="fa-thin fa-rocket-launch fs-2xl"></i></div>
+                    <div><div class="fs-xl mb-sm text-midnight fw-semibold">Can't find your company?</div>
+                        <div class="fs-sm">Create a company profile.</div></div></div></a></template>
+        <div class="d-flex justify-content-center"><a class="d-flex align-items-center" href="/jobs">View All Jobs</a></div></div></div>
+            <div class="my-auto me-md d-none d-lg-inline"><button id="for-employers-button" type="button" class="dropdown-toggle btn btn-secondary text-white btn-lg me-md fw-bold fs-sm text-uppercase" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0">
+            For Employers
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end round-bottom round-left shadow-sm p-0"><li><a href="https://employers.builtin.com?utm_medium=SatelliteReferral&amp;utm_source=foremployers" class="btn btn-lg fw-bold text-capitalize fs-sm w-100 text-start focus-ring border-0" target="_blank">
+                        Premium Partnership
+                    </a></li>
+                <li class="dropdown-divider m-0"></li><li><a href="https://builtin.com/dashboard/jobs" class="btn btn-lg fw-bold fs-sm text-capitalize w-100 text-start focus-ring border-0" target="_blank">
+                        Manage Jobs
+                    </a></li>
+                <li class="dropdown-divider m-0"></li><li><a href="https://builtin.com/node/add/job" class="btn btn-lg fw-bold fs-sm text-capitalize w-100 text-start focus-ring border-0" target="_blank">
+                        Post Job
+                    </a></li></ul></div><div class="header-dropdown-items"><button type="button" class="btn h-100 p-xs p-md-sm" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0"><i class="fa-solid fa-circle-user fs-2xl fs-lg-4xl text-white"></i></button>
+<ul class="dropdown-menu dropdown-menu-end"><li><a class="dropdown-item fw-bold" href="/profile/job-preferences">Job Preferences</a></li><li><a class="dropdown-item fw-bold" href="/profile/edit">Edit Profile</a></li><li><a href="/auth/logout" type="button" id="logout" class="dropdown-item fw-bold">Sign Out</a></li></ul></div></div></div></div>
+<nav class="navbar navbar-expand-lg d-none d-lg-block bg-white p-0 border-bottom border-gray-02"><div class="container-fluid"><div class="navbar-collapse" id="main_nav"><nav class="container" role="navigation"><ul class="navbar-nav d-flex gap-lg" role="menu"><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/jobs" builtin-toggle="dropdown">Jobs</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/companies" builtin-toggle="dropdown">Companies</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/jobs/remote" builtin-toggle="dropdown">Remote</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/articles" builtin-toggle="dropdown">Articles</a></li><li class="nav-item fs-lg ms-auto h-3xl underline-title" role="menuitem"><div class="nav-link d-flex align-items-center top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl fw-bold"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl fw-bold fs-sm" onclick="bix.eventTracking.logBuiltinTrackEvent(&#x27;click_nav_apptracker&#x27;, {});" href="/home#application-tracker-section"><i class="fa-solid fa-chart-kanban fs-md text-pink me-sm chart-kanban-icon"></i>
+                                    Job Application Tracker
+                                </a></div></li></ul></nav></div></div></nav>
+</header>
+<div>
+    <main role="main">
+        
+
+<div x-data="jobPost">
+        <div class="position-absolute invisible">
+            <img src="https://ad.doubleclick.net/ddm/trackimp/N1262025.3783557BUILTIN/B25305056.295190927;dc_trk_aid=488435671;dc_trk_cid=145713100;ord=[timestamp];dc_lat=;dc_rdid=;tag_for_child_directed_treatment=;tfua=;gdpr=${GDPR};gdpr_consent=${GDPR_CONSENT_755}?" border="0" height="1" width="1" alt="Advertisement">
+        </div>
+    <div class="job-post-item bg-gray-01" id="8065176">
+
+
+<div class="header-background py-xl pb-3xl pb-lg-5xl  has-image"><div class="container"><div class="container-fluid m-0"><div class="row"><div class="header-image position-relative z-1 p-0 mx-auto"><a href="/company/servicenow" aria-label="View ServiceNow profile" class="d-flex p-0"><picture class="d-inline-block w-100 company-img-banner position-relative company-img-banner-wrapper"><img width="1140" height="212" class="img-fluid rounded-top object-fit-cover header-post-image position-absolute top-0 start-0 w-100" alt="" data-id="company-poster-img" data-builtin-track-job-id="8065176" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=780,h=145,q=80/sites/www.builtin.com/files/2025-05/Built%20In%201140x212.png" srcset="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=780,h=145,q=80/sites/www.builtin.com/files/2025-05/Built%20In%201140x212.png 767w, https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=1140,h=212,q=80/sites/www.builtin.com/files/2025-05/Built%20In%201140x212.png 1000w, https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=2152,h=400,q=80/sites/www.builtin.com/files/2025-05/Built%20In%201140x212.png 7000w" /></picture></a><div class="d-flex company-img-wrapper bottom-0 position-absolute"><a href="/company/servicenow" type="button" class=" ms-auto me-auto me-lg-0 ms-lg-0 start-50 top-0 translate-lg-middle position-lg-absolute d-inline-flex align-items-center bg-white p-sm rounded-2 border border-gray-02"><picture class="d-inline-block p-lg-xs"><img data-id="company-img" data-builtin-track-job-id="8065176" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2025-05/ServiceNow.png" alt="ServiceNow Logo" loading="auto" height="96" width="96" class="min-h-3xl object-fit-contain company-img" /></picture></a></div></div>
+                <div id="job-card-8065176" data-id="job-card" class="job-card position-relative job-bounded-responsive border-0 border-lg border-transparent rounded-bottom border-top-0 position-relative bg-lg-white p-lg-2xl"><div id="main" class="row"><div class="col-12 col-lg-8 col-xl-7 bg-white bg-lg-transparent rounded-bottom rounded-lg-0 p-md pt-0 pb-lg-0"><div class="invisible-inside-spacer"></div>
+                            <a href="/company/servicenow" class="mb-sm mb-lg-md d-block z-1"><h2 class="font-barlow text-pretty-blue fs-xl fw-medium fs-lg-2xl d-inline-block m-0 hover-underline" data-id="company-title" data-builtin-track-job-id="8065176"><span>ServiceNow</span></h2></a>
+
+                            <h1 class="fw-extrabold fs-xl fs-lg-3xl mb-sm mb-lg-lg text-gray-04">Sr. Business Analyst/Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions</h1>
+                            <div class="d-flex flex-column flex-md-row d-md-inline-flex"><div class="me-md-md"><i class="fa-light text-pretty-blue fa-clock me-sm fs-sm" aria-hidden="true" title="Job Posted 6 Days Ago"></i>
+                                            <span class="font-barlow fs-md fw-regular text-gray-04">Posted 6 Days Ago</span></div><div class="d-inline-flex mt-sm mt-md-0"><div class="d-inline-block bg-pretty-blue-highlight rounded-3 py-xs px-sm lh-sm"><span class="fw-semibold fs-sm">Be an Early Applicant</span></div></div></div></div>
+                        <div class="col-12 col-lg-3 ms-auto bg-white d-none d-lg-block"><div class="invisible-inside-spacer"></div>
+                            <div class="d-flex flex-column gap-sm position-relative h-100"><div class="d-flex flex-wrap gap-sm"></div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-house-building fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+        <span class="font-barlow text-gray-04">Remote or Hybrid</span></div><div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+                <div class="font-barlow text-gray-04 position-relative"><span>Hiring Remotely in </span><span>Vancouver, BC</span></div></div></div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-trophy fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+            <span class="font-barlow text-gray-04">Senior level</span></div></div></div></div></div></div></div></div></div>
+
+<div class="container d-lg-none mb-sm mt-n2xl"><div class="row pe-md ps-md p-lg-0"><div class="bg-white p-md rounded-3"><div class="d-flex flex-column gap-sm position-relative h-100"><div class="d-flex flex-wrap gap-sm"></div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-house-building fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+        <span class="font-barlow text-gray-04">Remote or Hybrid</span></div><div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+                <div class="font-barlow text-gray-04 position-relative"><span>Hiring Remotely in </span><span>Vancouver, BC</span></div></div></div><div class="d-flex align-items-start gap-sm"><div class="d-flex justify-content-center align-items-center h-lg min-w-md"><i class="fa-regular fa-trophy fs-xs text-pretty-blue" aria-hidden="true"></i></div>
+            <span class="font-barlow text-gray-04">Senior level</span></div></div></div></div></div>
+<div class="container mt-lg-n4xl pb-4xl">
+    <div class="container-fluid m-0">
+        <div class="row">
+            <div class="bg-white rounded-3 p-md pt-lg-lg pb-lg-lg pe-lg-2xl ps-lg-2xl mb-sm mb-lg-md pt-lg-0 overflow-hidden position-relative" :class="jobExpanded || !bodyTooLarge(8065176) ? &#x27;full-size&#x27; : &#x27;small-size&#x27;"><div class="bg-gray-01-opacity fs-md rounded-3 p-md p-lg-lg mb-md mb-lg-lg"><div class="fw-semibold">The Business Process Consultant guides clients in transitioning business requirements to configuration requirements for ServiceNow HR and Workplace solutions, leads design workshops, and drives process improvement initiatives while supporting project engagements.</div>
+            <div class="mt-sm mt-lg-md font-barlow">The summary above was generated by AI</div></div><div x-ref="job-post-body-8065176" id="job-post-body-8065176" class="fs-md fw-regular mb-md html-parsed-content"><b>Company Description</b><br>It all started in sunny San Diego, California in 2004 when a visionary engineer, Fred Luddy, saw the potential to transform how we work. Fast forward to today - ServiceNow stands as a global market leader, bringing innovative AI-enhanced technology to over 8,100 customers, including 85% of the Fortune 500®. Our intelligent cloud-based platform seamlessly connects people, systems, and processes to empower organizations to find smarter, faster, and better ways to work. But this is just the beginning of our journey. Join us as we pursue our purpose to make the world work better for everyone.<br><b>Job Description</b><br>Job Title: Sr. Business Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions<br>The Role A Business Process Consultant (BPC) for ServiceNow is a functional and process expert in the ServiceNow Expert Services Team on customer engagement teams - consulting with customers and guiding them in the endeavor of transitioning business requirements to configuration requirements for a selection of the ServiceNow Core Business Services Products (which includes HR Service Delivery (HRSD), Workplace/Facilty Service Delivery (WSD), Employee Service Management Solutions, and Legal Service Delivery (LSD)) - all with the goal of accelerating and driving customer business outcomes.<br>What you get to do in this role:•    Be the process expert for HR, Workplace/Facility and/or Legal departments using ServiceNow products and ServiceNow best practices focused on configuration vs. customization, to drive business outcomes•    Driving HR, Workplace/Facility and/or Legal-specific process definition, re-engineering, improvement and gap analysis of current/future-state processes during workshops with key customer sponsors and stakeholders•    Lead customers in their efforts to take advantage of the ServiceNow Solution's standard capabilities in their efforts to improve their processes•    Lead customer design workshops focused on ServiceNow Platform and Solution functionality•    Own support of key customer process owners/Subject Matter Experts (SMEs) to obtain business requirements using ServiceNow standard materials and collateral•    Guide customers in completing required documentation such as business requirement workbooks for functional aspects of the solution•    Draft persona-based and functionality-focused user stories, their acceptance criteria, testing strategy and knowledge transfer while supporting customers in reviewing and approving them. The BPC owns the lifecycle of all user stories workflow in engagements - from draft to completion.•    Guide and advocate for the customer's needs throughout the engagement•    Support internal unit testing of developed solution during the development stage of the engagement, in partnership with Technical Resources•    Drive customer unit and user-acceptance testing requirements throughout and at key stages of an engagement•    Be a lead member of an overall engagement project team focused on delivering successful and substantive customer outcomes•    Prepare all customer-facing deliverables focused on process•    Juggle multiple and complex projects/initiatives•    Promote continuous improvement practices for delivery/engagement materials•    Support specific sales activities when required•    Provide training and mentoring to other members of the ServiceNow delivery team and partner ecosystem upon request•    Up to 50% travel annually, driven by customer needs and internal meetings•    Must be a Canadian Citizen, with ability to obtain and maintain a Canadian security clearance (if required for a project)•    At least 8+ years of consulting experience for complex, global organizations in the HR, Workplace/Facility &amp; Legal operations/technology departments (e.g., HRIS, Legal Operations, Space Management, etc.) •  Must hold ServiceNow certifications such as a current ServiceNow Certified System Administrator (CSA) certification, HR Professional Suite Certification, Workplace Service Delivery Accreditation, Legal Service Delivery Acceditation, Certified Application Developer certification as well).•    Demonstrated ability to influence and consult (providing options with pros, cons and risks) in HR, Workplace/Facility Service Delivery and/or Legal organizations, while providing thought leadership in solving business process and/or technical problems•    Proven experience in defining and deploying future-state processes and in identifying solutions from a people, process and technology perspective with a focused prowess on implementation of technology•    Strong understanding with leading HR, IWMS (Integrated Workplace Management System), and/or Legal and related systems and tools such as Workday, Oracle / PeopleSoft, SAP SuccessFactors, UltiPro, Infor, IBM Maximo/TRIRIGA, Nuvolo, etc.•    Solid experience in converting business requirements to configuration requirements by authoring user stories that support Agile Development•    Excellent communication skills (both written and verbal) with strong presentation and facilitation skills (proficiency in Visio, Word and PowerPoint)•    Experience in providing Knowledge-Centered Service / Support using technologies•    Experience in analyzing and recommending HR, Workplace/Facility and/or Legal strategies based on business priorities•    Strong interpersonal skills, customer-centric attitude, ability to deal with cultural diversity•    Proven team player and team build<br><b>Qualifications</b><br><strong>To be successful in this role you have:</strong>•    Must be a Canadian Citizen, with ability to obtain and maintain a Canadian security clearance (if required for a project)•    At least 8+ years of consulting experience for complex, global organizations in the HR, Workplace/Facility &amp; Legal operations/technology departments (e.g., HRIS, Legal Operations, Space Management, etc.) •  Must hold ServiceNow certifications such as a current ServiceNow Certified System Administrator (CSA) certification, HR Professional Suite Certification, Workplace Service Delivery Accreditation, Legal Service Delivery Acceditation, Certified Application Developer certification as well).•    Demonstrated ability to influence and consult (providing options with pros, cons and risks) in HR, Workplace/Facility Service Delivery and/or Legal organizations, while providing thought leadership in solving business process and/or technical problems•    Proven experience in defining and deploying future-state processes and in identifying solutions from a people, process and technology perspective with a focused prowess on implementation of technology•    Strong understanding with leading HR, IWMS (Integrated Workplace Management System), and/or Legal and related systems and tools such as Workday, Oracle / PeopleSoft, SAP SuccessFactors, UltiPro, Infor, IBM Maximo/TRIRIGA, Nuvolo, etc.•    Solid experience in converting business requirements to configuration requirements by authoring user stories that support Agile Development•    Excellent communication skills (both written and verbal) with strong presentation and facilitation skills (proficiency in Visio, Word and PowerPoint)•    Experience in providing Knowledge-Centered Service / Support using technologies•    Experience in analyzing and recommending HR, Workplace/Facility and/or Legal strategies based on business priorities•    Strong interpersonal skills, customer-centric attitude, ability to deal with cultural diversity•    Proven team player and team build<br><b>Additional Information</b><br><strong>Work Personas</strong><br>We approach our distributed world of work with flexibility and trust. Work personas (flexible, remote, or required in office) are categories that are assigned to ServiceNow employees depending on the nature of their work and their assigned work location. Learn more here . To determine eligibility for a work persona, ServiceNow may confirm the distance between your primary residence and the closest ServiceNow office using a third-party service.<br><strong>Equal Opportunity Employer</strong><br>ServiceNow is an equal opportunity employer. All qualified applicants will receive consideration for employment without regard to race, color, creed, religion, sex, sexual orientation, national origin or nationality, ancestry, age, disability, gender identity or expression, marital status, veteran status, or any other category protected by law. In addition, all qualified applicants with arrest or conviction records will be considered for employment in accordance with legal requirements. <br><strong>Accommodations</strong><br>We strive to create an accessible and inclusive experience for all candidates. If you require a reasonable accommodation to complete any part of the application process, or are unable to use this online application and need an alternative method to apply, please contact <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="13747f7c71727f67727f767d67606053607661657a70767d7c643d707c7e">[email&#160;protected]</a> for assistance. <br><strong>Export Control Regulations</strong><br>For positions requiring access to controlled technology subject to export control regulations, including the U.S. Export Administration Regulations (EAR), ServiceNow may be required to obtain export control approval from government authorities for certain individuals. All employment is contingent upon ServiceNow obtaining any export license or other approval that may be required by relevant export control authorities. <br>From Fortune. ©2025 Fortune Media IP Limited. All rights reserved. Used under license.</div>
+    <button @click="toggleJobExpanded" type="button" class="btn show-more-button position-absolute bottom-0 start-0 w-100 h-6xl d-flex align-items-end pb-lg justify-content-center gap-xs rounded-0 border-0" :class="bodyTooLarge(8065176) &amp;&amp; !jobExpanded ? &#x27;d-block&#x27; : &#x27;d-none&#x27;" aria-label="Expand Full Description" :tabindex="0"><span class="text-decoration-underline">Read Full Description</span>
+        <i class="fa-regular fa-chevron-down fs-sm" aria-hidden="true"></i></button></div>
+
+                <div class="bg-white rounded-3 p-md p-lg-lg mb-sm mb-lg-md full-size"><div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm  "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight  fs-xl text-transform-unset">Top Skills</h2></div></div></div>
+    <div class="d-flex gap-sm flex-wrap"><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Ibm Maximo</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Infor</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Oracle</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Peoplesoft</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">PowerPoint</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Sap Successfactors</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Servicenow</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Tririga</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Ultipro</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Visio</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Word</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Workday</div></div></div>
+
+
+
+            <div class="p-lg bg-white rounded-3 font-Montserrat"><h4 class="fs-md text-gray-04 fw-semibold mb-md">What you need to know about the Vancouver Tech Scene</h4>
+        <div class="text-gray-04">Raincouver, Vancity, The Big Smoke — Vancouver is known by many names, and in recent years, it has gained a reputation as a growing hub for both tech and sustainability. Renowned for its natural beauty, the city has become a magnet for professionals eager to create environmental solutions, and with an emphasis on clean technology, renewable energy and environmental innovation, it's attracted companies across various industries, all working toward a shared goal: advancing clean technology.</div></div>
+        </div>
+    </div>
+</div>
+    </div>
+
+    <div x-data="applyForm"
+         class="job-post-sticky-bar sticky-bottom bg-white d-flex justify-content-center align-items-center gap-sm bottom-3xl flex-column py-sm px-md pb-lg-sm"
+         :class="{'how-to-apply-container-text' : howToApplyText}">
+        <template x-if="!isFormVisible && !howToApplyText">
+                <div class="d-flex justify-content-center gap-sm w-100 flex-column flex-md-row">
+                            <a id="applyButton" href="https://careers.servicenow.com/jobs/744000100270630/sr-business-analystprocess-consultant-servicenow-hr-and-workplace-service-delivery-solutions?trid=8dc3fc18-7d27-474f-af15-47b783076ace" target="_blank" @click="applyClick"
+                               class="btn btn-lg bg-pretty-blue border-pretty-blue rounded-3 text-white flex-grow-1 flex-md-grow-0 job-post-sticky-bar-btn text-uppercase"
+                               aria-label="Apply to job">
+                                <i class="fa-solid fa-pen-line me-xs fs-md" aria-hidden="true"></i>
+                                <span x-text="['save', 'saved'].includes(getJobStatusText().toLowerCase()) ? 'Apply' : 'Apply Again'"></span>
+                            </a>
+                    <template x-if="shouldShowSaveButton()">
+                        <button x-on:click="JobStatusClick('Save')"
+                            class="btn btn-lg btn-outline-primary job-post-sticky-bar-btn" type="button"
+                            x-on:mouseenter="isHovering = true" x-on:mouseleave="isHovering = false">
+                            <i data-id="heart-button" :class="'fa-heart fa-regular ' + (isHovering ? 'text-pink' : '')"></i>
+                            <span>Save</span>
+                        </button>
+                    </template>
+                    <template x-if="shouldShowTrackerStatusDropdown()">
+                        <div class="dropdown">
+                            <button class="btn btn-lg job-post-sticky-bar-btn w-100"
+                                :class="getStatusDetails().TextCss + ' ' + (isDropdownHovering ? getStatusDetails().HoverCss :  getStatusDetails().BackgroundCss)"
+                                type="button" data-bs-toggle="dropdown" aria-expanded="false" :id="'dropdown-' + currentJob.id" x-on:click="handleDropdownClick($event)"
+                                x-on:mouseenter="isDropdownHovering = true" x-on:mouseleave="isDropdownHovering = false">
+                                <i :class="getStatusDetails().IconCss + ' fs-xs d-inline-block me-sm ' + getStatusDetails().TextCss"></i>
+                                <span x-text="getStatusDetails().StatusName"></span>
+                                <i class="fa-solid text-gray-03 ms-sm" :class="isDropdownOpen ? 'fa-caret-up' : 'fa-caret-down'"></i>
+                            </button>
+                            <ul class="dropdown-menu position-absolute rounded-3 w-100">
+                                <li class="dropdown-header d-none d-md-block fs-sm font-barlow fw-medium text-uppercase bg-midnight text-white rounded-top">
+                                    <i class="fa-solid fa-chart-kanban fs-md me-sm"></i>Change Application Tracker Status
+                                </li>
+                                 <li class="dropdown-header d-block d-md-none fs-sm font-barlow fw-medium text-uppercase text-gray-03">
+                                    Change Application Tracker Status
+                                </li>
+                                <template x-for="option in getAvailableStatusOptions()" :key="option.key">
+                                    <li><button type="button" class="dropdown-item fs-md" x-on:click="JobStatusClick(option.key)" x-text="option.value"></button></li>
+                                </template>
+                                <hr class="dropdown-divider">
+                                <li><a class="dropdown-item fs-md" href="/home/#application-tracker-section">Open Application Tracker</a></li>
+                            </ul>
+                        </div>
+                    </template>
+                </div>
+        </template>
+        <template x-if="errorMessage">
+            <div class="error text-danger text-center" x-text="errorMessage"></div>
+        </template>
+        <template x-if="howToApplyText">
+            <div class="fs-xs text-center py-md">
+                <div class="fs-md fw-bold">Apply Instructions</div>
+                <div class="fs-sm howToApplyText-js" x-html="howToApplyText"></div>
+            </div>
+        </template>
+        <template x-if="!howToApplyText">
+                <div class="fs-xs text-gray-03 text-center">
+                    By clicking Apply Now you agree to <a
+                        class="text-decoration-underline" href="https://builtin.com/privacy-policy" target="_blank"
+                        rel="noopener" aria-label="Privacy Policy">share your profile information</a> with the hiring
+                    company.
+                </div>
+        </template>
+    </div>
+</div>
+
+    <div id="report-user-popup" x-data="reportJobModal">
+        <div class="modal fade report-modal-main pb-xl" id="reportJobModal" role="dialog" tabindex="-1" aria-labelledby="reportJobModalLabel" aria-hidden="true"><div class="modal-dialog font-Montserrat"><div class="modal-content"><div class="modal-header border-0 p-lg"><h5 class="modal-title fs-xl fw-bold text-midnight" id="reportJobModalLabel">Report a job</h5>
+                    <button type="button" class="btn btn-close" aria-label="Close" @click="closeReportModal"><i class="fa-regular text-gray-03 fs-md fa-close"></i></button></div>
+                <template x-if="!isFormSubmitted"><div><div class="modal-body pt-0 px-lg overflow-x-auto"><form id="jobReportForm" x-on:submit.prevent="submitReport" action="https://builtintech--bifull.sandbox.my.salesforce.com/servlet/servlet.WebToCase?encoding=UTF-8&amp;orgId=00DDd0000000Ptn"><div class="mb-sm"><label for="name" class="form-label text-midnight fs-md fw-semibold mb-sm">Contact Name</label>
+                                    <input id="name" class="form-control" x-model="report.name" maxlength="80" name="name" size="20" type="text" required></div>
+                                <div class="mb-sm"><label for="email" class="form-label text-midnight fs-md fw-semibold mb-sm" required>Email</label>
+                                    <input id="email" class="form-control" maxlength="80" x-model="report.email" name="email" size="20" type="email"></div>
+                                <div class="mb-sm text-gray-04 fs-md"><label class="form-label fs-md text-midnight fw-semibold mb-sm">What would you like to report?</label>
+                                    <select class="form-select" x-model="report.option"><option value disabled selected>--Please choose--</option>
+                                        <option value="no_longer_available">This job is no longer available</option>
+                                        <option value="incorrect_location">This is not fully-remote or this job has an incorrect location</option>
+                                        <option value="scam">This job is a scam/phishing/promoting an illegal service</option>
+                                        <option value="missing_salary_info">This job is in a state that legally requires salary info, but it is not showing a salary</option>
+                                        <option value="something_broken">Something is broken on this job (Ex. incorrect formatting, link broken, photo broken, etc.)</option>
+                                        <option value="other">Other</option></select></div>
+                                <div class="mb-lg"><label for="additionalDetails" class="form-label text-midnight fs-md fw-semibold mb-sm">Please provide any additional details you think we should know about.</label>
+                                    <textarea class="form-control" id="additionalDetails" x-model="report.details" rows="4" maxlength="400"></textarea>
+                                    <div class="form-text mt-0 fs-xs text-gray-04 text-end">(<span id="report-symbols-count" x-text="detailsTextCount">0</span>/400)</div></div></form></div>
+                        <div class="modal-footer border-gray-02 border-top p-md font-Montserrat"><button form="jobReportForm" type="submit" :disabled="isFormSubmitting || report.option === ''" class="btn btn-primary text-uppercase m-0 px-md py-sm">Submit</button></div></div></template>
+                <template x-if="isFormSubmitted"><div class="modal-body pt-0 pb-lg px-lg overflow-x-auto text-midnight fs-md"><template x-if="isAlreadyReported"><div>You have already reported this job. We will review it and take appropriate action.</div></template>
+                        <template x-if="!isAlreadyReported"><div>Thank you for reporting this job. We will review it and take appropriate action.</div></template></div></template></div></div></div>
+    </div>
+
+
+
+
+
+    <div id="job-apply-question" x-data="jobApplyQuestion"><div class="modal fade" id="jobApplyQuestion" tabindex="-1" aria-labelledby="jobApplyQuestion" aria-hidden="true"><div class="modal-dialog modal-lg py-lg-lg" :class="{'modal-dialog-centered': !isTopPosition}"><div class="modal-content pb-0"><div class="modal-header border-0 p-md pb-0 p-lg-lg pb-lg-0"><button type="button" class="btn btn-close" aria-label="Close" @click="closeModal(true)"><i class="fa-regular text-gray-03 fs-md fa-xmark"></i></button></div>
+                <div class="modal-body pb-0 px-lg-4xl"><div class="text-center mb-xs mb-lg-md"><i class="fa-regular fa-circle-exclamation-check fs-lg fs-lg-5xl text-shamrock"></i></div>
+
+                    <div class="text-midnight font-barlow fs-xl fs-lg-3xl fw-medium text-center">
+                        Did you apply to this <span x-text="jobTitle"></span> job at <span x-text="companyName"></span>?
+                    </div>
+
+                    <hr class="my-md my-lg-xl border-top-2"></div>
+                <div class="modal-footer border-top-0 d-block py-0 px-md p-lg-0"><div class="text-center m-0"><button type="button" class="btn btn-lg border-pretty-blue btn-app-primary bg-pretty-blue w-100 job-apply-question-button mb-sm mb-lg-0" @click="updateJobTrackerStatus()" :disabled="isLoading"><span x-text="isLoading ? 'Saving...' : 'Yes, I applied'"></span></button>
+                        <button type="button" class="btn btn-lg btn-outline-primary border-pretty-blue text-pretty-blue w-100 job-apply-question-button" @click="closeModal()">Maybe later
+                        </button></div>
+
+                    <div class="text-center pb-lg pb-lg-2xl text-midnight font-Montserrat fs-xs fs-lg-md m-0 pt-md pt-lg-lg">
+                        Keep your application tracker up-to-date.
+                    </div>
+                    <template x-if="error"><div class="text-danger font-Montserrat text-center fs-md mt-xs" x-text="error"></div></template></div></div></div></div></div>
+
+    </main>
+</div>
+<div>
+    <nav class="mobile-nav d-lg-none"><ul class="position-relative d-flex h-100 p-0 list-unstyled" style="z-index: 1"><li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/jobs" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-briefcase fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Jobs</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/companies" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-rocket-launch fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Companies</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/articles" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-newspaper fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Articles</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/home#application-tracker-section" onclick="bix.eventTracking.logBuiltinTrackEvent(&#x27;click_nav_apptracker&#x27;, {}); bootstrap.Modal.getInstance(document.getElementById(&#x27;moreModal&#x27;)).hide();" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-solid fa-chart-kanban fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Tracker</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><div class="d-flex flex-column h-100 w-100 align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#moreModal"><div class="text-center"><i class="fa-light fa-bars-staggered fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">More</div></div></li></ul></nav>
+<div class="modal fade mobile-nav-dialog" id="moreModal" tabindex="-1" aria-labelledby="moreModal" aria-hidden="true"><div class="modal-dialog modal-fullscreen-lg-down"><div class="modal-content"><div class="p-md border-bottom border-black"><img src="https://static.builtin.com/dist/images/midnight_9.svg" width="72" height="32" loading="lazy" alt="Built In" class="visible" /></div>
+            <div class="p-md bg-white"><ul class="more-links position-relative list-unstyled d-flex flex-column p-0"><li><a href="/jobs" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-briefcase fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Tech Jobs</div></a></li>
+                    <li><a href="/companies" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-rocket-launch fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Companies</div></a></li>
+                    <li><a href="/articles" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-newspaper fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Articles</div></a></li>
+                    <li><a href="/jobs/remote" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-signal-stream fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Remote</div></a></li></ul>
+                <div><a href="https://employers.builtin.com/membership?utm_medium=BIReferral&amp;utm_source=foremployers" class="btn bg-medium-blue text-white btn-lg fw-bold fs-sm text-uppercase w-100" role="button" aria-disabled="true">
+                        Post Job
+                    </a></div></div></div></div></div>
+</div>
+<footer class="footer">
+    <div class="bg-app-primary text-white"><div class="container"><div class="row footer-content gap-lg gap-md-sm pt-3xl mb-0 mb-md-3xl"><div class="col-md"><div class="mb-3xl"><a href="/"><img width="105px" height="47px" loading="lazy" src="https://static.builtin.com/dist/images/builtin-logo.svg" alt="BuiltIn" /></a></div>
+        <div class="mb-md pb-md border-bottom"><img width="177px" height="19px" loading="lazy" src="https://static.builtin.com/dist/images/united-we-tech.svg" alt="United We Tech" /></div>
+        <div class="text-white fs-sm mb-lg">
+            Built In is the online community for startups and tech companies. Find
+            startup jobs, tech news and events.
+        </div>
+        <div class="social-links d-flex gap-md"><a href="https://facebook.com/builtinhq" aria-label="facebook" target="_blank" class="nav-link"><i class="fa-brands fa-facebook fs-2xl"></i></a>
+            <a href="https://twitter.com/builtin" aria-label="twitter" target="_blank" class="nav-link"><i class="fa-brands fa-twitter fs-2xl"></i></a>
+            <a href="https://www.instagram.com/builtin" aria-label="instagram" target="_blank" class="nav-link"><i class="fa-brands fa-instagram fs-2xl"></i></a>
+            <a href="https://www.linkedin.com/company/3763094" aria-label="LinkedIn" target="_blank" class="nav-link"><i class="fa-brands fa-linkedin fs-2xl"></i></a></div></div>
+
+    <div class="col-md"><div id="block-about-menu" class="text-white mb-md font-barlow fw-medium fs-xl">About</div>
+        <nav role="navigation" aria-labelledby="block-about-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/our-story" target="_blank">
+                    Our Story
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://employers.builtin.com/careers/" target="_blank">
+                    Careers
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/our-staff" target="_blank">
+                    Our Staff Writers
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/content-descriptions" target="_blank">
+                    Content Descriptions
+                </a></div></nav></div>
+    <hr class="footer-hr px-lg">
+    <div class="col-md"><div id="block-getinvolved-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Get Involved</div>
+        <nav role="navigation" aria-labelledby="block-getinvolved-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular border-2 border-bottom border-mint special-footer-link" href="https://employers.builtin.com/membership?utm_medium=BIReferral&amp;utm_source=foremployers" target="_blank">
+                    Recruit With Built In
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/expert-contributors" target="_blank">
+                    Become an Expert Contributor
+                </a></div></nav></div>
+    <hr class="footer-hr">
+    <div class="col-md"><div id="block-resources-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Resources</div>
+        <nav role="navigation" aria-labelledby="block-resources-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://knowledgebase.builtin.com/s/">
+                    Customer Support
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://form.jotform.com/223044927257054">
+                    Share Feedback
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://knowledgebase.builtin.com/s/contactsupport">
+                    Report a Bug
+                </a></div></nav></div>
+    <hr class="footer-hr"><div class="col-md"><div id="block-poweredbybuiltin-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Tech Hubs</div>
+            <nav role="navigation" aria-labelledby="block-poweredbybuiltin-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtincalgary.org" target="_blank" rel="noopener noreferrer">Built In Calgary</a></div><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtinmontreal.com" target="_blank" rel="noopener noreferrer">Built In Montreal</a></div><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtinottawa.com" target="_blank" rel="noopener noreferrer">Built In Ottawa</a></div><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtintoronto.com" target="_blank" rel="noopener noreferrer">Built In Toronto</a></div><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtinvancouver.org" target="_blank" rel="noopener noreferrer">Built In Vancouver</a></div></nav></div>
+        <hr class="footer-hr"></div>
+<div class="footer-bottom-nav-container fs-xs py-lg "><nav role="navigation" aria-label="Footer Bottom Navigation" class="d-flex justify-content-between gap-md footer-bottom-nav"><a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/learning-lab-user-agreement">
+            Learning Lab User Agreement
+        </a>
+
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/accessibility-statement">
+            Accessibility Statement
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/copyright-policy">
+            Copyright Policy
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/privacy-policy">
+            Privacy Policy
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/community-terms-of-use">
+            Terms of Use
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular do-not-sell-my-info" href="https://builtin.com/california-do-not-sell-my-information">
+            Your Privacy Choices/Cookie Settings
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/ca-notice-collection">
+            CA Notice of Collection
+        </a></nav>
+    <div class="d-flex justify-content-center mt-lg"> © Built In 2025</div></div></div></div>
+</footer>
+
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script src="https://kit.fontawesome.com/e1bbd40aec.js" crossorigin="anonymous"></script>
+<script src="https://static.builtin.com/dist/js/common.bundle.js"></script>
+<script src="https://static.builtin.com/jobs/js/main.bundle.e85263e62ef5003060f7.js"></script>
+
+<script type="text/javascript">
+    (function (w) {
+        w.bix.eventTracking.init({
+            trackingBaseUrl: 'https://api.builtin.com',
+            trackingEventEndpoint: '/track/client-events',
+            trackingIdentityEndpoint: '/track/identity',
+            SubjectId: '3d75c66e-3264-496b-882e-43ccfad54d99',
+            UserId: '3190047',
+            DrupalUserId: '263247',
+            siteId: 27
+        });
+    })(window);
+</script>
+
+    <script src="https://static.builtin.com/dist/blaze/blaze-slider.min.js"></script>
+    <script src="https://static.builtin.com/my-items/js/main.bundle.js" async crossorigin></script>
+    <script type="module">
+        Builtin.jobPostInit({"job":{"id":8065176,"drupalId":8065176,"isSaved":false,"howToApply":"https://careers.servicenow.com/jobs/744000100270630/sr-business-analystprocess-consultant-servicenow-hr-and-workplace-service-delivery-solutions?trid=8dc3fc18-7d27-474f-af15-47b783076ace","companyName":"ServiceNow","title":"Sr. Business Analyst/Process Consultant, ServiceNow HR and Workplace Service Delivery Solutions","isEasyApply":false,"resolvedBidId":null},"siteId":27,"isApplyFormEnabled":false,"isResumeFormEnabled":false,"resumeMaxFileSize":2097152,"resumeAllowedFileExtensions":["pdf","docx"],"isLoggedIn":true,"salesforceData":{"orgId":"00D1a000000HjWM","actionUrl":"https://webto.salesforce.com/servlet/servlet.WebToCase?encoding=UTF-8\u0026orgId=00D1a000000HjWM","jobUrlFieldId":"00NVb000001IX1l"},"user":{"subjectId":"3d75c66e-3264-496b-882e-43ccfad54d99","name":"Angela Spring","email":"vanmila@gmail.com","phone":"4049924980"},"externalApiUrl":"https://api.builtin.com","jobTrackerStatus":"save"});
+    </script>
+    <div class="toast align-items-center text-bg-primary border-0 position-fixed z-1 bg-danger top-50 end-0 translate-middle-y " role="alert" id="form-server-error" aria-live="assertive" aria-atomic="true"><div class="d-flex justify-content-between"><div class="toast-body fw-bold">Oops, something went wrong. Please try again.</div>
+        <button type="button" class="btn btn-lg btn-close" data-bs-dismiss="toast" aria-label="Close"><i class="fa-regular fa-close fs-lg text-white"></i></button></div></div>
+
+<script type="text/javascript">
+    document.addEventListener('DOMContentLoaded', function () {
+        Alpine.start();
+    });
+</script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"rayId":"9b5f714b69b7a389","serverTiming":{"name":{"cfExtPri":true,"cfEdge":true,"cfOrigin":true,"cfL4":true,"cfSpeedBrain":true,"cfCacheStatus":true}},"version":"2025.9.1","token":"e6a1a608a36c4754bd2b15f7f399d199"}' crossorigin="anonymous"></script>
+</body>
+</html>

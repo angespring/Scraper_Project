@@ -173,7 +173,7 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
     # Avoid double timestamps if msg is already prefixed (e.g., upstream logger)
     #already_ts = bool(re.match(r"\[\d{4}-\d{2}-\d{2}", str(msg).lstrip()))
     head = f"{section:<22}"  # log_print already adds the timestamp
-    
+
     TS_PREFIX_WIDTH = 22  # "[YYYY-MM-DD HH:MM:SS] " (added by log_print)
     sub_indent = " " * (TS_PREFIX_WIDTH + len(head))
 
@@ -201,7 +201,7 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         pass
 
 # colors + painter
-RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m" 
+RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m"
 BRIGHT_GREEN = "\033[92m"
 
 def _ansi_ok() -> bool:
@@ -810,7 +810,7 @@ ALLOW_PM = True  # set True if you want Product Manager roles too
 # Sites that are *boards/aggregators* (do NOT use their site_name as company)
 BOARD_HOSTS = {
     "remotive.com", "weworkremotely.com", "nodesk.co", "workingnomads.com",
-    "remoteok.com", "builtin.com", "builtinvancouver.com", "simplyhired.com", 
+    "remoteok.com", "builtin.com", "builtinvancouver.com", "simplyhired.com",
     # "themuse.com",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
     "ycombinator.com", "remote.co", "angel.co", "wellfound.com", "stackoverflow.com",
     "jobspresso.co", "powertofly.com", "landing.jobs", "careerjet.com",
@@ -862,35 +862,80 @@ warnings.filterwarnings("ignore", category=UnknownTimezoneWarning)
 
 from urllib.parse import urlparse, parse_qsl, urlencode
 
+CASE_SENSITIVE_PATH_HOSTS = {
+    "ycombinator.com",
+}
+
+def _host_is_case_sensitive(host: str) -> bool:
+    h = (host or "").lower()
+    return any(dom in h for dom in CASE_SENSITIVE_PATH_HOSTS)
+
+def normalize_url_for_key(u: str) -> str:
+    """Stable URL for dedupe and job keys. Lowercase host always.
+    Lowercase path except for known case sensitive hosts (YC).
+    """
+    if not u:
+        return ""
+    p = urlparse(u.strip())
+
+    scheme = (p.scheme or "https").lower()
+    host = (p.netloc or "").lower()
+
+    path_raw = (p.path or "/").rstrip("/") or "/"
+    path = path_raw if _host_is_case_sensitive(host) else path_raw.lower()
+
+    # filter and sort query params for stability
+    drop = {"utm_source","utm_medium","utm_campaign","utm_term","utm_content",
+            "ref","referrer","source","_hsmi","_hsenc","gh_src","page","p","start"}
+    kept = [(k.lower(), v) for k, v in parse_qsl(p.query, keep_blank_values=True) if k.lower() not in drop]
+    kept.sort()
+
+    query = urlencode(kept, doseq=True)
+    return urlunparse((scheme, host, path, "", query, ""))
+
+
 def _job_key(details: dict, link: str) -> str:
     """
     Build a stable key so we only process the same job once per run.
 
     Normalize the URL so tracking/pagination params don't create new keys
-    for the same job.
+    for the same job, while preserving path casing (needed for some boards).
     """
-    job_url = details.get("Job URL") or details.get("job_url") or link
+    job_url = (details.get("Job URL") or details.get("job_url") or link or "").strip()
+    if not job_url:
+        return ""
 
     try:
         p = urlparse(job_url)
-        host = p.netloc.lower()
-        path = p.path.rstrip("/") or "/"
+
+        scheme = (p.scheme or "https").lower()
+        host = (p.netloc or "").lower()
+
+        # Preserve path casing, only normalize trailing slash
+        path = (p.path or "/").rstrip("/") or "/"
 
         drop = {
             "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
             "ref", "referrer", "source", "_hsmi", "_hsenc", "gh_src", "page", "p", "start",
         }
+
         kept = []
         for k, v in parse_qsl(p.query, keep_blank_values=True):
-            if k.lower() in drop:
+            k_norm = (k or "").lower()
+            if k_norm in drop:
                 continue
-            kept.append((k.lower(), v))
+            # Normalize key casing for stability; keep value as is
+            kept.append((k_norm, v))
 
-        q = urlencode(kept, doseq=True)
-        clean = urlunparse((p.scheme.lower(), host, path, "", q, ""))
-        return clean or job_url.lower()
+        kept.sort()
+        query = urlencode(kept, doseq=True)
+
+        clean = urlunparse((scheme, host, path, "", query, ""))
+        return clean or job_url
+
     except Exception:
-        return (job_url or link or "").lower()
+        # Last resort: preserve original URL casing
+        return job_url
 
 def parse_date_relaxed(s):
     """Parse many date strings while neutralizing stray 'tzname' tokens like 'WI' or 'IL'.
@@ -1030,6 +1075,47 @@ def company_from_jsonld(soup) -> str:
                 return name
     return ""
 
+_YC_JOB_PATH_RX = re.compile(r"^/companies/[^/]+/jobs/([^/?#]+)")
+
+def _infer_yc_title_from_job_url(job_url: str) -> str | None:
+    """
+    YC job URLs often follow:
+      /companies/<company-slug>/jobs/<job-slug>
+
+    Use the job slug as a fallback Title only when Title is missing.
+    """
+    if not job_url:
+        return None
+
+    try:
+        path = up.urlparse(job_url).path or ""
+    except Exception:
+        return None
+
+    m = _YC_JOB_PATH_RX.match(path)
+    if not m:
+        return None
+
+    slug = (m.group(1) or "").strip()
+    if not slug:
+        return None
+
+    raw = slug.replace("-", " ").strip()
+    if not raw:
+        return None
+
+    words = [w for w in raw.split() if w]
+    if not words:
+        return None
+
+    acronyms = {"ai", "ml", "ui", "ux", "qa", "pm", "po", "hr", "us", "uk", "eu"}
+    out = []
+    for w in words:
+        out.append(w.upper() if w.lower() in acronyms else w.capitalize())
+
+    return " ".join(out).strip() or None
+
+
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
     Convert a Workday listing URL into job detail links by querying the cxs JSON API.
@@ -1084,7 +1170,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
                     host = f"{tenant_guess}.{wd_num}.myworkdayjobs.com"
                     # optional: log_line("DEBUG", f".[WORKDAY] Sniffed tenant host: {host}")
         except Exception as e:
-            log_line("WARN", f".[WORKDAY] tenant sniff failed (error={e}, url={listing_url})")
+            log_print("WARN", f".[WORKDAY] tenant sniff failed (error={e}, url={listing_url})")
 
     # Infer tenant and site
     tenant = None
@@ -1103,7 +1189,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
             site = parts[0]
 
     if not tenant:
-        log_line(
+        log_print(
             "WARN",
             f".[WORKDAY] Could not infer tenant (host={host}, parts={parts}, url={listing_url}). "
             "Falling back to HTML link extraction (page 1 only)."
@@ -1578,7 +1664,7 @@ def parse_hubspot_list_page(html: str, base: str) -> list[str]:
 
         # Skip generic listing CTAs
         if "all open positions" in txt:
-            
+
             continue
 
         # Accept only real job details like /careers/jobs/<slug or id>
@@ -2490,7 +2576,7 @@ def _prefer_listing_location(details: dict, listing: dict) -> dict:
 
 
 def apply_builtin_salary(details: Dict[str, Any]) -> None:
-    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
+    job_url = details.get("job_url") or details.get("Job URL") or link or ""
     if "builtin" not in job_url:
         return
 
@@ -2688,7 +2774,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
         return details
 
 
-    
+
     # Final Built In Vancouver rule lock
     if "builtinvancouver.org" in host:
         loc_norm = (details.get("Location") or "").strip().lower()
@@ -2898,24 +2984,46 @@ def extract_job_details(html: str, job_url: str) -> dict:
             details.setdefault("Salary Range", sal_txt)
             details.setdefault("Salary Est. (Low-High)", sal_txt)
 
-    # YC: derive company from URL if possible
+    # YC: extract title/company from page (fallback to URL slug)
     if "ycombinator.com" in host:
-        from urllib.parse import urlparse as _yc_urlparse
+        # Title: prefer the page H1
+        h1 = soup.select_one("h1.ycdc-section-title")
+        if h1:
+            t = normalize_text(h1)
+            if t:
+                details["Title"] = t
+
+        # Company: prefer a visible company link/name on page
+        company_text = ""
         try:
-            parsed = _yc_urlparse(job_url)
-            parts = [p for p in parsed.path.split("/") if p]
+            # Common pattern: company name is a link to /companies/<slug>
+            a = soup.select_one('a[href^="/companies/"]')
+            if a:
+                company_text = normalize_text(a)
         except Exception:
-            parts = []
-        if "companies" in parts:
+            company_text = ""
+
+        if company_text:
+            details["Company"] = company_text
+        else:
+            # Fallback: derive from URL slug (only if page did not provide it)
+            from urllib.parse import urlparse as _yc_urlparse
             try:
-                idx = parts.index("companies")
-                if idx + 1 < len(parts):
-                    comp_slug = parts[idx + 1]
-                    comp_name = comp_slug.replace("-", " ").replace("_", " ").strip()
-                    if comp_name:
-                        company_from_header = comp_name
+                parsed = _yc_urlparse(job_url)
+                parts = [p for p in parsed.path.split("/") if p]
             except Exception:
-                pass
+                parts = []
+
+            if "companies" in parts:
+                try:
+                    idx = parts.index("companies")
+                    if idx + 1 < len(parts):
+                        comp_slug = parts[idx + 1]
+                        comp_name = comp_slug.replace("-", " ").replace("_", " ").strip()
+                        if comp_name:
+                            details.setdefault("Company", comp_name)
+                except Exception:
+                    pass
 
     def _is_bad_title(t: str) -> bool:
         if not t:
@@ -3530,7 +3638,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
             if loc_text:
                 details["Location"] = loc_text
-            
+
             if "builtinvancouver.org" in host and loc_text:
                 details["BIV Tooltip Location Count"] = loc_text.count("/") + 1
 
@@ -3609,7 +3717,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
         except Exception:
             # Best effort only, do not break the scraper if Built In changes their JSON
             pass
-    
+
     # If we have a Posted label but no Posting Date, derive it
     if not (details.get("Posting Date") or "").strip():
         posted = (details.get("Posted") or details.get("posted") or "").strip()
@@ -3692,7 +3800,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
             company_final = fallback
     if "builtin.com" in host:
         company_final = _strip_builtin_brand(company_final)
-    details["Company"] = company_final or "No Company Found"
+    if not details.get("Company"):
+        details["Company"] = company_final or "No Company Found"
 
     # Final title cleanup based on company
     details["Title"] = normalize_title(details.get("Title"), details.get("Company"))
@@ -4653,7 +4762,7 @@ def _fmt_salary_line(row: dict) -> str:
     # 6) Placeholder is things like “Competitive salary”, when no numbers exist
     if placeholder:
         parts.append(placeholder)
-    
+
     if status == "signal_only":
         parts.append("salary mentioned")
 
@@ -4756,7 +4865,7 @@ def _derive_company_and_title(d: dict, html: str | None = None) -> dict:
                             pass
             except Exception:
                 pass
-                
+
         # …after title-pattern checks…
         if not company and html:
             try:
@@ -4937,7 +5046,7 @@ STARTING_PAGES = [
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
     "https://builtinvancouver.org/jobs/product-management/product-manager",
 
-    
+
 
     # HubSpot (server-rendered listings; crawl like a board)
     #"https://www.hubspot.com/careers/jobs?q=product&;page=1",
@@ -5040,7 +5149,7 @@ STARTING_PAGES = [
     "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section"
     "https://app.welcometothejungle.com/companies/Clari#jobs-section"
     "https://app.welcometothejungle.com/companies/Confluent#jobs-section"
-    "https://app.welcometothejungle.com/companies/DataDog#jobs-section" 
+    "https://app.welcometothejungle.com/companies/DataDog#jobs-section"
     "https://app.welcometothejungle.com/companies/Dataminr#jobs-section"
     "https://app.welcometothejungle.com/companies/Expensify#jobs-section"
     "https://app.welcometothejungle.com/companies/Figma#jobs-section"
@@ -5347,7 +5456,7 @@ def fetch_workday_json_jobs(api_base, payload):
 
     return _safe_resp_json(resp, context=f".[WORKDAY] api json (api={api_base})") or {}
 
-    
+
 
 
 def _safe_resp_json(resp, context: str = "") -> dict:
@@ -5795,7 +5904,7 @@ def career_board_name(url: str) -> str:
         "www.builtin.com": "Built In",
         "builtinvancouver.org": "Built In Vancouver",
         "www.builtinvancouver.org": "Built In Vancouver",
-        "wellfound.com": "Wellfound (Wellfound)",        
+        "wellfound.com": "Wellfound (Wellfound)",
         "welcometothejungle.com": "Welcome to the Jungle",
         "app.welcometothejungle.com": "Welcome to the Jungle",
         "ashbyhq.com": "Ashby",
@@ -5842,7 +5951,7 @@ def is_job_detail_url(u: str) -> bool:
         # Real job pages look like: /job-listing/<slug>-<id>.htm
         # Search pages look like:    /Job/<query>... (we should skip these)
         return path.startswith("/job-listing/")
-    
+
 
     # We Work Remotely
     if "weworkremotely.com" in host:
@@ -5891,7 +6000,7 @@ def is_job_detail_url(u: str) -> bool:
     if "welcometothejungle.com" in host or "app.welcometothejungle.com" in host:
         # e.g., /en/companies/<company>/jobs/<slug> or /en/jobs/<id>
         return "/jobs/" in path and not path.endswith("/jobs") and path.count("/") >= 3
-    
+
     # Dice
     if "dice.com" in host:
         # Real job pages look like /job-detail/...; search pages use /jobs
@@ -5916,7 +6025,7 @@ def is_job_detail_url(u: str) -> bool:
    # Y Combinator
     if "ycombinator.com" in host:
         return path.startswith("/companies/") and "/jobs/" in path and path.count("/") >= 3
-    
+
     # Workday (incl. myworkdaysite)
     if "workday.com" in host or "myworkdaysite.com" in host:
         # Real job pages look like .../job/...; search/list pages are .../search
@@ -6260,7 +6369,7 @@ def normalize_title(t: str, company: str | None = None) -> str:
         return " - ".join(parts[1:]).strip()
 
     return t
- 
+
 
 PLACEHOLDER_RX = re.compile(r"search by company rss feeds public api", re.I)
 
@@ -6364,7 +6473,7 @@ def best_location_for_display(ld: dict, chips: str, scraped_loc: str, default_co
         # Otherwise return the most informative token (or the first)
         if tokens:
             return tokens[0]
-        
+
 
     # 2) LD-JSON locations
     locs = ld.get("locations") or []
@@ -6403,7 +6512,7 @@ def _normalize_company_name(s: str) -> str:
 #    except AttributeError:
 #        # None or plain string
 #        return str(node or "")
-    
+
 def _safe_node_text(node):
     return " ".join(node.get_text(" ", strip=True).split()) if node else ""
 
@@ -6628,7 +6737,7 @@ def _normalize_canada_provinces_in_details(details: dict) -> None:
 
 def _derive_location_rules(details: dict) -> dict:
     loc = details.get("Location", "") or details.get("display_location", "")
-    job_url = (details.get("job_url") or details.get("Job URL") or "").lower()
+    job_url = details.get("job_url") or details.get("Job URL") or link or ""
 
     text = " ".join([
         details.get("page_text") or "",
@@ -6855,7 +6964,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         if status == "signal_only":
             return "signal_only"
         return "missing_salary"
-    
+
     def _salary_variants(n: int) -> list[str]:
         # Variants you will commonly see in HTML
         return [
@@ -6880,10 +6989,10 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
             s_from = d.get("Salary From")
             s_text = (d.get("Salary Text") or "").lower()
             if (
-                isinstance(s_from, (int, float)) 
-                and s_from < 1000 
-                and "hour" not in s_text 
-                and "/hr" not in s_text 
+                isinstance(s_from, (int, float))
+                and s_from < 1000
+                and "hour" not in s_text
+                and "/hr" not in s_text
                 and "per hour" not in s_text
             ):
                 for k in ["Salary From", "Salary To", "Salary Range", "Salary Text", "Salary Source"]:
@@ -6989,6 +7098,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
                 "BIV DEBUG",
                 f"⚠️ No range match in flat blob preview={preview!r}"
             )
+
 
 
 
@@ -7107,7 +7217,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     dollar_candidates: list[int] = []
     k_candidates: list[int] = []
 
-    
+
     # Seed candidates with any explicit Workday min / max if present.
     # Some runs hit an UnboundLocalError on workday_min/workday_max due to scoping,
     # so guard access and fall back to None.
@@ -7324,7 +7434,7 @@ def _autoscroll_listing(page,
         last_count = new_count
 
     return len(page.query_selector_all(link_css))
-    
+
 
 from playwright.sync_api import sync_playwright
 from urllib import parse as up
@@ -7375,13 +7485,26 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 last_exc = None
                 for attempt in range(1, 4):  # up to 3 attempts
                     try:
-                        page.goto(
+                        resp = page.goto(
                             url,
                             timeout=PW_GOTO_TIMEOUT,
                             wait_until="domcontentloaded",
                         )
+
+                        """ removed 20261215 - this was just for debugging YC routing and block detection, but it was too noisy in the logs
+                        # DEBUG: YC routing and block detection (runs only when goto succeeded)
+                        if "ycombinator.com" in (up.urlparse(url).netloc or "").lower():
+                            status = resp.status if resp else None
+                            log_event("DEBUG", f"YC goto status={status} requested={url} final={page.url}")
+                            try:
+                                log_event("DEBUG", f"YC page title: {page.title()}")
+                            except Exception:
+                                pass
+
                         last_exc = None
                         break
+                        """
+
                     except Exception as e:
                         last_exc = e
                         msg = str(e)
@@ -7396,6 +7519,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             )
                             time.sleep(3 * attempt)
                             continue
+
                         # non transient or last attempt
                         raise
 
@@ -7410,10 +7534,16 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                     parsed = up.urlparse(url)
                     host = parsed.netloc.lower()
                     path = parsed.path or "/"
-                    #log_event("DEBUG", f"Playwright host={host} path={path} url={url}")    ignored 20251215    
+                    #log_event("DEBUG", f"Playwright host={host} path={path} url={url}")    ignored 20251215
                 except Exception:
                     host = ""
                     path = "/"
+
+                """ removed 20260108 - this was just for debugging YC routing and block detection, but it was too noisy in the logs
+                if "ycombinator.com" in host:
+                    log_event("DEBUG", f"PW YC fetch active: {url}")
+                 """
+
 
                 # ---------------------------
                 # 3. Host specific behavior
@@ -7432,6 +7562,16 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                     elif host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
                         # Workday often needs a bit of extra time
                         page.wait_for_timeout(1200)
+
+                    elif host.endswith("ycombinator.com") or host.endswith("www.ycombinator.com"):
+                        # YC is React. We need to wait for the rendered job header.
+                        page.wait_for_selector(
+                            "h1.ycdc-section-title",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+                        # Optional: small pause to let adjacent fields render consistently
+                        page.wait_for_timeout(300)
+
 
                     elif host.endswith("wellfound.com"):
                         page.wait_for_selector(
@@ -7578,7 +7718,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 except Exception:
                     pass
 
-                #log_event("DEBUG", f"Playwright returned HTML for {url}")       ignored 20251215    
+                #log_event("DEBUG", f"Playwright returned HTML for {url}")       ignored 20251215
                 return html
 
             finally:
@@ -7653,7 +7793,7 @@ def expand_career_sources():
             _bk_log_wrap("[WARN", f" ]{DOT3}{DOTW}Could not fetch: {url}")
             continue
 
-        
+
         soup = BeautifulSoup(html, "html.parser")
         found = set()
 
@@ -8044,7 +8184,7 @@ INCLUDE_TITLES_EXACT = [
     #r"\bbusiness technology analyst\b",
     r"\bscrum master\b",
     r"\brelease train engineer\b", r"\brte\b",
-    
+
 ]
 
 # looser title hits we will allow only if responsibilities also match
@@ -8415,7 +8555,7 @@ BOARD_MAP = {
 
 def _as_str(x) -> str:
     if isinstance(x, (bytes, bytearray)):
-        try: 
+        try:
             return x.decode("utf-8", "ignore")
         except Exception:
             return str(x)
@@ -8720,7 +8860,7 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
                 break
         if not script_txt:
             return details
-        
+
         for s in soup.find_all("script"):
             raw = s.string or s.get_text() or ""
             if not raw:
@@ -8953,12 +9093,12 @@ def _normalize_job_defaults(d: dict) -> dict:
       - d["Posting Date"], d["Valid Through"] for CSV
       - d["Posted"] as a relative label when possible
     """
-    
+
     #if DEBUG_LOCATION:
         #log_line("DEBUG", "[TRACE] entered _normalize_job_defaults")
 
     d = dict(d or {})
-        
+
     from datetime import datetime
 
     d = dict(d or {})
@@ -9124,9 +9264,11 @@ def _normalize_job_defaults(d: dict) -> dict:
 def link_key(u: str) -> str:
     """
     Stable key so duplicate listing and detail URLs collapse across boards.
-    - lowercases host and path
+    - lowercases host
+    - lowercases path for most boards
+    - preserves path casing for case-sensitive boards (YC)
     - strips 'www.' and trailing slashes
-    - drops tracking or paging query params (utm_*, ref, source, page, p, start)
+    - drops tracking or paging query params
     - ignores fragments
     """
     p = urlparse(str(u or ""))
@@ -9134,7 +9276,8 @@ def link_key(u: str) -> str:
     if host.startswith("www."):
         host = host[4:]
 
-    path = (p.path or "").rstrip("/").lower()
+    path_raw = (p.path or "").rstrip("/") or "/"
+    path = path_raw if "ycombinator.com" in host else path_raw.lower()
 
     drop = {
         "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -9241,7 +9384,7 @@ def _conf_box(visibility: str | None, score: int | str | None, mark: str | None 
     # Pad the label so “PUBLIC” and “QUIET” align; leave one space before score block
     label = f"{icon} {vis:<6}{sc}"
     return _box(label)
-    
+
 
 import re  # make sure this is available at top-of-file
 # ===== console helpers (place just above def log_event) =====
@@ -9474,7 +9617,7 @@ def log_event(level: str,
             loc_line = f"{remote_term} Location: {loc}."
             for ln in _wrap_lines(loc_line, width=width):
                 log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
-        
+
         # --- Always show Salary line with fixed 22-cell width ---
         salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
         log_print(f"{color}{_box('SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
@@ -9527,7 +9670,7 @@ def _make_skip_row(link: str, reason: str, details: dict | None = None) -> dict:
             base[k] = d[k]
 
     return _normalize_skip_defaults(base)
-    
+
 # alias so older call sites without the underscore still work
 # keep the public alias consistent
 def log_and_record_skip(link: str, rule_reason: str | None = None, keep_row: dict | None = None) -> None:
@@ -9731,7 +9874,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     if getattr(args, "test_url", ""):
         _debug_single_url(args.test_url)
         return
-    
+
     # Optional SMOKE presets
 #    # make these globals visible outside main()
     global SMOKE, PAGE_CAP, LINK_CAP, LIST_LINKS, SALARY_FLOOR, SOFT_SALARY_FLOOR, SALARY_CEIL
@@ -9781,7 +9924,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     )
 
     seen_keys_this_run: set[str] = set()
-  
+
     # 1) Build the final set of listing pages
     pages = list(STARTING_PAGES)
 
@@ -9817,33 +9960,29 @@ def main(args: argparse.Namespace | None = None) -> None:
 
 
     def _norm_url(u: str) -> str:
-        from urllib.parse import urlparse, urlunparse, parse_qsl
+        from urllib.parse import urlparse, urlunparse
 
         if not u:
             return ""
 
-        # Ensure it's a clean string
         u = str(u).strip().replace(" ", "")
-
         p = urlparse(u)
 
-        # Lowercase host and path, remove trailing slashes, fragments, query params
-        clean_path = p.path.strip().rstrip("/").lower()
+        host = (p.netloc or "").lower()
 
-        # Strip all query params (utm_, ref, etc.)
+        path_raw = (p.path or "/").strip().rstrip("/") or "/"
+        clean_path = path_raw if "ycombinator.com" in host else path_raw.lower()
+
         clean = urlunparse((
-            p.scheme.lower(),
-            p.netloc.lower(),
+            (p.scheme or "https").lower(),
+            host,
             clean_path,
             "", "", ""
         ))
-
         return clean
 
     from urllib.parse import urlparse, parse_qsl, urlencode  # (at top of file if not already imported)
 
-    
-    
 
     # De-duplicate by normalized link key
     _seen = set()
@@ -9866,7 +10005,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         set_source_tag(listing_url)
         html = get_html(listing_url)
         if not html:
-            log_line("WARN", f"{DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
+            log_print(f"{_box('WARN')} {DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
             continue
 
         # derive host safely from the listing URL
@@ -9888,7 +10027,7 @@ def main(args: argparse.Namespace | None = None) -> None:
             all_detail_links.extend(links)
             continue
 
-        
+
         # Workday listing → detail expansion (Ascensus and similar tenants)
         if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
             # First try JSON expansion
@@ -9922,7 +10061,7 @@ def main(args: argparse.Namespace | None = None) -> None:
 
             else:
                 links = find_job_links(html, listing_url)
-            
+
             if "dice.com/jobs" in listing_url:
                 links = collect_dice_links(listing_url, max_pages=25)
             elif "hubspot.com/careers/jobs" in listing_url:
@@ -9969,25 +10108,44 @@ def main(args: argparse.Namespace | None = None) -> None:
     from urllib.parse import urlparse, urlunparse
     import re
 
+    from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
     def _normalize_link(url: str) -> str:
+        """
+        Normalize links for dedupe while preserving case-sensitive paths (YC).
+        - Lowercase scheme and host
+        - Preserve path casing for ycombinator.com, lowercase path elsewhere
+        - Strip obvious tracking params
+        - Sort kept query params for stability
+        """
         if not url:
             return ""
-        u = str(url).strip()
+
+        u = str(url).strip().replace(" ", "")
         p = urlparse(u)
-        path = p.path.rstrip("/").lower()
-        query = re.sub(r"(utm_[^=&]+|gh_src|ref|referrer|source)=.*?(&|$)", "", p.query, flags=re.I)
-        query = re.sub(r"&{2,}", "&", query).strip("&?")
-        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", query, ""))
 
-    deduped, seen = [], set()
-    for link in all_detail_links:
-        norm = _normalize_link(link)
-        if norm in seen:
-            continue
-        seen.add(norm)
-        deduped.append(link)
+        scheme = (p.scheme or "https").lower()
+        host = (p.netloc or "").lower()
 
-    all_detail_links = deduped
+        path_raw = (p.path or "/").rstrip("/") or "/"
+        path = path_raw if "ycombinator.com" in host else path_raw.lower()
+
+        drop = {
+            "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+            "ref", "referrer", "source", "_hsmi", "_hsenc", "gh_src", "page", "p", "start",
+        }
+
+        kept = []
+        for k, v in parse_qsl(p.query or "", keep_blank_values=True):
+            k_norm = (k or "").lower()
+            if k_norm in drop:
+                continue
+            kept.append((k_norm, v))
+
+        kept.sort()
+        q = urlencode(kept, doseq=True)
+
+        return urlunparse((scheme, host, path, "", q, ""))
 
     # === HARD DEDUPE AFTER EXPANSIONS, BEFORE PROGRESS TOTALS ===
     from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
@@ -10060,7 +10218,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     if LIST_LINKS:
         info(f".LIST links: {len(all_detail_links)} after dedupe/cap (showing below)")
         for idx, url in enumerate(all_detail_links, start=1):
-            log_line("LIST", f"{idx:02d}. {url}")
+            log_print(f"{_box('LIST')} {idx:02d}. {url}")
         return
 
     total = len(all_detail_links)
@@ -10107,8 +10265,23 @@ def main(args: argparse.Namespace | None = None) -> None:
                     _log_and_record_skip(link, default_reason, skip_row or {"Job URL": link})
                     continue
 
+                if "ycombinator.com" in link:
+                    html_now = html or ""
+                    has_h1 = "ycdc-section-title" in html_now
+                    #log_event("YC HTML", f"len={len(html_now)} | has_ycdc_h1={has_h1}")        #removed 20260108- activate if you want to log the length of the HTML and whether it contains the expected H1 element for YC job pages.
+
+                    # One time dump to inspect the returned HTML
+                    try:
+                        with open("yc_debug.html", "w", encoding="utf-8") as f:
+                            f.write(html_now)
+                    except Exception:
+                        pass
+
                 # B) we have HTML -> parse details and enrich salary
                 details = extract_job_details(html, link)
+
+                #if "ycombinator.com" in link:
+                    #log_line("YC TAP", f"Company={details.get('Company')!r} | Title={details.get('Title')!r} | job_url={details.get('job_url')!r}")        #removed 20260108- activate if you want to log the company, title, and job URL for each YC job page.
 
                 listing = listing_ctx_by_url.get(link, {})
                 details = _prefer_listing_location(details, listing)
@@ -10268,7 +10441,14 @@ def main(args: argparse.Namespace | None = None) -> None:
                 # IMPORTANT: carry Canada Rule into the row used by the classifier
                 keep_row["Canada Rule"] = keep_row_normalized.get("Canada Rule") or details.get("Canada Rule", "")
 
-                
+                # YC fallback: ensure core fields are present for classification when Title is missing.
+                if not (keep_row.get("Title") or "").strip():
+                    job_url = (keep_row.get("Job URL") or "").strip()
+                    inferred_title = _infer_yc_title_from_job_url(job_url)
+                    if inferred_title:
+                        keep_row["Title"] = inferred_title
+
+
                 # Classification via the new rules helper
                 row_for_classification = {
                     **keep_row,
@@ -10285,7 +10465,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                     )
 
                 if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
-                    log_line("ROW CHECK", f"{DOT6}US Rule= {row_for_classification.get('US Rule')} "
+                    log_print(f"{_box('ROW CHECK')} {DOT6}US Rule= {row_for_classification.get('US Rule')} "
                         f" |  Location= {row_for_classification.get('Location')}"
                         f" |  US Rule= {row_for_classification.get('US Rule')} "
                     )
@@ -10356,7 +10536,7 @@ def main(args: argparse.Namespace | None = None) -> None:
                         _log_keep_to_terminal(keep_row)
                     job = keep_row
 
-                    
+
             except Exception as e:
                 # Catch ANY unexpected error for this job and record it
                 tb_str = traceback.format_exc()
@@ -10514,11 +10694,11 @@ def maybe_push_to_git(prompt: bool = True, auto_msg: str | None = None):
         #progress_clear_if_needed()
         info(f".Not a Git repo. Skipping push.")
         return
-    
+
     if not _git_has_changes(root):
         info(f".No file changes to commit.")
         return
-    
+
     # The ONLY interactive prompt
     if prompt:
         ans = input("Push code updates to GitHub now? [y/n] ").strip().lower()

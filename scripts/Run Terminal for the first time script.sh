@@ -20,10 +20,12 @@ python3 po_job_scraper.py
 
 #OR
 
-python po_job_scraper.py --smoke
+PW_FAST_MODE=1 python po_job_scraper.py --smoke
 
-python po_job_scraper.py --test-url "https://app.welcometothejungle.com/jobs/PybD0oWI"
+PW_FAST_MODE=1 python3 po_job_scraper.py --test-url "https://app.welcometothejungle.com/jobs/PybD0oWI"
 
+
+PW_FAST_MODE=1 python po_job_scraper.py --only workingnomads --limit-pages 1 --limit-links 50
 
 
 #Capture logs to a file so you can scan failures fast in the morning:

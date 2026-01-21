@@ -1,0 +1,661 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="description" content="Caterpillar is hiring for a Digital Product Owner, Fleet Management in Peoria, IL, USA. Find more details about the job and how to apply at Built In."/>
+        <meta name="robots" content="index, follow"/>
+    <title>Digital Product Owner, Fleet Management - Caterpillar | Built In</title>
+    <link rel="icon" type="image/x-icon" href="https://static.builtin.com/dist/images/favicon.png">
+        <link rel="canonical" href="https://builtin.com/job/digital-product-owner-fleet-management/7643263"/>
+    <link rel="dns-prefetch" href="https://www.googletagmanager.com/">
+    <link rel="preload" href="https://static.builtin.com/dist/fonts/barlow-condensed-v12-latin-regular.woff2" as="font"
+          type="font/woff2" crossorigin>
+    <link rel="preload" href="https://static.builtin.com/dist/fonts/montserrat-v25-latin-regular.woff2" as="font"
+          type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="https://static.builtin.com/jobs/css/main.bundle.7561e9a1673b2a55adb9.css">
+    <script>
+        (function (w, d, s, l, i) {
+            w[l] = w[l] || [];
+            w[l].push({
+                'gtm.start':
+                    new Date().getTime(), event: 'gtm.js'
+            });
+            var f = d.getElementsByTagName(s)[0],
+                j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : '';
+            j.async = true;
+            j.src =
+                'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+            f.parentNode.insertBefore(j, f);
+        })(window, document, 'script', 'dataLayer', 'GTM-M7NGJ28');
+    </script>
+    
+    <link rel="stylesheet" href="https://static.builtin.com/dist/blaze/blaze.css" media="print"
+          onload="this.media='all'">
+        <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@graph": [{"EducationRequirements":{"@type":"EducationalOccupationalCredential","credentialCategory":"Bachelor Degree","@context":"https://schema.org"},"@type":"JobPosting","title":"Digital Product Owner, Fleet Management","description":"<strong>Career Area:</strong><br>Technology, Digital and Data<br><strong>Job Description:</strong><br><strong>Your Work Shapes the World at Caterpillar Inc. </strong><br>When you join Caterpillar, you're joining a global team who cares not just about the work we do - but also about each other. We are the makers, problem solvers, and future world builders who are creating stronger, more sustainable communities. We don't just talk about progress and innovation here - we make it happen, with our customers, where we work and live. Together, we are building a better world, so we can all enjoy living in it.<br>Cat Digital is the digital and technology arm of Caterpillar Inc., leveraging the latest technologies to build industry leading digital solutions for our customers and dealers. With over 1.5 million connected assets worldwide, our teams use data, technology, advanced analytics, telematics, and AI capabilities to help our customers build a better, more sustainable world.<br><strong>Job Summary:</strong><br>As a Product Owner on the VisionLink team, you'll help shape the future of connected full-fleet management, with a focus on <strong>regulatory compliance</strong>. You'll work at the intersection of technology, transportation, and regulation - building solutions that simplify compliance, enhance visibility, and empower fleet operators to stay ahead of the curve.<br>This role includes ownership of features that support <strong>mobile app experiences</strong> for drivers and operators - making sure the tools they use on the road are intuitive, reliable, and built with their real-world needs in mind. Whether it's emissions reporting or daily vehicle checks, you'll help deliver functionality that works where it matters most.<br><strong>What You Will Do:</strong><br><ul><li>Translate customer needs into user stories that are clear, actionable, and occasionally poetic.</li><li>Coordinates with product development engineers to track and communicate design, development, support, and maintenance problems and solutions.</li><li>Identifies, documents, and reports design, reliability and maintenance problems and bugs. Gathers and consolidates feedback from customers and field staff.</li><li>Coordinates with field support specialists and customers to address and resolve problems and expand product usage.</li></ul><br><strong>What You Will Have:</strong><br><ul><li><strong>Business Analysis:</strong> Working knowledge of business analysis and the set of tasks, techniques and tools required to identify business needs; ability to recommend solutions that deliver value to stakeholders.</li><li><strong>Decision Making and Critical Thinking:</strong> Extensive experience of the decision-making process and associated tools and techniques; ability to accurately analyze situations and reach productive decisions based on informed judgment.</li><li><strong>Effective Communications:</strong> Extensive understanding of effective communication concepts, tools and techniques; ability to effectively transmit, receive, and accurately interpret ideas, information, and needs through the application of appropriate communication behaviors.</li><li><strong>User Acceptance Testing (UAT):</strong> Extensive knowledge of UAT activities, tasks, tools and techniques; ability to design, implement and evaluate acceptance tests for end-users.</li></ul><br><strong>Considerations For Top Candidates:</strong><br>We're looking for someone who's ready to level up - not entry-level, but not yet leading the charge solo. To stand out, you should be able to <strong>demonstrate experience</strong> in:<br><ul><li><strong>Full-Fleet Knowledge</strong>: You've worked with or supported products related to commercial vehicles, fleet operations, or transportation systems.</li><li><strong>Regulatory Awareness</strong>: You've had exposure to emissions standards, compliance reporting, or similar regulatory frameworks - and you understand why they matter.</li><li><strong>Customer-Focused Problem Solving</strong>: You've helped translate customer needs into product features, especially in complex or regulated environments.</li><li><strong>Data-Informed Decision Making</strong>: You've used data to guide product choices, validate assumptions, and measure success.</li><li><strong>Team Collaboration</strong>: You've worked across disciplines to deliver solutions, and you know how to keep everyone aligned (even when the rules change mid-sprint).</li></ul><br>If you've got a few wins under your belt and are excited to tackle real-world challenges in fleet compliance, we'd love to hear from you - especially if you've ever said, \"There's got to be a better way to do this,\" and then built it.<br><strong>Additional Information:</strong><br>This position will have the option to be based out of our Chicago, IL; Peoria, IL or Denver, CO offices. <br>#LI <br>#BI (used to post on Built In Chicago)<br><strong>What You Will Get:</strong><br>Working with a Fortune 100 leader, you can build your career on a global scale and take advantage of development opportunities with emerging technologies. We've created an inclusive environment for you to explore your passions, make an impact and do the work that really matters. Join Us.<br><strong>About Caterpillar </strong><br>Caterpillar Inc. is the world's leading manufacturer of construction and mining equipment, off-highway diesel and natural gas engines, industrial gas turbines and diesel-electric locomotives. For nearly 100 years, we've been helping customers build a better, more sustainable world and are committed and contributing to a reduced-carbon future. Our innovative products and services, backed by our global dealer network, provide exceptional value that helps customers succeed.<br><strong>Summary Pay Range:</strong><br>$95,640.00 - $155,400.00<br>Compensation and benefits offered may vary depending on multiple individualized factors, job level, market location, job-related knowledge, skills, individual performance and experience. Please note that salary is only one component of total compensation at Caterpillar. <br><strong>Benefits:</strong><br>Subject to plan eligibility, terms, and guidelines. This is a summary list of benefits.<br><ul><li>Medical, dental, and vision benefits*</li><li>Paid time off plan (Vacation, Holidays, Volunteer, etc.)*</li><li>401(k) savings plans*</li><li>Health Savings Account (HSA)*</li><li>Flexible Spending Accounts (FSAs)*</li><li>Health Lifestyle Programs*</li><li>Employee Assistance Program*</li><li>Voluntary Benefits and Employee Discounts*</li><li>Career Development*</li><li>Incentive bonus*</li><li>Disability benefits</li><li>Life Insurance</li><li>Parental leave</li><li>Adoption benefits</li><li>Tuition Reimbursement</li></ul><br>* These benefits also apply to part-time employees<br>Visa Sponsorship is not available for this position. This employer is not currently hiring foreign national applicants that require or will require sponsorship tied to a specific employer, such as, H, L, TN, F, J, E, O. As a global company, Caterpillar offers many job opportunities outside of the U.S which can be found through our employment website at www.caterpillar.com/careers.<br><strong>Posting Dates:</strong><br>January 16, 2026 - January 25, 2026<br>Any offer of employment is conditioned upon the successful completion of a drug screen. <br>Caterpillar is an Equal Opportunity Employer, Including Veterans and Individuals with Disabilities. Qualified applicants of any age are encouraged to apply.<br>Not ready to apply? Join our Talent Community.","directApply":false,"identifier":{"@type":"PropertyValue","name":"Caterpillar","value":"7643263"},"baseSalary":{"@type":"MonetaryAmount","currency":"USD","value":{"@type":"QuantitativeValue","minValue":95640,"maxValue":155400,"unitText":"YEAR"}},"datePosted":"2026-01-17","employmentType":"FULL_TIME","experienceRequirements":{"@type":"OccupationalExperienceRequirements","monthsOfExperience":60},"applicantLocationRequirements":{"@type":"Country","name":"USA"},"hiringOrganization":{"@type":"Organization","name":"Caterpillar","sameAs":"https://builtin.com/company/caterpillar","logo":{"@type":"ImageObject","url":"https://builtin.com/sites/www.builtin.com/files/2021-04/CLogo_2.png","representativeOfPage":true}},"industry":["Artificial Intelligence","Cloud","Internet of Things","Software","Cybersecurity","Industrial"],"jobBenefits":"401(K), 401(K) matching, Adoption Assistance, Commuter benefits, Company equity, Company-sponsored outings, Customized development tracks, Dedicated diversity and inclusion staff, Dental insurance, Disability insurance, Documented equal pay policy, Volunteer in local community, Family medical leave, Flexible Spending Account (FSA), Flexible work schedule, Generous parental leave, Generous PTO, Health insurance, Job training & conferences, Open door policy, Life insurance, Charitable contribution matching, Paid volunteer time, Online course subscriptions available, Onsite gym, Open office floor plan, Paid holidays, Paid industry certifications, Paid sick days, Partners with nonprofits, Performance bonus, Pet insurance, Promote from within, Recreational clubs, Lunch and learns, Remote work program, Team based strategic planning, OKR operational model, Continuing education available during work hours, Tuition reimbursement, Mandated unconscious bias training, Vision insurance, Wellness programs, Mental health benefits, Diversity employee resource groups, Hiring practices that promote diversity, Employee resource groups, Hybrid work model, Employee awards, Pay transparency, Virtual coaching services, Floating holidays, Bereavement leave benefits","jobLocation":{"@type":"Place","address":{"@type":"PostalAddress","addressCountry":"USA","addressLocality":"Peoria","addressRegion":"Illinois","postalCode":"61629"},"geo":{"@type":"GeoCoordinates","latitude":40.694592,"longitude":-89.590362}},"validThrough":"2026-02-16T00:31:48+00:00"}]
+    }
+        </script>
+
+</head>
+<body>
+<noscript>
+    <iframe src="https://www.googletagmanager.com/ns.html?id=GTM-M7NGJ28" height="0" width="0"
+            style="display:none;visibility:hidden"></iframe>
+</noscript>
+<header class="header sticky-top">
+    <div id="international-header" class="bg-app-primary text-white nav-height d-flex align-items-center" data-site-id="9" data-external-api="https://api.builtin.com"><div class="container d-flex justify-content-between"><div class="d-flex align-items-center"><a href="/"><img class="d-block d-lg-none" src="https://static.builtin.com/dist/images/bi-header-logo.svg" height="32" width="71" alt="Built In Logo" />
+                <img class="d-none d-lg-block" src="https://static.builtin.com/dist/images/bi-header-logo.svg" height="48" width="108" alt="Built In Logo" /></a></div>
+        <div class="d-flex"><div class="search me-sm" x-data="headerSearch()"><button id="header-search-dropdown" type="button" class="btn h-100 p-xs p-md-sm" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0" data-bs-auto-close="outside" aria-label="search button"><i class="fa-solid fa-magnifying-glass fs-md fs-lg-2xl text-white"></i></button>
+    <div class="dropdown-menu"><div class="input-group mb-md px-md"><span class="input-group-text bg-white"><i class="fa-solid fa-magnifying-glass fs-xl text-midnight"></i></span>
+            <input autofocus type="text" id="header-search-input" name="search jobs input" class="form-control border-start-0" x-model="searchTerm" x-on:input.debounce.100ms="updateCompanies()" x-on:keydown.enter="goToJobSearch" placeholder="Search"></div>
+        <div class="bg-gray-01-highlight px-md mb-md"><a :href="jobSearchUrl" x-text="searchTerm + ' In Jobs'"></a></div>
+        <template x-for="company in companies"><a :href="company.alias" class="text-decoration-none"><div class="mb-md"><div class="d-flex align-items-center bg-gray-01 mx-md rounded-1 px-md py-sm"><div class="rounded-circle bg-white h-4xl w-4xl d-flex align-items-center justify-content-center" style="flex-basis: auto"><img class="object-fit-contain" loading="lazy" width="42" height="42" alt="Company Photo" :src="company.logo"></div>
+                        <div class="ms-lg fill-even"><div x-text="company.title" class="text-midnight fw-semibold"></div>
+                            <div x-text="company.industries" class="font-montserrat-button text-uppercase fs-xs"></div></div></div></div></a></template>
+        <template x-if="searchTerm.length &gt; 0 &amp;&amp; companies.length === 0"><a class="text-decoration-none" href="/node/add/company"><div class="border border-gray-02 d-flex gap-lg p-md m-md rounded-1 align-items-center"><div class="bg-gray-01 rounded-circle h-4xl w-4xl d-flex align-items-center justify-content-center"><i class="fa-thin fa-rocket-launch fs-2xl"></i></div>
+                    <div><div class="fs-xl mb-sm text-midnight fw-semibold">Can't find your company?</div>
+                        <div class="fs-sm">Create a company profile.</div></div></div></a></template>
+        <div class="d-flex justify-content-center"><a class="d-flex align-items-center" href="/jobs">View All Jobs</a></div></div></div>
+            <div class="my-auto me-md d-none d-lg-inline"><button id="for-employers-button" type="button" class="dropdown-toggle btn btn-secondary text-white btn-lg me-md fw-bold fs-sm text-uppercase" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0">
+            For Employers
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end round-bottom round-left shadow-sm p-0"><li><a href="https://employers.builtin.com?utm_medium=BIReferral&amp;utm_source=foremployers" class="btn btn-lg fw-bold text-capitalize fs-sm w-100 text-start focus-ring border-0" target="_blank">
+                        Premium Partnership
+                    </a></li>
+                <li class="dropdown-divider m-0"></li><li><a href="/dashboard/jobs" class="btn btn-lg fw-bold fs-sm text-capitalize w-100 text-start focus-ring border-0" target="_blank">
+                        Manage Jobs
+                    </a></li>
+                <li class="dropdown-divider m-0"></li><li><a href="/node/add/job" class="btn btn-lg fw-bold fs-sm text-capitalize w-100 text-start focus-ring border-0" target="_blank">
+                        Post Job
+                    </a></li></ul></div><div class="header-dropdown-items"><button type="button" class="btn h-100 p-xs p-md-sm" data-bs-toggle="dropdown" aria-expanded="false" data-bs-offset="0,0"><i class="fa-solid fa-circle-user fs-2xl fs-lg-4xl text-white"></i></button>
+<ul class="dropdown-menu dropdown-menu-end"><li><a class="dropdown-item fw-bold" href="/profile/job-preferences">Job Preferences</a></li><li><a class="dropdown-item fw-bold" href="/profile/edit">Edit Profile</a></li><li><a class="dropdown-item fw-bold" href="/home/jobs/saved">My Items</a></li><li><a href="/auth/logout" type="button" id="logout" class="dropdown-item fw-bold">Sign Out</a></li></ul></div></div></div></div>
+<nav class="navbar navbar-expand-lg d-none d-lg-block bg-white p-0 border-bottom border-gray-02"><div class="container-fluid"><div class="navbar-collapse" id="main_nav"><nav class="container" role="navigation"><ul class="navbar-nav d-flex gap-lg" role="menu"><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/jobs" builtin-toggle="dropdown">Jobs</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/companies" builtin-toggle="dropdown">Companies</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/jobs/remote" builtin-toggle="dropdown">Remote</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/tech-topics" builtin-toggle="dropdown">Articles</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="/salaries" builtin-toggle="dropdown">Salaries</a></li><li class="nav-item fs-lg" role="menuitem"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl font-montserrat-button" href="https://builtin.com/awards/us/2026/best-places-to-work" builtin-toggle="dropdown">Best Places To Work</a></li><li class="nav-item fs-lg ms-auto h-3xl underline-title" role="menuitem"><div class="nav-link d-flex align-items-center top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl fw-bold"><a class="nav-link top-nav-item text-nowrap text-app-primary text-uppercase py-md h-3xl fw-bold fs-sm" onclick="bix.eventTracking.logBuiltinTrackEvent(&#x27;click_nav_apptracker&#x27;, {});" href="/home#application-tracker-section"><i class="fa-solid fa-chart-kanban fs-md text-pink me-sm chart-kanban-icon"></i>
+                                    Job Application Tracker
+                                </a></div></li></ul></nav></div></div></nav>
+</header>
+<div>
+    <main role="main">
+        
+
+<div x-data="jobPost">
+    <div class="job-post-item bg-gray-01" id="7643263">
+
+<div class="match-background py-xl">
+    <div class="container">
+        <div class="row g-sm">
+            <div class="col-12 col-lg-5">
+                <div class="bg-white rounded-3 p-md position-relative h-100">
+                    <div class="mb-sm d-inline-flex align-items-center">
+                        <a href="/company/caterpillar/teams" target="_blank">
+                            <picture class="d-inline-block">
+                                <img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png" alt="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png Logo" height="48" width="48" class="p-xs rounded-2 border border-gray-02 me-md img-default object-fit-contain"/>
+                            </picture>
+                        </a>
+                        <a href="/company/caterpillar/teams" target="_blank" class="hover-underline text-pretty-blue font-barlow fw-medium fs-2xl">
+                            <h2 class="text-pretty-blue m-0">Caterpillar</h2>
+                        </a>
+                    </div>
+                    <h1 class="fw-extrabold fs-xl mb-sm">
+                        <span class="mb-0">Digital Product Owner, Fleet Management</span>
+                    </h1>
+                            <div class="mb-sm">
+                                <i class="fa-light text-pretty-blue fa-clock me-sm fs-sm" aria-hidden="true" title="Job Posted Yesterday"></i>
+                                <span class="font-barlow fs-md fw-regular">Reposted Yesterday</span>
+                            </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-3">
+                <div class="d-flex flex-column gap-sm bg-white rounded-3 p-md position-relative h-100">
+                    <div class="d-flex flex-wrap gap-sm">
+                        <div class="d-inline-flex bg-pretty-blue-highlight rounded-3 py-xs px-sm">
+                            <span class="fw-semibold fs-xs">Be an Early Applicant</span>
+                        </div>
+                    </div>
+                    <div>
+                        <div class="d-flex align-items-start gap-sm">
+                            <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                                <i class="fa-regular fa-location-dot fs-xs text-pretty-blue" aria-hidden="true"></i>
+                            </div>
+                            <div class="font-barlow text-gray-03 position-relative">
+                                <span>Peoria, IL</span>
+                            </div>
+                        </div>
+                    </div>
+                        <div class="d-flex gap-md">
+                            <div class="d-flex align-items-start gap-sm">
+                                <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                                    <i class="fa-regular fa-house-building fs-xs text-pretty-blue"
+                                       aria-hidden="true"></i>
+                                </div>
+                                <span class="font-barlow text-gray-03">Hybrid</span>
+                            </div>
+                        </div>
+                    <div class="d-flex align-items-start gap-sm">
+                        <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                            <i class="fa-regular fa-sack-dollar fs-xs text-pretty-blue" aria-hidden="true"></i>
+                        </div>
+                        <span class="font-barlow text-gray-03">96K-155K Annually</span>
+                    </div>
+                    <div class="d-flex align-items-start gap-sm">
+                        <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                            <i class="fa-regular fa-trophy fs-xs text-pretty-blue" aria-hidden="true"></i>
+                        </div>
+                        <span class="font-barlow text-gray-03">Mid level</span>
+                    </div>
+                </div>
+            </div>
+            <div class="col-12 col-lg-4">
+                <div class="bg-white rounded-3 p-md h-100">
+                    <div class="font-barlow fw-medium mb-md">Artificial Intelligence &#x2022; Cloud &#x2022; Internet of Things &#x2022; Software &#x2022; Cybersecurity &#x2022; Industrial</div>
+                    <div class="fs-md fw-regular">Cat Digital uses digital technologies to help Caterpillar Inc. customers build a better, more sustainable world.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="container py-lg">
+    <div class="row gx-lg mb-xl">
+        <div class="col-12 col-lg-6 mb-sm mb-lg-0">
+            <div class="bg-midnight text-white rounded-3 mb-sm px-md py-sm fs-xl fw-extrabold">The Role</div>
+            <div class="bg-white rounded-3 p-md mb-sm overflow-hidden position-relative" :class="jobExpanded || !bodyTooLarge(7643263) ? 'full-size' : 'small-size'">
+                <div class="mb-sm">As a Product Owner, you&#x27;ll shape connected fleet management solutions, focusing on regulatory compliance, customer needs, and collaboration with product development.</div>
+                <div class="d-flex align-items-center justify-content-center mb-xl">
+                    <div class="bg-gray-04 w-md" style="height:1.5px;"></div>
+                    <div class="mx-sm">
+                        <div class="fs-xs">Summary Generated by Built In</div>
+                    </div>
+                    <div class="bg-gray-04 w-md" style="height:1.5px;"></div>
+                </div>
+                <div x-ref="job-post-body-7643263" id="job-post-body-7643263" class="fs-md fw-regular mb-md html-parsed-content"><strong>Career Area:</strong><br>Technology, Digital and Data<br><strong>Job Description:</strong><br><strong>Your Work Shapes the World at Caterpillar Inc. </strong><br>When you join Caterpillar, you're joining a global team who cares not just about the work we do - but also about each other. We are the makers, problem solvers, and future world builders who are creating stronger, more sustainable communities. We don't just talk about progress and innovation here - we make it happen, with our customers, where we work and live. Together, we are building a better world, so we can all enjoy living in it.<br>Cat Digital is the digital and technology arm of Caterpillar Inc., leveraging the latest technologies to build industry leading digital solutions for our customers and dealers. With over 1.5 million connected assets worldwide, our teams use data, technology, advanced analytics, telematics, and AI capabilities to help our customers build a better, more sustainable world.<br><strong>Job Summary:</strong><br>As a Product Owner on the VisionLink team, you'll help shape the future of connected full-fleet management, with a focus on <strong>regulatory compliance</strong>. You'll work at the intersection of technology, transportation, and regulation - building solutions that simplify compliance, enhance visibility, and empower fleet operators to stay ahead of the curve.<br>This role includes ownership of features that support <strong>mobile app experiences</strong> for drivers and operators - making sure the tools they use on the road are intuitive, reliable, and built with their real-world needs in mind. Whether it's emissions reporting or daily vehicle checks, you'll help deliver functionality that works where it matters most.<br><strong>What You Will Do:</strong><br><ul><li>Translate customer needs into user stories that are clear, actionable, and occasionally poetic.</li><li>Coordinates with product development engineers to track and communicate design, development, support, and maintenance problems and solutions.</li><li>Identifies, documents, and reports design, reliability and maintenance problems and bugs. Gathers and consolidates feedback from customers and field staff.</li><li>Coordinates with field support specialists and customers to address and resolve problems and expand product usage.</li></ul><br><strong>What You Will Have:</strong><br><ul><li><strong>Business Analysis:</strong> Working knowledge of business analysis and the set of tasks, techniques and tools required to identify business needs; ability to recommend solutions that deliver value to stakeholders.</li><li><strong>Decision Making and Critical Thinking:</strong> Extensive experience of the decision-making process and associated tools and techniques; ability to accurately analyze situations and reach productive decisions based on informed judgment.</li><li><strong>Effective Communications:</strong> Extensive understanding of effective communication concepts, tools and techniques; ability to effectively transmit, receive, and accurately interpret ideas, information, and needs through the application of appropriate communication behaviors.</li><li><strong>User Acceptance Testing (UAT):</strong> Extensive knowledge of UAT activities, tasks, tools and techniques; ability to design, implement and evaluate acceptance tests for end-users.</li></ul><br><strong>Considerations For Top Candidates:</strong><br>We're looking for someone who's ready to level up - not entry-level, but not yet leading the charge solo. To stand out, you should be able to <strong>demonstrate experience</strong> in:<br><ul><li><strong>Full-Fleet Knowledge</strong>: You've worked with or supported products related to commercial vehicles, fleet operations, or transportation systems.</li><li><strong>Regulatory Awareness</strong>: You've had exposure to emissions standards, compliance reporting, or similar regulatory frameworks - and you understand why they matter.</li><li><strong>Customer-Focused Problem Solving</strong>: You've helped translate customer needs into product features, especially in complex or regulated environments.</li><li><strong>Data-Informed Decision Making</strong>: You've used data to guide product choices, validate assumptions, and measure success.</li><li><strong>Team Collaboration</strong>: You've worked across disciplines to deliver solutions, and you know how to keep everyone aligned (even when the rules change mid-sprint).</li></ul><br>If you've got a few wins under your belt and are excited to tackle real-world challenges in fleet compliance, we'd love to hear from you - especially if you've ever said, "There's got to be a better way to do this," and then built it.<br><strong>Additional Information:</strong><br>This position will have the option to be based out of our Chicago, IL; Peoria, IL or Denver, CO offices. <br>#LI <br>#BI (used to post on Built In Chicago)<br><strong>What You Will Get:</strong><br>Working with a Fortune 100 leader, you can build your career on a global scale and take advantage of development opportunities with emerging technologies. We've created an inclusive environment for you to explore your passions, make an impact and do the work that really matters. Join Us.<br><strong>About Caterpillar </strong><br>Caterpillar Inc. is the world's leading manufacturer of construction and mining equipment, off-highway diesel and natural gas engines, industrial gas turbines and diesel-electric locomotives. For nearly 100 years, we've been helping customers build a better, more sustainable world and are committed and contributing to a reduced-carbon future. Our innovative products and services, backed by our global dealer network, provide exceptional value that helps customers succeed.<br><strong>Summary Pay Range:</strong><br>$95,640.00 - $155,400.00<br>Compensation and benefits offered may vary depending on multiple individualized factors, job level, market location, job-related knowledge, skills, individual performance and experience. Please note that salary is only one component of total compensation at Caterpillar. <br><strong>Benefits:</strong><br>Subject to plan eligibility, terms, and guidelines. This is a summary list of benefits.<br><ul><li>Medical, dental, and vision benefits*</li><li>Paid time off plan (Vacation, Holidays, Volunteer, etc.)*</li><li>401(k) savings plans*</li><li>Health Savings Account (HSA)*</li><li>Flexible Spending Accounts (FSAs)*</li><li>Health Lifestyle Programs*</li><li>Employee Assistance Program*</li><li>Voluntary Benefits and Employee Discounts*</li><li>Career Development*</li><li>Incentive bonus*</li><li>Disability benefits</li><li>Life Insurance</li><li>Parental leave</li><li>Adoption benefits</li><li>Tuition Reimbursement</li></ul><br>* These benefits also apply to part-time employees<br>Visa Sponsorship is not available for this position. This employer is not currently hiring foreign national applicants that require or will require sponsorship tied to a specific employer, such as, H, L, TN, F, J, E, O. As a global company, Caterpillar offers many job opportunities outside of the U.S which can be found through our employment website at www.caterpillar.com/careers.<br><strong>Posting Dates:</strong><br>January 16, 2026 - January 25, 2026<br>Any offer of employment is conditioned upon the successful completion of a drug screen. <br>Caterpillar is an Equal Opportunity Employer, Including Veterans and Individuals with Disabilities. Qualified applicants of any age are encouraged to apply.<br>Not ready to apply? Join our Talent Community.</div>
+                <button @click="toggleJobExpanded"
+                        type="button"
+                        class="btn show-more-button position-absolute bottom-0 start-0 w-100 h-6xl d-flex align-items-end pb-lg justify-content-center gap-xs rounded-0 border-0"
+                        :class="bodyTooLarge(7643263) && !jobExpanded ? 'd-block' : 'd-none'"
+                        aria-label="Expand Full Description"
+                        :tabindex="0">
+                    <span class="text-decoration-underline">Read Full Description</span>
+                    <i class="fa-regular fa-chevron-down fs-sm" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="bg-white rounded-3 p-md mb-sm full-size"><div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm  "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight  fs-2xl text-transform-unset">Top Skills</h2></div></div></div>
+    <div class="d-flex gap-sm flex-wrap"><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">AI</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Analytics</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Data</div><div class="py-xs px-sm d-inline-block rounded-3 fs-sm text-nowrap border">Mobile App</div></div></div>
+            <div class="team-saying bg-white rounded-3 p-md mb-sm full-size" x-data="teamSaying"><div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight text-capitalize fs-2xl text-transform-unset">What the Team is Saying</h2></div></div></div>
+        <div class="what-team-says-container"><div class="slides-container"><template x-if="activeCompanyTeamSayingTab === 1"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/Em1_17.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Pradeep</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Software Engineer</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“At Cat Digital, we are building a world-class digital platform with a great team.  I get to solve the industry&#x2019;s toughest problems using the latest cloud-native technologies. Plus, whenever I see Cat equipment, I feel proud of what I do!“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 2"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/Em2_9.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Christina</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Platform Services</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“I get to build a brand new, global platform with a team that is fast-paced and innovative. The compensation and benefits are competitive, and our office is in a great location.“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 3"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/Em3_6.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Chad</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Business Intelligence &amp; Visualization</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“Cat Digital is pioneering technologies for the machine industry that will surely leave a legacy in this exciting time of change. We are working together to create a best in class customer experience, which is fantastic. “</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 4"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 border border-4 border-primary bg-white flex-shrink-0"><i class="fa fa-user text-primary fa-3x m-auto"></i></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Marcus</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Senior Software Engineer</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“Caterpillar gives me the opportunity to grow my career and my leadership skills. It also creates an environment for camaraderie and teamwork.“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 5"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/In1_22.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Madison</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Recruiter</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“Whether we&#x2019;re working virtually or in-person, we are always looking for ways to have fun and grow as a team. Team dinners, coffee chats, ax throwing, chess club, and virtual happy hours are just a few of the activities we do to make work more fun and connect with colleagues around the world.“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 6"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/In2_21.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Rakshan</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Digital Product Manager</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“I&#x2019;ve been with Caterpillar for 20 years now, and I&#x2019;ve been lucky to work on teams that have different focuses. I&#x2019;ve worked on everything from engineering applications to the latest and greatest digital technology applications.“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 7"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/In3_19.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">MacGregor</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Lead Software Engineer</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“It&#x2019;s amazing to be able to work in an architectural framework where we can negotiate between speed to market and a solid application &#x2013; software that is well-built, well-designed, well-tested. I find this negotiation both challenging and exhilarating.“</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(false)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template><template x-if="activeCompanyTeamSayingTab === 8"><div class="row mx-0 slide-container rounded-3 overflow-hidden elevated-1"><div class="col-lg-4 gradient-blueberry-inverse py-lg-3xl p-lg order-lg-1 order-2"><div class="d-flex flex-lg-column flex-row gap-lg-lg gap-md"><div class="d-flex h-lg-6xl h-5xl w-lg-6xl w-5xl rounded-circle elevated-1 mx-lg-auto mx-0 overflow-hidden flex-shrink-0"><img alt="Person1" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=240,h=240/sites/www.builtin.com/files/2021-04/In4_11.png" loading="lazy" /></div><div class="my-lg-0 my-auto p-md-0"><div class="fw-extrabold fs-sm text-white mb-xs text-lg-center">Stan</div>
+                                                <div class="fs-xs fw-medium text-white h-lg-3xl text-lg-center">Software Engineering Manager</div></div></div></div>
+                                    <div class="col-lg-8 d-flex align-items-center justify-content-between h-100 my-auto position-relative text-midnight font-barlow fw-medium py-lg-3xl p-lg order-lg-2 order-1 fs-xl"><span class="review-container">“The team should be comfortable approaching me with any kind of issue &#x2014; like improving a process, getting rid of unnecessary ceremonies or something else &#x2014; and know that I will address it. I believe a manager should be the first line of defense against bugs and conflicting priorities, and my team needs to know that I have their back. “</span>
+                                        <span class="btn-next cursor-pointer d-none d-xl-block text-primary" @click="nextCompanyTeamSayingTab(true)"><i class="fa-solid fa-angles-right fs-2xl"></i></span></div></div></template></div>
+            <div class="slide-indicator-container d-flex align-items-center mt-lg overflow-auto"><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 1" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 1 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Pradeep" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/Em1_17.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 2" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 2 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Christina" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/Em2_9.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 3" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 3 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Chad" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/Em3_6.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 4" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 4 }" aria-label="Reviewer toggle"><div class="d-flex h-3xl w-3xl rounded-circle elevated-1 border border-2 border-primary bg-white"><i class="fa fa-user text-primary fa-1x m-auto"></i></div></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 5" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 5 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Madison" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/In1_22.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 6" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 6 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Rakshan" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/In2_21.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 7" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 7 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="MacGregor" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/In3_19.png" loading="lazy" /></div><div class="me-md rounded-circle p-xs border border-3 border-transparent employee-review" role="button" @click="activeCompanyTeamSayingTab = 8" :class="{&#x27;border-pretty-blue&#x27;: activeCompanyTeamSayingTab === 8 }" aria-label="Reviewer toggle"><img class="h-3xl w-3xl rounded-circle" alt="Stan" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=96,h=96/sites/www.builtin.com/files/2021-04/In4_11.png" loading="lazy" /></div></div></div></div>
+            <div class="row mt-xl font-Montserrat d-none d-lg-block"><div class="mb-sm"><a href="/company/caterpillar/jobs" class="fs-md" :tabindex="0" target="_blank"><i class="fa-regular fa-briefcase-blank" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">View all jobs at Caterpillar</span></a></div>
+    <div class="mb-sm"><a href="/company/caterpillar" class="fs-md" :tabindex="0" target="_blank"><i class="fa-regular fa-chart-tree-map" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">View Caterpillar Profile</span></a></div>
+    <div x-data="reportJobModal"><a type="button" @click="openJobReportModal" class="fs-md" :tabindex="0" aria-label="Report Job"><i class="fa-regular fa-flag" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">Report Job</span></a></div></div>
+        </div>
+        <div class="col-12 col-lg-6">
+                    <div class="good-fit-header mb-sm rounded-3 p-sm"><div id="main" class="d-flex"><div><i class="fa-solid fa-sparkles fs-md text-white me-sm ms-sm" aria-hidden="true"></i>
+            <span class="fs-lg text-white fw-extrabold">
+                Am I A Good Fit?
+            </span>
+            <i class="fa-regular fa-circle-info fs-sm text-white ms-xs" data-bs-toggle="tooltip" data-bs-placement="bottom" role="tooltip" aria-label="Am I good fit toolTip" data-bs-title="AI-powered job insights to help you understand your fit for a role & how to best position yourself if you apply."></i></div>
+        <div class="beta-button ms-auto px-sm py-xs rounded-4 font-montserrat fs-xs fw-bold me-xs">
+            beta
+        </div></div></div>
+                        <div class="mb-md rounded-3 p-lg job-fit"><div class="px-sm"><div class="d-flex mb-md mb-md-xl fs-sm fs-md-md job-fit-text"><i class="fs-lg fs-md-2xl fa-regular fa-circle-check job-fit-check ms-2"></i><span class="ms-sm">Working knowledge of business analysis</span></div><div class="d-flex mb-md mb-md-xl fs-sm fs-md-md job-fit-text"><i class="fs-lg fs-md-2xl fa-regular fa-circle-check job-fit-check ms-2"></i><span class="ms-sm">Extensive experience in decision making and critical thinking</span></div><div class="d-flex mb-md mb-md-xl fs-sm fs-md-md job-fit-text"><i class="fs-lg fs-md-2xl fa-regular fa-circle-check job-fit-check ms-2"></i><span class="ms-sm">Understanding effective communications techniques</span></div><div class="d-flex mb-md mb-md-xl fs-sm fs-md-md job-fit-text"><i class="fs-lg fs-md-2xl fs-lg fa-regular fa-circle-question job-fit-question ms-2"></i><span class="ms-sm">Knowledge of UAT activities and techniques</span></div></div>
+    <div class="rounded-1 resume-text-box px-md py-sm mt-lg md-md-0"><div class="fs-sm fw-medium font-barlow text-uppercase ls-1">Analysis based on your resume:</div>
+        <div class="fs-xs">Microsoft- Open Role- 20251209- Resume.docx</div></div>
+    <div class="fs-xs text-gray-03 mt-sm">To select or upload a new resume, visit <a href="/profile/edit" target="_blank" class="text-decoration-underline">edit profile.</a></div></div>
+                <div class="bg-midnight text-white rounded-3 mb-sm px-md py-sm fs-xl fw-extrabold">The Company</div>
+                    <div class="bg-white rounded-3 mb-sm p-md">
+                        <div class="d-flex">
+                                <div class="flex-grow-1">
+                                        <div class="d-flex align-items-start gap-sm">
+                                            <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                                                <i class="fa-regular fa-map-location-dot fs-xs text-pretty-blue" aria-hidden="true"></i>
+                                            </div>
+                                            <div class="font-barlow text-gray-03">
+HQ:  Irving, TX                                            </div>
+                                        </div>
+                                        <div class="d-flex align-items-start gap-sm">
+                                            <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                                                <i class="fa-regular fa-user-group fs-xs text-pretty-blue" aria-hidden="true"></i>
+                                            </div>
+                                            <span class="font-barlow text-gray-03">
+                                                100,000 Employees
+                                            </span>
+                                        </div>
+                                </div>
+                            <div class="flex-grow-1">
+                                    <div class="d-flex align-items-start gap-sm">
+                                        <div class="d-flex justify-content-center align-items-center h-lg min-w-md">
+                                            <i class="fa-regular fa-calendar fs-xs text-pretty-blue" aria-hidden="true"></i>
+                                        </div>
+                                        <span class="font-barlow text-gray-03">Year Founded: 1925</span>
+                                    </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-3 p-md mb-sm">
+                        <div>
+                                <h2 class="fs-md-xl fs-md fw-extrabold mb-sm">What We Do</h2>
+                                <p class="mb-lg">
+                                    Cat Digital is the digital and technology arm of Caterpillar Inc., responsible for bringing digital capabilities to our world-famous yellow iron. With over 1.5M connected assets worldwide, our teams use data, technology, advanced analytics and AI capabilities to help our customers build a better world.  
+                                </p>
+                                <h2 class="fs-md-xl fs-md fw-extrabold mb-sm">Why Work With Us</h2>
+                                <p class="mb-lg">
+                                    The Cat Digital team is at the forefront of Caterpillar’s evolution. We take pride in solving complex problems by building new systems from the ground up. On our team, you’ll leverage data from across our entire enterprise to find solutions that open a new world of possibilities for our customers and dealers. Join us in building a better tomorrow.
+                                </p>
+                                <h2 class="fs-md-xl fs-md fw-extrabold mb-sm">Gallery</h2>
+                                <div class="row px-md">
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/cat_digital_247.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/cat_digital_502.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2021-04/1_182.png" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/Cat%20Digital-Chennai-2023-072.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/cat_digital_227.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2021-04/9_47.png" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/cat_digital_386.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/Cat%20Digital-Chennai2-2023-293.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                        <div class="col-6 mb-sm px-xs">
+                                            <picture>
+                                                <img class="object-fit-cover w-100 rounded-3" width="255" height="145" src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=crop,w=255,h=145/sites/www.builtin.com/files/2025-07/cat_digital_548.jpg" alt="Gallery"/>
+                                            </picture>
+                                        </div>
+                                </div>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-3 p-md mb-sm full-size"><div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight text-capitalize fs-2xl">Caterpillar Teams</h2></div><div class="fs-md-xl fs-sm"><a href="/company/caterpillar/teams" class="btn btn-sm btn-link text-decoration-none hover-underline m-0 p-0 border-0 text-start text-md-end" target="_blank" rel="noopener"><span>Learn More</span>
+                    <i class="fa-solid fa-arrow-right"></i></a></div></div></div>
+    <section class="overview-teams-body"><div class="blaze-slider w-100" x-data="teamsSlider" x-ref="teamsSlider"><div class="blaze-container mb-0"><div class="blaze-track-container"><div id="teamsSlider-blaze-track" class="blaze-track m-xs"><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/teams#Caterpillar&#x27;"><div class="ratio ratio-16x9 rounded overflow-hidden img-container bg-light"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=544,h=304,q=100/sites/www.builtin.com/files/office_culture/cat_digital_233.jpg" alt="Team" class="shadow-sm object-fit-contain cursor-pointer hover-zoom" loading="lazy" /></div><div class="team-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Caterpillar</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/teams#Career Growth&#x27;"><div class="ratio ratio-16x9 rounded overflow-hidden img-container bg-light"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=cover,w=544,h=304,q=100/sites/www.builtin.com/files/2025-06/Caterpillar-snapshot-banner-image%20-%20Edited_0.jpg" alt="Team" class="shadow-sm object-fit-contain cursor-pointer hover-zoom" loading="lazy" /></div><div class="team-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Career Growth</span></div></div><a class="d-flex flex-column position-relative" href="/company/caterpillar/teams" target="_blank"><div class="rounded bg-midnight d-flex flex-column justify-content-center align-items-center cursor-pointer ratio ratio-16x9 position-relative"><div class="position-absolute d-flex flex-column text-center justify-content-center align-items-center w-100"><i class="fa-light fa-screen-users fs-2xl text-light mb-sm"></i>
+                                <span class="text-light text-uppercase fw-bold fs-sm hover-underline">About our Teams</span></div></div></a></div></div></div>
+    <div class="bottom-nav gap-md align-items-center p-xs" :class="sliderPageCount &gt; 1 ? &#x27;d-flex&#x27; : &#x27;d-none&#x27;"><div class="d-flex gap-sm align-items-center"><button type="button" aria-label="previous slide" class="btn blaze-prev bg-white elevated-1 h-2xl w-2xl rounded-circle d-flex align-items-center justify-content-center text-pretty-blue border-0" :disabled="currentSlideIndex === 0"><i class="fa-solid fa-angle-left fs-lg"></i></button>
+            <button type="button" aria-label="next slide" class="btn blaze-next bg-white elevated-1 h-2xl w-2xl rounded-circle d-flex align-items-center justify-content-center text-pretty-blue border-0" :disabled="currentSlideIndex === sliderPageCount - 1"><i class="fa-solid fa-angle-right fs-lg"></i></button></div>
+            <div x-show.important="!showAlternatePagination" class="blaze-pagination d-flex align-items-center gap-sm blue-buttons"></div>
+            <div x-show.important="showAlternatePagination" class="d-flex gap-sm alternate-pagination font-barlow"><span x-text="alternatePaginationLabel"></span>
+                <span x-text="(currentSlideIndex+1)+' of '+sliderPageCount"></span></div></div></div></section></div>
+                    <div class="bg-white rounded-3 p-md mb-sm full-size"><div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight text-capitalize fs-2xl">Caterpillar Offices</h2></div><div class="fs-md-xl fs-sm"><a href="/company/caterpillar/offices" class="btn btn-sm btn-link text-decoration-none hover-underline m-0 p-0 border-0 text-start text-md-end" target="_blank" rel="noopener"><span>Learn More</span>
+                    <i class="fa-solid fa-arrow-right"></i></a></div></div></div>
+    <section class="overview-offices-body"><p class="mb-sm"><i class="fa fa-regular fa-house-building text-primary me-sm"></i>
+            <span class="fw-extrabold text-midnight fs-md">Hybrid Workspace</span></p>
+        <p class="mb-sm fs-sm text-gray-04 fst-italic fw-medium">Employees engage in a combination of remote and on-site work.</p>
+        <p class="mb-sm fs-sm text-gray-04"></p>
+        <div class="office-additional-info mb-lg"><div class="office-timing bg-pretty-blue-highlight text-gray-04 fst-italic fs-xs d-inline-block rounded px-sm py-xs">
+                Typical time on-site:
+                <span class="fw-bold">Flexible</span></div></div><div class="blaze-slider w-100" x-data="officesSlider" x-ref="officesSlider"><div class="blaze-container mb-0"><div class="blaze-track-container"><div id="officesSlider-blaze-track" class="blaze-track m-xs"><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370670&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Irving,TX,US" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="font-barlow text-primary w-md fw-bold fs-md me-sm">HQ</span><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Irving, TX</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370673&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=India" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">India</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370669&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Broomfield,CO,US" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Broomfield, CO</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370672&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Chennai,IN" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Chennai, IN</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370668&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=540 West Madison,Chicago,IL,US,60661" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Chicago, IL</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370674&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Geneva,CH" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Geneva, CH</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370675&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Ko&#x161;ice,SK" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Ko&#x161;ice, SK</span></div></div><div class="d-flex flex-column position-relative" @click="window.location.href=&#x27;/company/caterpillar/offices#68370671&#x27;"><div class="ratio ratio-16x9"><iframe src="https://www.google.com/maps/embed/v1/search?key=AIzaSyDaPcloR3qRBqSsIfs0Cfh02sU2gcvA7ck&amp;q=Peoria,IL,US,61629" title="Company Office Location" referrerpolicy="no-referrer-when-downgrade" class="border-0 rounded" loading="lazy"></iframe></div>
+    <div class="iframe-wrapper position-absolute w-100 h-100 top-0 start-0 z-1 cursor-pointer"></div><div class="office-name mt-sm"><span class="text-midnight fs-md fw-extrabold hover-underline cursor-pointer">Peoria, IL</span></div></div><a class="d-flex flex-column position-relative" href="/company/caterpillar/offices" target="_blank"><div class="rounded bg-midnight d-flex flex-column justify-content-center align-items-center cursor-pointer ratio ratio-16x9"><div class="position-absolute d-flex flex-column text-center justify-content-center align-items-center"><i class="fa-light fa-city fs-2xl text-light mb-sm"></i>
+                                    <span class="text-light text-uppercase fw-bold fs-sm hover-underline">Learn more</span></div></div></a></div></div></div>
+    <div class="bottom-nav gap-md align-items-center p-xs" :class="sliderPageCount &gt; 1 ? &#x27;d-flex&#x27; : &#x27;d-none&#x27;"><div class="d-flex gap-sm align-items-center"><button type="button" aria-label="previous slide" class="btn blaze-prev bg-white elevated-1 h-2xl w-2xl rounded-circle d-flex align-items-center justify-content-center text-pretty-blue border-0" :disabled="currentSlideIndex === 0"><i class="fa-solid fa-angle-left fs-lg"></i></button>
+            <button type="button" aria-label="next slide" class="btn blaze-next bg-white elevated-1 h-2xl w-2xl rounded-circle d-flex align-items-center justify-content-center text-pretty-blue border-0" :disabled="currentSlideIndex === sliderPageCount - 1"><i class="fa-solid fa-angle-right fs-lg"></i></button></div>
+            <div x-show.important="!showAlternatePagination" class="blaze-pagination d-flex align-items-center gap-sm blue-buttons"></div>
+            <div x-show.important="showAlternatePagination" class="d-flex gap-sm alternate-pagination font-barlow"><span x-text="alternatePaginationLabel"></span>
+                <span x-text="(currentSlideIndex+1)+' of '+sliderPageCount"></span></div></div></div></section></div>
+                    <div class="jobs-at-similar-companies-container bg-white rounded-3 p-md mb-sm full-size">
+                        <div class="mb-0 mb-md"><div class="d-flex flex-wrap justify-content-between align-items-lg-end gap-sm mb-sm "><div class="fs-md-xl fs-sm"><h2 class="m-0 fw-extrabold text-midnight  fs-md fs-md-xl text-transform-unset">Similar Jobs</h2></div></div></div>
+                        <div class="jobs-at-similar-companies d-flex flex-column gap-sm">
+                                <div class="job-unbounded-responsive saved-item-8208378 mb-lg border-top border-gray-02 pt-lg position-relative" type="button"><div id="main" class="row"><a href="/job/sr-ux-ui-designer/8208378" class="stretched-link"></a>
+        <div class="col-12 col-md-8 position-relative"><a href="/company/caterpillar" class="mb-sm d-inline-flex align-items-center position-relative z-1 "><h2 class="font-barlow fs-md fs-xl-xl d-inline-block text-pretty-blue m-0"><picture class="d-inline-block"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png" alt="Caterpillar Logo" height="48" width="48" class="p-xs rounded-2 border border-gray-02 me-md min-h-3xl" /></picture>
+                    <span class="fw-medium d-inline-block">Caterpillar</span></h2></a>
+            <h3 class="fw-extrabold fs-md fs-xl-xl mb-sm position-relative z-1"><a href="/job/sr-ux-ui-designer/8208378" class="mb-0 position-relative">User Interface Designer</a></h3><div class="font-barlow fw-medium d-sm-none d-md-block">Artificial Intelligence &#x2022; Cloud &#x2022; Internet of Things &#x2022; Software &#x2022; Cybersecurity &#x2022; Industrial</div></div>
+        <div class="col-12 col-md-4 attribute-section d-flex align-items-center"><div><div class="d-flex gap-md mb-xs mb-md-sm"><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-house-building fs-xs text-pretty-blue"></i></div>
+                                <span class="font-barlow text-gray-03">Hybrid</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue"></i></div>
+                        <div><span class="font-barlow text-gray-03">Chicago, IL, USA</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-user-group fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">100000 Employees</span></div><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-sack-dollar fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">113K-183K Annually</span></div></div></div></div></div>
+                                <div class="job-unbounded-responsive saved-item-7811649 mb-lg border-top border-gray-02 pt-lg position-relative" type="button"><div id="main" class="row"><a href="/job/senior-digital-product-owner/7811649" class="stretched-link"></a>
+        <div class="col-12 col-md-8 position-relative"><a href="/company/caterpillar" class="mb-sm d-inline-flex align-items-center position-relative z-1 "><h2 class="font-barlow fs-md fs-xl-xl d-inline-block text-pretty-blue m-0"><picture class="d-inline-block"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png" alt="Caterpillar Logo" height="48" width="48" class="p-xs rounded-2 border border-gray-02 me-md min-h-3xl" /></picture>
+                    <span class="fw-medium d-inline-block">Caterpillar</span></h2></a>
+            <h3 class="fw-extrabold fs-md fs-xl-xl mb-sm position-relative z-1"><a href="/job/senior-digital-product-owner/7811649" class="mb-0 position-relative">Product Owner</a></h3><div class="font-barlow fw-medium d-sm-none d-md-block">Artificial Intelligence &#x2022; Cloud &#x2022; Internet of Things &#x2022; Software &#x2022; Cybersecurity &#x2022; Industrial</div></div>
+        <div class="col-12 col-md-4 attribute-section d-flex align-items-center"><div><div class="d-flex gap-md mb-xs mb-md-sm"><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-house-building fs-xs text-pretty-blue"></i></div>
+                                <span class="font-barlow text-gray-03">Hybrid</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue"></i></div>
+                        <div><span class="font-barlow text-gray-03">Peoria, IL, USA</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-user-group fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">100000 Employees</span></div><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-sack-dollar fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">111K-180K Annually</span></div></div></div></div></div>
+                                <div class="job-unbounded-responsive saved-item-8233612 mb-lg border-top border-gray-02 pt-lg position-relative" type="button"><div id="main" class="row"><a href="/job/senior-business-intelligence-analyst/8233612" class="stretched-link"></a>
+        <div class="col-12 col-md-8 position-relative"><a href="/company/caterpillar" class="mb-sm d-inline-flex align-items-center position-relative z-1 "><h2 class="font-barlow fs-md fs-xl-xl d-inline-block text-pretty-blue m-0"><picture class="d-inline-block"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png" alt="Caterpillar Logo" height="48" width="48" class="p-xs rounded-2 border border-gray-02 me-md min-h-3xl" /></picture>
+                    <span class="fw-medium d-inline-block">Caterpillar</span></h2></a>
+            <h3 class="fw-extrabold fs-md fs-xl-xl mb-sm position-relative z-1"><a href="/job/senior-business-intelligence-analyst/8233612" class="mb-0 position-relative">Business Intelligence Analyst</a></h3><div class="font-barlow fw-medium d-sm-none d-md-block">Artificial Intelligence &#x2022; Cloud &#x2022; Internet of Things &#x2022; Software &#x2022; Cybersecurity &#x2022; Industrial</div></div>
+        <div class="col-12 col-md-4 attribute-section d-flex align-items-center"><div><div class="d-flex gap-md mb-xs mb-md-sm"><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-house-building fs-xs text-pretty-blue"></i></div>
+                                <span class="font-barlow text-gray-03">Hybrid</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue"></i></div>
+                        <div><span class="font-barlow text-gray-03">Chicago, IL, USA</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-user-group fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">100000 Employees</span></div><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-sack-dollar fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">108K-169K Annually</span></div></div></div></div></div>
+                                <div class="job-unbounded-responsive saved-item-8233610 border-top border-gray-02 pt-lg position-relative" type="button"><div id="main" class="row"><a href="/job/senior-front-end-engineer/8233610" class="stretched-link"></a>
+        <div class="col-12 col-md-8 position-relative"><a href="/company/caterpillar" class="mb-sm d-inline-flex align-items-center position-relative z-1 "><h2 class="font-barlow fs-md fs-xl-xl d-inline-block text-pretty-blue m-0"><picture class="d-inline-block"><img src="https://cdn.builtin.com/cdn-cgi/image/f=auto,fit=scale-down,w=200,h=200/sites/www.builtin.com/files/2021-04/CLogo_2.png" alt="Caterpillar Logo" height="48" width="48" class="p-xs rounded-2 border border-gray-02 me-md min-h-3xl" /></picture>
+                    <span class="fw-medium d-inline-block">Caterpillar</span></h2></a>
+            <h3 class="fw-extrabold fs-md fs-xl-xl mb-sm position-relative z-1"><a href="/job/senior-front-end-engineer/8233610" class="mb-0 position-relative">Senior Front-end Engineer</a></h3><div class="font-barlow fw-medium d-sm-none d-md-block">Artificial Intelligence &#x2022; Cloud &#x2022; Internet of Things &#x2022; Software &#x2022; Cybersecurity &#x2022; Industrial</div></div>
+        <div class="col-12 col-md-4 attribute-section d-flex align-items-center"><div><div class="d-flex gap-md mb-xs mb-md-sm"><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-house-building fs-xs text-pretty-blue"></i></div>
+                                <span class="font-barlow text-gray-03">Hybrid</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-location-dot fs-xs text-pretty-blue"></i></div>
+                        <div><span class="font-barlow text-gray-03">Chicago, IL, USA</span></div></div><div class="d-flex align-items-center mb-xs mb-md-sm"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-user-group fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">100000 Employees</span></div><div class="d-flex align-items-center"><div class="w-md d-flex justify-content-center align-items-center me-sm"><i class="fa-regular fa-sack-dollar fs-xs text-pretty-blue"></i></div>
+                        <span class="font-barlow text-gray-03">113K-183K Annually</span></div></div></div></div></div>
+                        </div>
+                    </div>
+        </div>
+        <div class="row mt-xl font-Montserrat d-lg-none"><div class="mb-sm"><a href="/company/caterpillar/jobs" class="fs-md" :tabindex="0" target="_blank"><i class="fa-regular fa-briefcase-blank" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">View all jobs at Caterpillar</span></a></div>
+    <div class="mb-sm"><a href="/company/caterpillar" class="fs-md" :tabindex="0" target="_blank"><i class="fa-regular fa-chart-tree-map" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">View Caterpillar Profile</span></a></div>
+    <div x-data="reportJobModal"><a type="button" @click="openJobReportModal" class="fs-md" :tabindex="0" aria-label="Report Job"><i class="fa-regular fa-flag" aria-hidden="true"></i>
+            <span class="ms-xs d-inline-block text-decoration-underline">Report Job</span></a></div></div>
+    </div>
+</div>
+
+    </div>
+
+    <div x-data="applyForm"
+         class="job-post-sticky-bar sticky-bottom bg-white d-flex justify-content-center align-items-center gap-sm bottom-3xl flex-column py-sm px-md pb-lg-sm"
+         :class="{'how-to-apply-container-text' : howToApplyText}">
+        <template x-if="!isFormVisible && !howToApplyText">
+                <div class="d-flex justify-content-center gap-sm w-100 flex-column flex-md-row">
+                            <a id="applyButton" href="https://careers.caterpillar.com/en/jobs/r0000333273/digital-product-owner-fleet-management/" target="_blank" @click="applyClick"
+                               class="btn btn-lg bg-pretty-blue border-pretty-blue rounded-3 text-white flex-grow-1 flex-md-grow-0 job-post-sticky-bar-btn text-uppercase"
+                               aria-label="Apply to job">
+                                <i class="fa-solid fa-pen-line me-xs fs-md" aria-hidden="true"></i>
+                                <span x-text="['save', 'saved'].includes(getJobStatusText().toLowerCase()) ? 'Apply' : 'Apply Again'"></span>
+                            </a>
+                    <template x-if="shouldShowSaveButton()">
+                        <button x-on:click="JobStatusClick('Save')"
+                            class="btn btn-lg btn-outline-primary job-post-sticky-bar-btn" type="button"
+                            x-on:mouseenter="isHovering = true" x-on:mouseleave="isHovering = false">
+                            <i data-id="heart-button" :class="'fa-heart fa-regular ' + (isHovering ? 'text-pink' : '')"></i>
+                            <span>Save</span>
+                        </button>
+                    </template>
+                    <template x-if="shouldShowTrackerStatusDropdown()">
+                        <div class="dropdown">
+                            <button class="btn btn-lg job-post-sticky-bar-btn w-100"
+                                :class="getStatusDetails().TextCss + ' ' + (isDropdownHovering ? getStatusDetails().HoverCss :  getStatusDetails().BackgroundCss)"
+                                type="button" data-bs-toggle="dropdown" aria-expanded="false" :id="'dropdown-' + currentJob.id" x-on:click="handleDropdownClick($event)"
+                                x-on:mouseenter="isDropdownHovering = true" x-on:mouseleave="isDropdownHovering = false">
+                                <i :class="getStatusDetails().IconCss + ' fs-xs d-inline-block me-sm ' + getStatusDetails().TextCss"></i>
+                                <span x-text="getStatusDetails().StatusName"></span>
+                                <i class="fa-solid text-gray-03 ms-sm" :class="isDropdownOpen ? 'fa-caret-up' : 'fa-caret-down'"></i>
+                            </button>
+                            <ul class="dropdown-menu position-absolute rounded-3 w-100">
+                                <li class="dropdown-header d-none d-md-block fs-sm font-barlow fw-medium text-uppercase bg-midnight text-white rounded-top">
+                                    <i class="fa-solid fa-chart-kanban fs-md me-sm"></i>Change Application Tracker Status
+                                </li>
+                                 <li class="dropdown-header d-block d-md-none fs-sm font-barlow fw-medium text-uppercase text-gray-03">
+                                    Change Application Tracker Status
+                                </li>
+                                <template x-for="option in getAvailableStatusOptions()" :key="option.key">
+                                    <li><button type="button" class="dropdown-item fs-md" x-on:click="JobStatusClick(option.key)" x-text="option.value"></button></li>
+                                </template>
+                                <hr class="dropdown-divider">
+                                <li><a class="dropdown-item fs-md" href="/home/#application-tracker-section">Open Application Tracker</a></li>
+                            </ul>
+                        </div>
+                    </template>
+                </div>
+        </template>
+        <template x-if="errorMessage">
+            <div class="error text-danger text-center" x-text="errorMessage"></div>
+        </template>
+        <template x-if="howToApplyText">
+            <div class="fs-xs text-center py-md">
+                <div class="fs-md fw-bold">Apply Instructions</div>
+                <div class="fs-sm howToApplyText-js" x-html="howToApplyText"></div>
+            </div>
+        </template>
+        <template x-if="!howToApplyText">
+                <div class="fs-xs text-gray-03 text-center">
+                    By clicking Apply Now you agree to <a
+                        class="text-decoration-underline" href="https://builtin.com/privacy-policy" target="_blank"
+                        rel="noopener" aria-label="Privacy Policy">share your profile information</a> with the hiring
+                    company.
+                </div>
+        </template>
+    </div>
+</div>
+
+    <div id="report-user-popup" x-data="reportJobModal">
+        <div class="modal fade report-modal-main pb-xl" id="reportJobModal" role="dialog" tabindex="-1" aria-labelledby="reportJobModalLabel" aria-hidden="true"><div class="modal-dialog font-Montserrat"><div class="modal-content"><div class="modal-header border-0 p-lg"><h5 class="modal-title fs-xl fw-bold text-midnight" id="reportJobModalLabel">Report a job</h5>
+                    <button type="button" class="btn btn-close" aria-label="Close" @click="closeReportModal"><i class="fa-regular text-gray-03 fs-md fa-close"></i></button></div>
+                <template x-if="!isFormSubmitted"><div><div class="modal-body pt-0 px-lg overflow-x-auto"><form id="jobReportForm" x-on:submit.prevent="submitReport" action="https://builtintech--bifull.sandbox.my.salesforce.com/servlet/servlet.WebToCase?encoding=UTF-8&amp;orgId=00DDd0000000Ptn"><div class="mb-sm"><label for="name" class="form-label text-midnight fs-md fw-semibold mb-sm">Contact Name</label>
+                                    <input id="name" class="form-control" x-model="report.name" maxlength="80" name="name" size="20" type="text" required></div>
+                                <div class="mb-sm"><label for="email" class="form-label text-midnight fs-md fw-semibold mb-sm" required>Email</label>
+                                    <input id="email" class="form-control" maxlength="80" x-model="report.email" name="email" size="20" type="email"></div>
+                                <div class="mb-sm text-gray-04 fs-md"><label class="form-label fs-md text-midnight fw-semibold mb-sm">What would you like to report?</label>
+                                    <select class="form-select" x-model="report.option"><option value disabled selected>--Please choose--</option>
+                                        <option value="no_longer_available">This job is no longer available</option>
+                                        <option value="incorrect_location">This is not fully-remote or this job has an incorrect location</option>
+                                        <option value="scam">This job is a scam/phishing/promoting an illegal service</option>
+                                        <option value="missing_salary_info">This job is in a state that legally requires salary info, but it is not showing a salary</option>
+                                        <option value="something_broken">Something is broken on this job (Ex. incorrect formatting, link broken, photo broken, etc.)</option>
+                                        <option value="other">Other</option></select></div>
+                                <div class="mb-lg"><label for="additionalDetails" class="form-label text-midnight fs-md fw-semibold mb-sm">Please provide any additional details you think we should know about.</label>
+                                    <textarea class="form-control" id="additionalDetails" x-model="report.details" rows="4" maxlength="400"></textarea>
+                                    <div class="form-text mt-0 fs-xs text-gray-04 text-end">(<span id="report-symbols-count" x-text="detailsTextCount">0</span>/400)</div></div></form></div>
+                        <div class="modal-footer border-gray-02 border-top p-md font-Montserrat"><button form="jobReportForm" type="submit" :disabled="isFormSubmitting || report.option === ''" class="btn btn-primary text-uppercase m-0 px-md py-sm">Submit</button></div></div></template>
+                <template x-if="isFormSubmitted"><div class="modal-body pt-0 pb-lg px-lg overflow-x-auto text-midnight fs-md"><template x-if="isAlreadyReported"><div>You have already reported this job. We will review it and take appropriate action.</div></template>
+                        <template x-if="!isAlreadyReported"><div>Thank you for reporting this job. We will review it and take appropriate action.</div></template></div></template></div></div></div>
+    </div>
+
+
+
+
+
+    <div id="job-apply-question" x-data="jobApplyQuestion"><div class="modal fade" id="jobApplyQuestion" tabindex="-1" aria-labelledby="jobApplyQuestion" aria-hidden="true"><div class="modal-dialog modal-lg py-lg-lg" :class="{'modal-dialog-centered': !isTopPosition}"><div class="modal-content pb-0"><div class="modal-header border-0 p-md pb-0 p-lg-lg pb-lg-0"><button type="button" class="btn btn-close" aria-label="Close" @click="closeModal(true)"><i class="fa-regular text-gray-03 fs-md fa-xmark"></i></button></div>
+                <div class="modal-body pb-0 px-lg-4xl"><div class="text-center mb-xs mb-lg-md"><i class="fa-regular fa-circle-exclamation-check fs-lg fs-lg-5xl text-shamrock"></i></div>
+
+                    <div class="text-midnight font-barlow fs-xl fs-lg-3xl fw-medium text-center">
+                        Did you apply to this <span x-text="jobTitle"></span> job at <span x-text="companyName"></span>?
+                    </div>
+
+                    <hr class="my-md my-lg-xl border-top-2"></div>
+                <div class="modal-footer border-top-0 d-block py-0 px-md p-lg-0"><div class="text-center m-0"><button type="button" class="btn btn-lg border-pretty-blue btn-app-primary bg-pretty-blue w-100 job-apply-question-button mb-sm mb-lg-0" @click="updateJobTrackerStatus()" :disabled="isLoading"><span x-text="isLoading ? 'Saving...' : 'Yes, I applied'"></span></button>
+                        <button type="button" class="btn btn-lg btn-outline-primary border-pretty-blue text-pretty-blue w-100 job-apply-question-button" @click="closeModal()">Maybe later
+                        </button></div>
+
+                    <div class="text-center pb-lg pb-lg-2xl text-midnight font-Montserrat fs-xs fs-lg-md m-0 pt-md pt-lg-lg">
+                        Keep your application tracker up-to-date.
+                    </div>
+                    <template x-if="error"><div class="text-danger font-Montserrat text-center fs-md mt-xs" x-text="error"></div></template></div></div></div></div></div>
+
+    </main>
+</div>
+<div>
+    <nav class="mobile-nav d-lg-none"><ul class="position-relative d-flex h-100 p-0 list-unstyled" style="z-index: 1"><li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/jobs" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-briefcase fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Jobs</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/companies" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-rocket-launch fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Companies</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/tech-topics" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-light fa-newspaper fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Articles</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><a href="/home#application-tracker-section" onclick="bix.eventTracking.logBuiltinTrackEvent(&#x27;click_nav_apptracker&#x27;, {}); bootstrap.Modal.getInstance(document.getElementById(&#x27;moreModal&#x27;)).hide();" class="d-flex align-items-center justify-content-center flex-column h-100 w-100 text-black"><div class="text-center"><i class="fa-solid fa-chart-kanban fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">Tracker</div></a></li>
+        <li class="fs-xs fw-bold flex-grow-1 text-center h-100"><div class="d-flex flex-column h-100 w-100 align-items-center justify-content-center" data-bs-toggle="modal" data-bs-target="#moreModal"><div class="text-center"><i class="fa-light fa-bars-staggered fs-lg text-midnight" aria-hidden="true"></i></div>
+                <div class="text-midnight">More</div></div></li></ul></nav>
+<div class="modal fade mobile-nav-dialog" id="moreModal" tabindex="-1" aria-labelledby="moreModal" aria-hidden="true"><div class="modal-dialog modal-fullscreen-lg-down"><div class="modal-content"><div class="p-md border-bottom border-black"><img src="https://static.builtin.com/dist/images/midnight_9.svg" width="72" height="32" loading="lazy" alt="Built In" class="visible" /></div>
+            <div class="p-md bg-white"><ul class="more-links position-relative list-unstyled d-flex flex-column p-0"><li><a href="/jobs" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-briefcase fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Tech Jobs</div></a></li>
+                    <li><a href="/companies" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-rocket-launch fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Companies</div></a></li>
+                    <li><a href="/tech-topics" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-newspaper fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Articles</div></a></li>
+                    <li><a href="/jobs/remote" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-signal-stream fs-lg text-midnight" aria-hidden="true"></i></div>
+                            <div class="text-center fw-bold fs-lg">Remote</div></a></li><li><a href="/salaries" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-sack-dollar" aria-hidden="true"></i></div>
+                                <div class="text-center fw-bold fs-lg">Salaries</div></a></li><li><a href="https://builtin.com/awards/us/2026/best-places-to-work" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-award" aria-hidden="true"></i></div>
+                                    <div class="text-center fw-bold fs-lg">Best Places To Work</div></a></li><li><a href="/tech-hubs" class="d-flex align-items-center text-midnight border-bottom border-black fw-bold"><div class="me-md w-lg text-center py-md px-0 fs-lg"><i class="fa-light fa-location-dot" aria-hidden="true"></i></div>
+                                <div class="text-center fw-bold fs-lg">Tech Hubs</div></a></li></ul>
+                <div><a href="https://employers.builtin.com/membership?utm_medium=BIReferral&amp;utm_source=foremployers" class="btn bg-medium-blue text-white btn-lg fw-bold fs-sm text-uppercase w-100" role="button" aria-disabled="true">
+                        Post Job
+                    </a></div></div></div></div></div>
+</div>
+<footer class="footer">
+    <div class="bg-app-primary text-white"><div class="container"><div class="row footer-content gap-lg gap-md-sm pt-3xl mb-0 mb-md-3xl"><div class="col-md"><div class="mb-3xl"><a href="/"><img width="105px" height="47px" loading="lazy" src="https://static.builtin.com/dist/images/builtin-logo.svg" alt="BuiltIn" /></a></div>
+        <div class="mb-md pb-md border-bottom"><img width="177px" height="19px" loading="lazy" src="https://static.builtin.com/dist/images/united-we-tech.svg" alt="United We Tech" /></div>
+        <div class="text-white fs-sm mb-lg">
+            Built In is the online community for startups and tech companies. Find
+            startup jobs, tech news and events.
+        </div>
+        <div class="social-links d-flex gap-md"><a href="https://facebook.com/builtinhq" aria-label="facebook" target="_blank" class="nav-link"><i class="fa-brands fa-facebook fs-2xl"></i></a>
+            <a href="https://twitter.com/builtin" aria-label="twitter" target="_blank" class="nav-link"><i class="fa-brands fa-twitter fs-2xl"></i></a>
+            <a href="https://www.instagram.com/builtin" aria-label="instagram" target="_blank" class="nav-link"><i class="fa-brands fa-instagram fs-2xl"></i></a>
+            <a href="https://www.linkedin.com/company/3763094" aria-label="LinkedIn" target="_blank" class="nav-link"><i class="fa-brands fa-linkedin fs-2xl"></i></a></div></div>
+
+    <div class="col-md"><div id="block-about-menu" class="text-white mb-md font-barlow fw-medium fs-xl">About</div>
+        <nav role="navigation" aria-labelledby="block-about-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/our-story" target="_blank">
+                    Our Story
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://employers.builtin.com/careers/" target="_blank">
+                    Careers
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/our-staff" target="_blank">
+                    Our Staff Writers
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/content-descriptions" target="_blank">
+                    Content Descriptions
+                </a></div></nav></div>
+    <hr class="footer-hr px-lg">
+    <div class="col-md"><div id="block-getinvolved-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Get Involved</div>
+        <nav role="navigation" aria-labelledby="block-getinvolved-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular border-2 border-bottom border-mint special-footer-link" href="https://employers.builtin.com/membership?utm_medium=BIReferral&amp;utm_source=foremployers" target="_blank">
+                    Recruit With Built In
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/expert-contributors" target="_blank">
+                    Become an Expert Contributor
+                </a></div></nav></div>
+    <hr class="footer-hr">
+    <div class="col-md"><div id="block-resources-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Resources</div>
+        <nav role="navigation" aria-labelledby="block-resources-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://knowledgebase.builtin.com/s/">
+                    Customer Support
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://form.jotform.com/223044927257054">
+                    Share Feedback
+                </a></div>
+            <div><a class="nav-link text-white fs-sm fw-regular" href="https://knowledgebase.builtin.com/s/contactsupport">
+                    Report a Bug
+                </a></div><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/articles/grow-your-career">
+                        Tech Job Tools + Career Resources
+                    </a></div>
+                <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/browse-jobs">
+                        Browse Jobs
+                    </a></div>
+                <div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/tech-dictionary" data-drupal-link-system-path="tech-dictionary">
+                        Tech A-Z
+                    </a></div></nav></div>
+    <hr class="footer-hr"><div class="col-md"><div id="block-poweredbybuiltin-menu" class="text-white mb-md font-barlow fw-medium fs-xl">Tech Hubs</div>
+            <nav role="navigation" aria-labelledby="block-poweredbybuiltin-menu" class="flex-column small d-flex gap-md"><div><a class="nav-link text-white fs-sm fw-regular" href="https://builtin.com/our-sites" target="_blank" rel="noopener noreferrer">Our Sites</a></div></nav></div>
+        <hr class="footer-hr"></div>
+<div class="footer-bottom-nav-container fs-xs py-lg mb-3xl mb-lg-0"><nav role="navigation" aria-label="Footer Bottom Navigation" class="d-flex justify-content-between gap-md footer-bottom-nav"><a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/learning-lab-user-agreement">
+            Learning Lab User Agreement
+        </a>
+
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/accessibility-statement">
+            Accessibility Statement
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/copyright-policy">
+            Copyright Policy
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/privacy-policy">
+            Privacy Policy
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/community-terms-of-use">
+            Terms of Use
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular do-not-sell-my-info" href="https://builtin.com/california-do-not-sell-my-information">
+            Your Privacy Choices/Cookie Settings
+        </a>
+        <a class="nav-link text-white fs-xs fw-regular" href="https://builtin.com/ca-notice-collection">
+            CA Notice of Collection
+        </a></nav>
+    <div class="d-flex justify-content-center mt-lg"> © Built In 2026</div></div></div></div>
+</footer>
+
+<script src="https://kit.fontawesome.com/e1bbd40aec.js" crossorigin="anonymous"></script>
+<script src="https://static.builtin.com/dist/js/common.bundle.js"></script>
+<script src="https://static.builtin.com/jobs/js/main.bundle.e85263e62ef5003060f7.js"></script>
+
+<script type="text/javascript">
+    (function (w) {
+        w.bix.eventTracking.init({
+            trackingBaseUrl: 'https://api.builtin.com',
+            trackingEventEndpoint: '/track/client-events',
+            trackingIdentityEndpoint: '/track/identity',
+            SubjectId: '3d75c66e-3264-496b-882e-43ccfad54d99',
+            UserId: '3190047',
+            DrupalUserId: '263247',
+            siteId: 9
+        });
+    })(window);
+</script>
+
+    <script src="https://static.builtin.com/dist/blaze/blaze-slider.min.js"></script>
+    <script src="https://static.builtin.com/my-items/js/main.bundle.js" async crossorigin></script>
+    <script type="module">
+        Builtin.jobPostInit({"job":{"id":7643263,"drupalId":7643263,"isSaved":false,"howToApply":"https://careers.caterpillar.com/en/jobs/r0000333273/digital-product-owner-fleet-management/","companyName":"Caterpillar","title":"Digital Product Owner, Fleet Management","isEasyApply":false,"resolvedBidId":null},"siteId":9,"isApplyFormEnabled":false,"isResumeFormEnabled":false,"resumeMaxFileSize":2097152,"resumeAllowedFileExtensions":["pdf","docx"],"isLoggedIn":true,"salesforceData":{"orgId":"00D1a000000HjWM","actionUrl":"https://webto.salesforce.com/servlet/servlet.WebToCase?encoding=UTF-8\u0026orgId=00D1a000000HjWM","jobUrlFieldId":"00NVb000001IX1l"},"user":{"subjectId":"3d75c66e-3264-496b-882e-43ccfad54d99","name":"Angela Spring","email":"vanmila@gmail.com","phone":"4049924980"},"externalApiUrl":"https://api.builtin.com","jobTrackerStatus":"save"});
+    </script>
+    <div class="toast align-items-center text-bg-primary border-0 position-fixed z-1 bg-danger top-50 end-0 translate-middle-y " role="alert" id="form-server-error" aria-live="assertive" aria-atomic="true"><div class="d-flex justify-content-between"><div class="toast-body fw-bold">Oops, something went wrong. Please try again.</div>
+        <button type="button" class="btn btn-lg btn-close" data-bs-dismiss="toast" aria-label="Close"><i class="fa-regular fa-close fs-lg text-white"></i></button></div></div>
+
+<script type="text/javascript">
+    document.addEventListener('DOMContentLoaded', function () {
+        Alpine.start();
+    });
+</script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/vcd15cbe7772f49c399c6a5babf22c1241717689176015" integrity="sha512-ZpsOmlRQV6y907TI0dKBHq9Md29nnaEIPlkf84rnaERnq6zvWvPUqr2ft8M1aS28oN72PdrCzSjY4U6VaAw1EQ==" data-cf-beacon='{"rayId":"9c01e7f0c8bddb8c","serverTiming":{"name":{"cfExtPri":true,"cfEdge":true,"cfOrigin":true,"cfL4":true,"cfSpeedBrain":true,"cfCacheStatus":true}},"version":"2025.9.1","token":"ad1290ee89a44ad5af40d99998d62d76"}' crossorigin="anonymous"></script>
+</body>
+</html>

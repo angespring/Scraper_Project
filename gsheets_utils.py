@@ -333,6 +333,7 @@ def to_keep_sheet_row(keep_row, applied="", reason=""):
         "Salary Est. (Low-High)": _normalize_sheet_value(keep_row.get("Salary Est. (Low-High)", "")),
         "Location Chips": _normalize_sheet_value(keep_row.get("Location Chips", "")),
         "Applicant Regions": _normalize_sheet_value(keep_row.get("Applicant Regions", "")),
+        "Applicant Regions Source": _normalize_sheet_value(keep_row.get("Applicant Regions Source", "")),
         "Visibility Status": _normalize_sheet_value(keep_row.get("Visibility Status", "")),
         "Confidence Score": _normalize_sheet_value(keep_row.get("Confidence Score", "")),
         "Confidence Mark": _normalize_sheet_value(keep_row.get("Confidence Mark", "")),
@@ -368,4 +369,5 @@ def to_skipped_sheet_row(skip_row, applied="", reason=""):
         #"Salary Est. (Low-High)": _normalize_sheet_value(skip_row.get("Salary Est. (Low-High)", "")),
         "Location Chips": _normalize_sheet_value(skip_row.get("Location Chips", "")),
         "Applicant Regions": _normalize_sheet_value(skip_row.get("Applicant Regions", "")),
+        "Applicant Regions Source": _normalize_sheet_value(skip_row.get("Applicant Regions Source", "")),
     }

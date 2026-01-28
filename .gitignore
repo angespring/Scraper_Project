@@ -16,6 +16,3 @@ playwright/.cache/
 Code\ Archive/
 *backup*.py
 
-# env files
-.env*
-!.env.example

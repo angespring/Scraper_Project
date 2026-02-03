@@ -121,6 +121,87 @@ has_any_changes() {
   [[ -n "$(git status --porcelain)" ]]
 }
 
+review_untracked_individually() {
+  local paths
+  paths="$(list_untracked || true)"
+
+  [[ -n "$paths" ]] || return 0
+
+  echo
+  echo "Review untracked items one by one."
+  echo "Options:"
+  echo "  k = keep (do nothing)"
+  echo "  i = ignore (add pattern to .gitignore)"
+  echo "  d = delete (remove file or folder)"
+  echo "  c = commit (stage it for commit)"
+  echo
+
+  local commit_any=0
+
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+
+    echo
+    echo "Untracked: $p"
+    local choice
+    read -r -p "Action [k/i/d/c] (default k): " choice
+    choice="$(lower "${choice:-k}")"
+
+    case "$choice" in
+      k)
+        echo "Keeping: $p"
+        ;;
+      i)
+        local pat
+        read -r -p "Ignore pattern to add (default: $p): " pat
+        pat="${pat:-$p}"
+        append_gitignore "$pat"
+        echo "Added to .gitignore: $pat"
+        ;;
+      d)
+        if confirm "Delete '$p' now?"; then
+          run "rm -rf \"${p//\"/\\\"}\""
+          echo "Deleted: $p"
+        else
+          die "Aborted."
+        fi
+        ;;
+      c)
+        run "git add \"${p//\"/\\\"}\""
+        commit_any=1
+        echo "Staged: $p"
+        ;;
+      *)
+        die "Invalid choice. Use k, i, d, or c."
+        ;;
+    esac
+  done <<< "$paths"
+
+  if [[ -f .gitignore ]] && ! git diff --quiet -- .gitignore; then
+    echo
+    if confirm "Commit .gitignore changes now?"; then
+      run "git add .gitignore"
+      run "git commit -m \"chore: update local ignores\""
+      echo "Committed .gitignore."
+    else
+      echo "Left .gitignore uncommitted."
+    fi
+  fi
+
+  if [[ "$commit_any" -eq 1 ]]; then
+    echo
+    if confirm "Commit staged untracked items now?"; then
+      local msg
+      read -r -p "Commit message (default: chore: add build artifacts): " msg
+      msg="${msg:-chore: add build artifacts}"
+      run "git commit -m \"${msg//\"/\\\"}\""
+      echo "Committed staged items."
+    else
+      echo "Staged items are ready but not committed."
+    fi
+  fi
+}
+
 # Safety: treat these as "artifact-like" paths. Committing them should be explicit.
 is_suspicious_untracked() {
   # Reads paths on stdin, returns 0 if any suspicious path is present
@@ -154,14 +235,14 @@ prebranch_gate() {
   tracked_count="$(count_tracked)"
   untracked_count="$(count_untracked)"
 
-  # Fastest safe escape hatch
-  if confirm "Do you want to stash everything and continue (recommended if unsure)?"; then
-    local smsg
-    read -r -p "Stash message (default: pre-build stash): " smsg
-    smsg="${smsg:-pre-build stash}"
-    run "git stash push -u -m \"${smsg//\"/\\\"}\""
-    echo "Stashed tracked and untracked changes."
-    return 0
+  untracked_count="$(count_untracked)"
+  if [[ "$untracked_count" -gt 0 ]]; then
+    echo
+    echo "Untracked items:"
+    list_untracked
+    if confirm "Review untracked items one by one?"; then
+      review_untracked_individually
+    fi
   fi
 
   # Handle tracked changes

@@ -31,8 +31,11 @@ except ImportError as e:
 
 
 
-
-
+def _normalize_row_for_sheet(row: dict) -> dict:
+    # guarantees keys exist so you get stable output
+    for k in ("BC Rule", "ON Rule", "Canada Rule"):
+        row.setdefault(k, "")
+    return row
 
 def _gs_log(level: str, msg: str) -> None:
     """
@@ -100,18 +103,21 @@ def fetch_prior_decisions(
     if not sheet_url:
         return {}
     if not HAVE_GS:
-        #warn("[GS] Skipping carry-forward; Google Sheets libraries are missing.")
-        _gs_log("WARN", "Skipping carry-forward; Google Sheets libraries are missing.")
-        return {}
+        _gs_log(
+            "WARN",
+            "Skipping Sheets push because Google Sheets libraries are not available. "
+            "Review the CSVs in output/ and, if you want Sheets again, activate the venv and reinstall the libs.",
+        )
+        return
     if not key_path:
         #warn("[GS] Skipping carry-forward; no key path was provided.")
-        _gs_log("WARN", "Skipping carry-forward; no key path was provided.")
+        _gs_log("WARN", f"Skipping carry-forward; key file not found at {key_file}.")
         return {}
 
     key_file = Path(key_path)
     if not key_file.exists():
         #warn(f"[GS] Skipping carry-forward; key file not found at {key_file}.")
-        _gs_log("WARN", "Skipping carry-forward; key file not found at {key_file}.")
+        _gs_log("WARN", f"Skipping carry-forward; key file not found at {key_file}.")
         return {}
 
     try:
@@ -266,22 +272,25 @@ def push_rows_to_google_sheet(
             progress_clear()
 
         header = ws.row_values(1)
-        # Keep the header in sync without clearing existing data.
-        # If the sheet is empty, write the header. Otherwise respect the existing header order.
+        while header and not str(header[-1]).strip():
+            header.pop()
+
         if not header:
             ws.update("A1", [fields])
-            header = fields
+            header = list(fields)
         else:
-            # Trim trailing empty header cells
-            while header and not str(header[-1]).strip():
-                header.pop()
-            if header and header != fields:
-                warn("[GS] Header on sheet differs from expected fields; appending using existing header order.")
+            missing = [f for f in fields if f not in header]
+            if missing:
+                header = header + missing
+                ws.update("A1", [header])
+                _gs_log("INFO", f"Expanded header with new columns: {missing!r}")
+            elif header != fields:
+                _gs_log("WARN", "Header on sheet differs from expected fields; using existing header order.")
 
-        target_fields = header or fields
-        values = [[row.get(field, "") for field in target_fields] for row in rows]
+        target_fields = header
+        values = [[_normalize_sheet_value(r.get(field, "")) for field in target_fields] for r in rows]
         ws.append_rows(values, value_input_option="USER_ENTERED")
-        info(f"[GS] Pushed {len(values)} rows to tab '{ws.title}'.")
+        _gs_log("INFO", f"Pushed {len(values)} rows to tab '{ws.title}'.")
     except ImportError as e:
         warn(
             "[GS] Skipping Sheets push; missing libs: "
@@ -323,8 +332,11 @@ def to_keep_sheet_row(keep_row, applied="", reason=""):
         "Apply URL Note": _normalize_sheet_value(keep_row.get("Apply URL Note", "")),
         "Description Snippet": _normalize_sheet_value(keep_row.get("Description Snippet", "")),
         "WA Rule": _normalize_sheet_value(keep_row.get("WA Rule", "")),
+        "BC Rule": _normalize_sheet_value(keep_row.get("BC Rule", "")),
+        "ON Rule": _normalize_sheet_value(keep_row.get("ON Rule", "")),
         "Remote Rule": _normalize_sheet_value(keep_row.get("Remote Rule", "")),
         "US Rule": _normalize_sheet_value(keep_row.get("US Rule", "")),
+        "Canada Rule": _normalize_sheet_value(keep_row.get("Canada Rule", "")),
         "Salary Max Detected": _normalize_sheet_value(keep_row.get("Salary Max Detected", "")),
         "Salary Rule": _normalize_sheet_value(keep_row.get("Salary Rule", "")),
         "Salary Near Min": _normalize_sheet_value(keep_row.get("Salary Near Min", "")),
@@ -358,8 +370,11 @@ def to_skipped_sheet_row(skip_row, applied="", reason=""):
         #"Apply URL Note": _normalize_sheet_value(skip_row.get("Apply URL Note", "")),
         "Reason Skipped": _normalize_sheet_value(skip_row.get("Reason Skipped", reason)),
         "WA Rule": _normalize_sheet_value(skip_row.get("WA Rule", "")),
+        "BC Rule": _normalize_sheet_value(skip_row.get("BC Rule", "")),
+        "ON Rule": _normalize_sheet_value(skip_row.get("ON Rule", "")),
         "Remote Rule": _normalize_sheet_value(skip_row.get("Remote Rule", "")),
         "US Rule": _normalize_sheet_value(skip_row.get("US Rule", "")),
+        "Canada Rule": _normalize_sheet_value(skip_row.get("Canada Rule", "")),
         "Salary Max Detected": _normalize_sheet_value(skip_row.get("Salary Max Detected", "")),
         #"Skip Rule": _normalize_sheet_value(skip_row.get("Skip Rule", "")),
         "Salary Rule": _normalize_sheet_value(skip_row.get("Salary Rule", "")),

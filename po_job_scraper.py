@@ -1,5 +1,6 @@
 # --- Auto-backup section for job-scraper project ---
 
+import html as _html
 import shutil
 import subprocess
 import textwrap
@@ -9,11 +10,20 @@ import traceback
 import csv
 import json
 import urllib.parse as up
-
-
-import json
 import re
-
+from config import geo_constants
+from config.location_chips import tokenize_location_chips, derive_locked_location_chips
+from config.locality import matches_locality
+from config.geo_constants import CAN_PROV_MAP, US_STATE_ABBRS, US_STATE_CHIPS, US_STATE_NAMES, REGION_TOKENS, REGION_SYNONYMS, PATH_LOC_MAP, ALLOWED_LOCATION_CHIPS, ALLOWED_REGION_TOKENS, LOCATION_CHIP_SYNONYMS, APPLICANT_REGION_TOKENS
+from config.geo_regex import (
+    CAN_PROV_RX,
+    PLACEHOLDER_RX,
+    COUNTRY_RX,
+    CA_HINTS,
+    REMOTE_KEYWORDS,
+    ONSITE_BLOCKERS,
+    SINGLE_CITY_PATTERNS,
+)
 
 from contextlib import contextmanager
 from urllib import robotparser
@@ -26,7 +36,7 @@ from datetime import datetime, timedelta
 from dateutil import parser as dateparser
 from bs4 import BeautifulSoup
 from contextlib import contextmanager
-from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode
+from classification_rules import ClassificationConfig, classify_keep_or_skip, classify_work_mode, _as_listish
 from edsurge_jobs import scrape_edsurge_jobs
 from gsheets_utils import (
     init_gs_libs,
@@ -45,9 +55,10 @@ from logging_utils import (
     error,
     done_log,
     progress,
+    trace_chips,
     progress_clear_if_needed,
+    log_line, trace_chips,
 )
-
 
 
 DOT  = "."              # 1 dot
@@ -119,8 +130,11 @@ def base_row_from_listing(listing: dict, board_name: str, detail_url: str) -> di
         "Apply URL Note": "",
         "Description Snippet": listing.get("snippet") or "",
         "WA Rule": "",
+        "BC Rule": "",
+        "ON Rule": "",
         "Remote Rule": "",
         "US Rule": "",
+        "Canada Rule": "",
         "Salary Max Detected": "",
         "Salary Rule": "",
         "Salary Near Min": "",
@@ -129,6 +143,7 @@ def base_row_from_listing(listing: dict, board_name: str, detail_url: str) -> di
         "Salary Est. (Low-High)": "",
         "Location Chips": "",
         "Applicant Regions": "",
+        "Applicant Regions Source": "",
         "Visibility Status": "",
         "Confidence Score": "",
         "Confidence Mark": "",
@@ -841,8 +856,8 @@ ALLOW_PM = True  # set True if you want Product Manager roles too
 # Sites that are *boards/aggregators* (do NOT use their site_name as company)
 BOARD_HOSTS = {
     "remotive.com", "weworkremotely.com", "nodesk.co", "workingnomads.com",
-    "remoteok.com", "builtin.com", "builtinvancouver.com", "simplyhired.com",
-    # "themuse.com",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
+    "remoteok.com", "builtin.com", "builtinseattle.com","builtinvancouver.com",
+    "simplyhired.com","themuse.com",
     "ycombinator.com", "remote.co", "angel.co", "wellfound.com", "stackoverflow.com",
     "jobspresso.co", "powertofly.com", "landing.jobs", "careerjet.com",
     "jobboard.io", "authenticjobs.com", "jobbatical.com", "workew.com",
@@ -955,11 +970,15 @@ def _job_key(details: dict, link: str) -> str:
             k_norm = (k or "").lower()
             if k_norm in drop:
                 continue
-            # Normalize key casing for stability; keep value as is
             kept.append((k_norm, v))
 
         kept.sort()
         query = urlencode(kept, doseq=True)
+
+        # Built In cross-board dedupe:
+        # Use path + normalized query only, so the key does not imply a specific host.
+        if host in {"builtin.com", "www.builtin.com", "builtinseattle.com", "www.builtinseattle.com", "builtinvancouver.org", "www.builtinvancouver.org"}:
+            return f"{path}?{query}" if query else path
 
         clean = urlunparse((scheme, host, path, "", query, ""))
         return clean or job_url
@@ -1302,57 +1321,151 @@ def _apply_builtinvancouver_overrides(
     applicant_regions: list[str],
 ) -> tuple[list[str], list[str]]:
     """
-    Built In Vancouver has Canada signals polluted by generic "US" defaults and site chrome.
-    This applies the current special rules and returns updated (chips, applicant_regions).
+    Built In Vancouver has Canada signals polluted by generic defaults and site chrome.
+    If we detect Canada, force Canada pass and US fail, and ensure CAN is present in chips
+    and 'can' is present in applicant regions.
     """
-    is_biv = "builtinvancouver.org" in (job_url or "")
+    is_biv = "builtinvancouver.org" in (job_url or "").lower()
     if not is_biv:
         return chips, applicant_regions
 
-    is_canada = bool(
-        re.search(r"\bcanada\b", loc_low)
-        or re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low)  # ", CAN"
-        or _has_can_province_signal(loc_low)
-        or any(str(c).lower() == "canada" for c in (chips or []))
-    )
-    if not is_canada:
-        return chips, applicant_regions
+    # Normalize inputs defensively
+    chips_list = [str(c).strip().upper() for c in (chips or []) if str(c).strip()]
+    app_list = [str(r).strip().lower() for r in (applicant_regions or []) if str(r).strip()]
 
-    # Preserve your existing behavior
+    is_canada = bool(
+        re.search(r"\bcanada\b", loc_low or "")
+        or re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low or "")
+        or _has_can_province_signal(loc_low or "")
+        or ("CAN" in chips_list)
+    )
+
+    # Only stamp the source when the override actually triggers
+    if not is_canada:
+        return chips_list, app_list
+
+    if not (details.get("Applicant Regions Source") or "").strip():
+        details["Applicant Regions Source"] = "BIV_RULES"
+
     details["US Rule"] = "Fail"
     details["WA Rule"] = "Fail"
     details["Canada Rule"] = "Pass"
 
-    chips = [c for c in (chips or []) if c not in {"US", "NA"}]
+    existing_notes = (details.get("Eligibility Notes") or "").strip()
+    if "BIV_CANADA_OVERRIDE" not in existing_notes:
+        details["Eligibility Notes"] = (existing_notes + "|BIV_CANADA_OVERRIDE").strip("|")
 
-    app_regions_changed = False
-    orig_applicant_regions = list(applicant_regions or [])
-    applicant_regions = [r for r in (applicant_regions or []) if r not in {"US", "NA"}]
-    if applicant_regions != orig_applicant_regions:
-        app_regions_changed = True
+    # Ensure CAN chip, then filter to allowed chips
+    if "CAN" not in chips_list:
+        chips_list.append("CAN")
+    chips_list = [c for c in chips_list if c in ALLOWED_LOCATION_CHIPS]
 
-    if not any(str(c).lower() == "canada" for c in chips):
-        chips.append("Canada")
+    # Ensure 'can' region
+    if not app_list:
+        app_list = ["can"]
+    elif "can" not in app_list:
+        app_list.append("can")
 
-    # If Applicant Regions is empty, imply Canada (board implied)
-    if not applicant_regions:
-        applicant_regions = ["Canada"]
-        app_regions_changed = True
+    return chips_list, app_list
 
-    if app_regions_changed and not (details.get("Applicant Regions Source") or "").strip():
-        details["Applicant Regions Source"] = "BOARD"
+def _is_built_in_host(host: str) -> bool:
+    h = (host or "").lower()
+    return "builtin" in h  # catches builtin.com + builtinvancouver.org + other Built In city sites
 
-    rr = (details.get("Remote Rule") or "").strip()
-    loc_specific = _has_can_province_signal(loc_low)
-    country_wide = (loc_low in {"canada", "can", "ca"} or loc_low.strip() == "")
+def _builtin_hero_location_token(soup) -> str:
+    """
+    Built In hero scope only.
+    Extract the token from the hero location row:
+    'Hiring Remotely in <TOKEN>' or similar.
+    """
+    if not soup:
+        return ""
 
-    if rr not in {"Remote", "Hybrid", "Onsite"}:
-        if country_wide and not loc_specific:
-            details["Remote Rule"] = "Remote"
+    hero_blocks = soup.select("div.col-12.col-lg-3, div.container.d-lg-none")
+    for hero in hero_blocks:
+        icon = hero.select_one("i.fa-location-dot")
+        if not icon:
+            continue
+
+        container = icon.find_parent("div", class_=re.compile(r"\bd-flex\b", re.I))
+        if not container:
+            continue
+
+        spans = container.find_all("span")
+        if not spans:
+            continue
+
+        for i, sp in enumerate(spans):
+            txt = sp.get_text(" ", strip=True)
+            if re.search(r"\bHiring\s+Remotely\s+in\b", txt, re.I):
+                if i + 1 < len(spans):
+                    token = spans[i + 1].get_text(" ", strip=True)
+                    return (token or "").strip()
+
+    return ""
+
+def _apply_builtin_family_hero_lock(details: dict, host: str, soup) -> None:
+    if not soup:
+        return
+
+    token = _builtin_hero_location_token(soup)
+    if not token:
+        return
+
+    h = (host or "").lower()
+    if "builtinvancouver.org" in h:
+        norm = _normalize_biv_location_value(token)  # CAN / USA and remote cleanup
+        # For Vancouver, CAN means Canada
+        if norm == "CAN":
+            details["Location"] = "Canada"
+        elif norm == "USA":
+            details["Location"] = "United States"
         else:
-            details["Remote Rule"] = "Onsite"
+            details["Location"] = norm
 
-    return chips, applicant_regions
+        details["LocationRaw"] = norm
+        details["Location Chips"] = norm
+        details["Location Chips Source"] = "HERO"
+        details["_LOCK_LOCATION_CHIPS"] = True
+        details["Remote Rule"] = "Remote"
+
+    elif "builtin.com" in h:
+        # builtin.com: be conservative with CA
+        norm = (token or "").strip().upper()
+
+        # If the hero token is CAN or USA, lock immediately
+        if norm in {"CAN", "USA"}:
+            details["Location Chips"] = norm
+            details["Location Chips Source"] = "HERO"
+            details["_LOCK_LOCATION_CHIPS"] = True
+
+        # If token is CA, assume California unless strong Canada context exists
+        elif norm == "CA":
+            ca_is_canada = bool(
+                re.search(r"\bCanada\b", (details.get("Location") or ""), re.I)
+                or (details.get("Canada Rule") or "").strip().lower() == "pass"
+            )
+            if ca_is_canada:
+                details["Location Chips Source"] = (details.get("Location Chips Source") or "") + "|HERO_LOCK"
+                _set_loc_chips(details, "CAN", "HERO_LOCK set CAN only")
+            else:
+                details["Location Chips"] = "CA"  # California chip
+            details["Location Chips Source"] = "HERO"
+            details["_LOCK_LOCATION_CHIPS"] = True
+
+        # If token is a state or province code you allow, lock it
+        elif norm in ALLOWED_LOCATION_CHIPS:
+            details["Location Chips"] = norm
+            details["Location Chips Source"] = "HERO"
+            details["_LOCK_LOCATION_CHIPS"] = True
+
+    # If we locked chips, keep Location display consistent
+    if details.get("_LOCK_LOCATION_CHIPS"):
+        try:
+            if not details.get("_DERIVE_LOCATION_RULES_DONE"):
+                details = _derive_location_rules(details)
+        except Exception:
+            pass
 
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
@@ -1972,10 +2085,10 @@ def enrich_dice_fields(details: dict, raw_html: str) -> dict:
             header_loc_display = header_loc
 
         # Override only if Location is missing or currently just "US"
-        cur_loc = details.get("Location") or details.get("Location Raw") or ""
+        cur_loc = details.get("Location") or details.get("LocationRaw") or ""
         if not cur_loc or _is_us_only(cur_loc):
             details["Location"] = header_loc_display
-            details["Location Raw"] = header_loc
+            details["LocationRaw"] = header_loc
 
     # 1. Title / Company / Location from og:title
     #    Example:
@@ -2203,25 +2316,27 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
     except Exception:
         pass
 
+    details["remote_flag"] = remote_flag  # <--- add this
 
+    # Remote rule
     remote_rule = (details.get("Remote Rule") or details.get("remote_flag") or "Unknown").strip()
+    remote_rule_norm = remote_rule.strip().title()
 
-    badge_text = " ".join([
-        details.get("workplace_type") or "",
-        details.get("work_mode") or "",
-        details.get("workplace_badge") or "",
-    ]).strip()
+    badge_text = " ".join([ details.get("workplace_type") or "", details.get("work_mode") or "", details.get("workplace_badge") or "", ]).strip()
 
-    is_biv = "builtinvancouver.org" in job_url
+    job_url_low = (details.get("Job URL") or "").lower()
+    is_biv = "builtinvancouver.org" in job_url_low
 
     # If we already have an explicit rule, keep it
-    if remote_rule not in {"Remote", "Hybrid", "Onsite"}:
+    if remote_rule_norm not in {"Remote", "Hybrid", "Onsite"}:
         if is_biv:
-            # Avoid page chrome, only trust badge text if present
-            remote_rule = classify_work_mode(badge_text) if badge_text else "Unknown"
+            remote_rule_norm = classify_work_mode(badge_text) if badge_text else "Unknown"
         else:
-            t = f"{text} {badge_text}".lower()
-            remote_rule = classify_work_mode(t)
+            text_for_rules = locals().get("text_for_rules", "") or ""
+            t = f"{text_for_rules} {badge_text}".lower()
+            remote_rule_norm = classify_work_mode(t)
+
+    details["Remote Rule"] = remote_rule_norm
 
     for sel in [
         '[data-test-id="location"]',
@@ -2344,8 +2459,9 @@ def parse_hubspot_detail(html_or_soup, job_url: str) -> dict:
         "employment_type": emp_type,
         "is_remote_flag": remote_flag,
         "Remote Rule": remote_flag,
-        "Location Chips": loc,
+        "Location Chips": "",
         "Applicant Regions": "",
+        "Applicant Regions Source": "",
         "Salary Range": salary_range,
         "Salary Est. (Low-High)": salary_range,
         "career_board": "HubSpot (Public)",
@@ -2519,7 +2635,7 @@ def _debug_biv_loc(stage: str, details: dict, extra: dict | None = None) -> None
         if extra and isinstance(extra, dict):
             job_url = (extra.get("job_url") or extra.get("url") or "").strip().lower()
 
-        is_builtin = ("builtin.com" in job_url) or ("builtinvancouver.org" in job_url)
+        is_builtin = ("builtin.com" in job_url) or ("builtinvancouver.org" in job_url) or ("builtinseattle.com" in job_url)
 
         t_ok = bool((details.get("Title") or "").strip())
         c_ok = bool((details.get("Company") or "").strip())
@@ -2537,8 +2653,6 @@ def _debug_biv_loc(stage: str, details: dict, extra: dict | None = None) -> None
         if len(s) > 220:
             s = s[:220] + "...(trunc)"
         #log_line("BIV DEBUG", f"{DOTL}..{k:<16}: {s}")
-
-
 
 _BUILTIN_RANGE_RX = re.compile(
     r"""
@@ -2937,30 +3051,194 @@ def _debug_builtin_page_fingerprint(details: dict, host: str, job_url: str, html
 def _builtin_is_count_label(s: str) -> bool:
     return bool(re.match(r"^\s*\d+\s+Locations?\s*$", (s or "").strip(), re.I))
 
+import re
+
+def _extract_biv_hiring_remotely_location(html: str) -> Optional[str]:
+    if not html:
+        return None
+
+    # Handles: <span>Hiring Remotely in </span><span>CAN</span>
+    m = re.search(r"Hiring\s+Remotely\s+in\s*</span>\s*<span>\s*([A-Z]{2,3})\s*</span>", html, re.IGNORECASE)
+    if not m:
+        return None
+    code = m.group(1).upper()
+    return f"Hiring Remotely in {code}"
+
+def _extract_biv_hiring_remotely_country_chips(html: str) -> list[str]:
+    if not html:
+        return []
+
+    # Capture multiple country spans if they exist
+    # This is intentionally conservative: it only pulls 2 to 3 letter uppercase codes following the phrase.
+    block = re.search(r"Hiring\s+Remotely\s+in.*?</div>", html, re.IGNORECASE | re.DOTALL)
+    if not block:
+        return []
+
+    codes = re.findall(r"<span>\s*([A-Z]{2,3})\s*</span>", block.group(0))
+    # Filter to plausible country codes used by your pipeline (CAN, USA, PRT, ESP, etc)
+    out = []
+    for c in codes:
+        c = c.upper()
+        if c in {"USA", "CAN", "PRT", "ESP", "UK"}:
+            out.append(c)
+    # de-dupe preserve order
+    seen = set()
+    uniq = []
+    for c in out:
+        if c not in seen:
+            uniq.append(c)
+            seen.add(c)
+    return uniq
+
+def _extract_biv_hiring_remotely_location(html: str) -> str | None:
+    """
+    BuiltInVancouver: detect a headline style phrase like:
+      "Hiring Remotely in CAN"
+      "Hiring Remotely in Canada"
+      "Hiring Remotely in CAN and USA"
+    Returns the exact normalized phrase we want to persist, or None.
+    """
+    text = " ".join((html or "").split())
+    if not text:
+        return None
+
+    # Look for the phrase in raw text first (fast and resilient)
+    m = re.search(r"\bHiring\s+Remotely\s+in\s+([^<]{1,80})", text, re.I)
+    if not m:
+        # Fallback: try soup text
+        soup = BeautifulSoup(html or "", "html.parser")
+        soup_text = " ".join(soup.get_text(" ", strip=True).split())
+        m = re.search(r"\bHiring\s+Remotely\s+in\s+(.{1,80})", soup_text, re.I)
+        if not m:
+            return None
+
+    tail = (m.group(1) or "").strip()
+
+    # Stop the capture at common boundary words or separators.
+    # This avoids accidentally pulling the whole page.
+    # Example tail might be: "CAN Mid level Remote 3 locations..."
+    tail = re.split(r"\b(Job|Posted|Mid\s+level|Senior|Role|Team|What\s+you|About)\b", tail, maxsplit=1, flags=re.I)[0]
+    tail = tail.strip(" -|/•·,;:").strip()
+
+    if not tail:
+        return None
+
+    # Normalize common values to your preferred display
+    # You said Lumos should be exactly "Hiring Remotely in CAN"
+    tail_norm = tail
+
+    # Map "Canada" variants to CAN
+    if re.fullmatch(r"canada", tail_norm, re.I):
+        tail_norm = "CAN"
+    # Map "United States" variants to USA
+    if re.fullmatch(r"(united\s+states|u\.?s\.?a\.?|u\.?s\.?)", tail_norm, re.I):
+        tail_norm = "USA"
+
+    # If it contains both CAN + USA in any form, normalize those tokens
+    # Keep it readable, but still deterministic.
+    # Examples:
+    #  "Canada and USA" -> "CAN and USA"
+    #  "CAN, USA" -> "CAN, USA"
+    tail_norm = re.sub(r"\bCanada\b", "CAN", tail_norm, flags=re.I)
+    tail_norm = re.sub(r"\bUnited\s+States\b", "USA", tail_norm, flags=re.I)
+    tail_norm = re.sub(r"\bU\.?S\.?A\.?\b", "USA", tail_norm, flags=re.I)
+    tail_norm = re.sub(r"\bU\.?S\.?\b", "USA", tail_norm, flags=re.I)
+
+    # Guardrail: only accept if it still looks like a region phrase,
+    # not a sentence.
+    if len(tail_norm) > 50:
+        return None
+
+    return f"Hiring Remotely in {tail_norm}"
+
+def _extract_biv_hiring_remotely_country_chips(html: str) -> list[str]:
+    """
+    Given the same page HTML, return country chips inferred from the
+    "Hiring Remotely in ..." phrase.
+
+    Output tokens are the scraper's country chips: USA, CAN, etc.
+    """
+    loc = _extract_biv_hiring_remotely_location(html)
+    if not loc:
+        return []
+
+    low = loc.lower()
+
+    chips: list[str] = []
+    if re.search(r"\b(can|canada)\b", low):
+        chips.append("CAN")
+    if re.search(r"\b(usa|united states|u\.?s\.?)\b", low):
+        chips.append("USA")
+    if re.search(r"\b(portugal|pt)\b", low):
+        chips.append("PRT")
+    if re.search(r"\b(spain|es)\b", low):
+        chips.append("ESP")
+
+    # De dupe preserve order
+    seen = set()
+    out: list[str] = []
+    for c in chips:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+
+    return out
+
 def _builtin_tooltip_locations_from_html(html: str) -> list[str]:
     """
-    Extract tooltip locations directly from raw HTML (pre prune).
-    Returns a list of locations if present, else [].
+    Extract job locations from Built In tooltip HTML.
+
+    Strict rules:
+    - Only accept known location containers inside the tooltip content:
+      div.col-lg-6 or div.text-truncate
+    - Never fall back to selecting all divs
+    - Choose the best candidate tooltip by plausibility scoring
     """
+    import html as _html
     soup0 = BeautifulSoup(html or "", "html.parser")
     candidates = soup0.select("[data-bs-toggle='tooltip'], [data-toggle='tooltip']")
 
+    def _clean(s: str) -> str:
+        return re.sub(r"\s+", " ", (s or "").strip())
+
+    def _is_plausible_location(s: str) -> bool:
+        # Reject obvious non location content
+        low = s.lower()
+        if any(x in low for x in ["posted", "mid level", "junior", "senior", "days ago", "locations"]):
+            return False
+
+        # Too long is usually leakage
+        if len(s) > 60:
+            return False
+
+        # City, ST, USA style: allow up to 2 commas (eg "Chicago, IL, USA" = 2)
+        if s.count(",") > 2:
+            return False
+
+        # Otherwise allow simple country names (eg "Canada", "Spain", "Portugal")
+        # Letters and spaces only, short-ish
+        if "," not in s:
+            return bool(re.fullmatch(r"[A-Za-z][A-Za-z ]{1,40}[A-Za-z]?", s))
+
+        return True
+
     best: list[str] = []
-    import html as _html
+    best_score = -10_000
 
     for node in candidates:
-        label_text = (node.get_text(" ", strip=True) or "").strip()
-        aria_label = (node.get("aria-label") or "").strip()
+        label_text = _clean(node.get_text(" ", strip=True))
+        aria_label = _clean(node.get("aria-label") or "")
         label = label_text or aria_label
 
+        # We are looking for the Locations tooltip
         if not re.search(r"\bLocations?\b", label, re.I) and "job locations" not in label.lower():
             continue
 
         raw = (
-            (node.get("data-bs-original-title") or "").strip()
-            or (node.get("data-bs-title") or "").strip()
-            or (node.get("data-original-title") or "").strip()
-            or (node.get("title") or "").strip()
+            _clean(node.get("data-bs-original-title") or "")
+            or _clean(node.get("data-bs-title") or "")
+            or _clean(node.get("data-original-title") or "")
+            or _clean(node.get("title") or "")
         )
         if not raw:
             continue
@@ -2968,13 +3246,12 @@ def _builtin_tooltip_locations_from_html(html: str) -> list[str]:
         unesc = _html.unescape(_html.unescape(raw))
         inner = BeautifulSoup(unesc, "html.parser")
 
+        # Strict extraction: only known containers
         locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
-        if not locs:
-            locs = [d.get_text(" ", strip=True) for d in inner.select("div.text-truncate")]
-        if not locs:
-            locs = [d.get_text(" ", strip=True) for d in inner.select("div")]
+        #if not locs:
+            #locs = [d.get_text(" ", strip=True) for d in inner.select("div.text-truncate")]
+        locs = [_clean(x) for x in locs if _clean(x)]
 
-        locs = [x.strip() for x in locs if x and x.strip()]
         if not locs:
             continue
 
@@ -2987,10 +3264,89 @@ def _builtin_tooltip_locations_from_html(html: str) -> list[str]:
                 seen.add(k)
                 uniq.append(x)
 
-        if len(uniq) > len(best):
-            best = uniq
+        # Plausibility filter
+        plausible = [x for x in uniq if _is_plausible_location(x)]
+        invalid = [x for x in uniq if not _is_plausible_location(x)]
+
+        # Score candidate
+        # Prefer:
+        # - more plausible items
+        # - fewer invalid items
+        # - smaller lists when plausibility ties (avoids “vacuum” lists)
+        score = (len(plausible) * 10) - (len(invalid) * 50) - len(uniq)
+
+        if plausible and score > best_score:
+            best_score = score
+            best = plausible
+        
+        def _ok(s: str) -> bool:
+            s = (s or "").strip()
+            if not s:
+                return False
+            if s.count(",") > 2:
+                return False
+            if len(s) > 60:
+                return False
+            return True
+
+        locs = [x for x in locs if _ok(x)]
 
     return best
+
+def _builtin_primary_locations_from_html(html: str) -> list[str]:
+    """
+    Extract the job's own location tooltip by anchoring on the location icon
+    within the job detail card. Avoids "Similar Jobs" tooltips.
+    """
+    import html as _html
+
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    # Find the first location icon in the main job section
+    # This is much more specific than scanning all tooltips.
+    icon = soup.select_one("i.fa-location-dot, i.fa-regular.fa-location-dot")
+    if not icon:
+        return []
+
+    # Walk up to a reasonable container, then search within it for the tooltip span
+    container = icon
+    for _ in range(6):
+        if container is None:
+            break
+        # Heuristic: stop at a card-like wrapper
+        cls = " ".join(container.get("class", []))
+        if any(x in cls for x in ["bg-white", "rounded", "container", "row"]):
+            break
+        container = container.parent
+
+    scope = container or soup
+
+    # Look for the tooltip element near the icon inside this scope
+    node = scope.select_one("[data-bs-toggle='tooltip'][data-html='true'], [data-toggle='tooltip'][data-html='true']")
+    if not node:
+        node = scope.select_one("[data-bs-toggle='tooltip'], [data-toggle='tooltip']")
+    if not node:
+        return []
+
+    raw = (
+        (node.get("data-bs-original-title") or "").strip()
+        or (node.get("data-bs-title") or "").strip()
+        or (node.get("data-original-title") or "").strip()
+        or (node.get("title") or "").strip()
+    )
+    if not raw:
+        return []
+
+    unesc = _html.unescape(_html.unescape(raw))
+    inner = BeautifulSoup(unesc, "html.parser")
+
+    # Built In Vancouver uses col-lg-6 in the tooltip HTML you pasted
+    locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
+    if not locs:
+        locs = [d.get_text(" ", strip=True) for d in inner.select("div.text-truncate")]
+
+    locs = [x.strip() for x in locs if x and x.strip()]
+    return locs
 
 def extract_builtin_salary(
     ld_json: Optional[Dict[str, Any]],
@@ -3072,7 +3428,7 @@ def _is_country_only(loc: str | None) -> bool:
     if not loc:
         return True
     s = loc.strip().lower()
-    return s in {"canada", "ca", "can", "us", "usa", "united states"}
+    return s in {"canada", "can", "us", "usa", "united states"}
 
 def _looks_richer(loc: str | None) -> bool:
     if not loc:
@@ -3164,7 +3520,7 @@ def _yc_extract_location_from_soup(soup: BeautifulSoup) -> str:
             continue
 
         # Throw away obvious garbage
-        if low in {"us", "ca", "usa", "canada"}:
+        if low in {"us", "usa", "canada", "can"}:
             continue
         if "interview guide" in low or "startup jobs" in low:
             continue
@@ -3264,7 +3620,15 @@ def _prefer_listing_location(details: dict, listing: dict) -> dict:
     if l_loc and listing_has_multi and detail_is_weak:
         #_yc_trace(details, "YC RULES BEFORE ASSIGN", DOT)
         details["Location"] = l_loc
-        details["Location Raw"] = listing.get("Location Raw") or l_loc
+        raw_from_listing = (listing.get("Location Raw") or "").strip()
+        raw_fallback = (l_loc or "").strip()
+
+        # Only write Location Raw if we are improving it, not downgrading it
+        if raw_from_listing:
+            details["LocationRaw"] = raw_from_listing
+        elif raw_fallback and not (details.get("LocationRaw") or "").strip():
+            details["LocationRaw"] = raw_fallback
+
 
     # also carry over chips or other location signals if they exist
     for k in ["Location Chips", "Locations Text", "Applicant Regions", "Regions"]:
@@ -3368,6 +3732,111 @@ def apply_builtin_salary(details: Dict[str, Any]) -> None:
 
             return best
 
+def _order_location_chips(chips_list: list[str]) -> list[str]:
+    # normalize
+    raw = []
+    for c in chips_list or []:
+        c = (c or "").strip().upper()
+        if c:
+            raw.append(c)
+
+    # de-dupe while preserving first occurrence
+    seen = set()
+    uniq = []
+    for c in raw:
+        if c not in seen:
+            uniq.append(c)
+            seen.add(c)
+
+    # priority order: countries first, then common provinces/states, then rest
+    priority = [
+        "USA", "CAN",
+        "WA", "BC", "ON",
+        "CA",  # California state token (intentionally AFTER countries)
+    ]
+    prio_index = {v: i for i, v in enumerate(priority)}
+
+    def key(c: str):
+        return (0, prio_index[c]) if c in prio_index else (1, c)
+
+    return sorted(uniq, key=key)
+
+def set_location_chips(details: dict, value, tag: str = "") -> None:
+    prev = details.get("Location Chips")
+    details["Location Chips"] = value
+
+    # Only scream when chips go from something to empty
+    now = details.get("Location Chips")
+    if (prev not in (None, "", [])) and (now in (None, "", [])):
+        stack = "".join(traceback.format_stack(limit=8))
+        log_line(
+            "DEBUG",
+            f"[CHIPS WIPE] tag={tag} prev={prev!r} now={now!r} "
+            f"Location={details.get('Location')!r} url={details.get('Apply URL') or details.get('Job URL')!r}\n{stack}"
+        )
+
+def _finalize_location_chips(chips: list[str]) -> str:
+    """
+    Truth-only chip cleanup:
+    - uppercase
+    - normalize synonyms (CANADA->CAN, US->USA, etc)
+    - remove REMOTE
+    - de-dupe and stable sort
+    """
+    out: set[str] = set()
+    for c in chips or []:
+        t = (c or "").strip().upper()
+        if not t:
+            continue
+        t = geo_constants.LOCATION_CHIP_SYNONYMS.get(t, t)
+        if t == "REMOTE":
+            continue
+        out.add(t)
+    return "|".join(sorted(out))
+
+def _set_location_chip_source(details: dict, source: str):
+    details["_LOCATION_CHIPS_SOURCE"] = source
+    details["Location Chips Source"] = source
+
+def canonicalize_location_chips(chips_str: str) -> str:
+    """
+    Canonical order:
+      1) Countries (USA, CAN)
+      2) States/provinces (2 letter)
+      3) Everything else
+    Also de-dupes while preserving canonical order.
+    """
+    raw = [c.strip().upper() for c in (chips_str or "").split("|") if c.strip()]
+    # de-dupe while keeping first occurrence
+    seen = set()
+    raw = [c for c in raw if not (c in seen or seen.add(c))]
+
+    country_priority = {"USA": 0, "CAN": 1}
+    def _key(tok: str):
+        if tok in country_priority:
+            return (0, country_priority[tok], tok)
+        if len(tok) == 2 and tok.isalpha():
+            return (1, 0, tok)
+        return (2, 0, tok)
+
+    ordered = sorted(raw, key=_key)
+    return "|".join(ordered)
+
+def canonicalize_chip_pipe(pipe: str) -> str:
+    if not pipe:
+        return ""
+    toks = [t.strip().upper() for t in str(pipe).split("|") if t.strip()]
+    rank = {"CAN": 0, "USA": 1}
+    def key(t: str):
+        return (rank.get(t, 10), t)
+    seen = set()
+    out = []
+    for t in sorted(toks, key=key):
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return "|".join(out)
+
 def extract_job_details(html: str, job_url: str) -> dict:
     """
     Generic page detail parser used by many boards.
@@ -3393,7 +3862,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
     )
 
     vis_loc = ""
-    if "builtin.com" in host:
+    if ("builtin.com" in host) or ("builtinseattle.com" in host) or ("builtinvancouver.org" in host):
         vis_loc = _builtin_visible_location_from_html(html or "")
 
         if vis_loc:
@@ -3405,7 +3874,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
     t_ok = bool((details.get("Title") or "").strip())
     c_ok = bool((details.get("Company") or "").strip())
-    if not (t_ok and c_ok) and ("builtin.com" in host or "builtinvancouver.org" in host):
+    if not (t_ok and c_ok) and ("builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host):
         _debug_biv_loc(
             "signals snapshot",
             details,
@@ -3417,18 +3886,45 @@ def extract_job_details(html: str, job_url: str) -> dict:
             },
         )
 
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _debug_builtin_page_fingerprint(details, host, job_url, html or "")
 
 
     card = None
 
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _debug_biv_loc("before builtinsignals", details, {"job_url": job_url, "card_found": bool(card)})
         _builtin_fill_title_company_from_builtinsignals(details, soup, html)
         _debug_biv_loc("after builtinsignals", details, {"job_url": job_url, "card_found": bool(card)})
         card = _builtin_job_card_scope(soup, job_url)
         _debug_biv_loc("after card scope", details, {"job_url": job_url, "card_found": bool(card)})
+
+
+    # --- BIV canonicalize Location using Location Raw when it is more specific ---
+    if "builtinvancouver.org" in host:
+        loc = (details.get("Location") or "").strip()
+        raw = (details.get("LocationRaw") or "").strip()
+        _debug_biv_loc("after canonicalize", details, {"Location": details.get("Location"), "Location Raw": details.get("LocationRaw")})
+
+        # If Raw exists and Location looks like a broadened/combined set, prefer Raw.
+        # This fixes cases like Location="Canada / United States" while Raw="Canada".
+        if raw:
+            loc_low = loc.lower()
+            raw_low = raw.lower()
+
+            # If Location contains both Canada and US but Raw is clearly one, keep Raw.
+            has_can = "canada" in loc_low or loc_low == "can"
+            has_us = ("united states" in loc_low) or ("usa" in loc_low) or loc_low == "us"
+
+            raw_is_can = raw_low in {"canada", "can"}
+            raw_is_us = raw_low in {"united states", "usa", "us"}
+
+            if (has_can and has_us) and (raw_is_can or raw_is_us):
+                if not (is_biv and details.get("_LOCK_LOCATION_FROM_TOOLTIP")):
+                    details["Location"] = raw
+                details["Location Source"] = (details.get("Location Source") or "") + "|RAW_WINS"
+            
+    trace_chips(details, "BIV_CHECKPOINT_PRE_NORMALIZE")
 
     if "builtin.com" in host:
         if not (details.get("Title") or "").strip() or not (details.get("Company") or "").strip():
@@ -3442,34 +3938,58 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
         try:
             builtin_meta = _extract_builtin_job_meta(card) or {}
+            details["builtin_meta_location"] = (builtin_meta.get("location") or "")
+            bm = details.get("builtin_meta")
+            bm_loc = bm.get("location") if isinstance(bm, dict) else None
+
+            # ✅ ADD THIS BLOCK HERE
+            try:
+                # Prefer a soup built from the full page HTML, not the small card fragment
+                soup_badge = BeautifulSoup(html or "", "html.parser")
+                details["workplace_badge"] = (_builtin_extract_workplace_badge_text(soup_badge) or "").strip()
+            except Exception:
+                details["workplace_badge"] = ""
+
+            badge = (details.get("workplace_badge") or "").lower()
+
+            # Reset so stale values do not carry forward
+            details.pop("Remote Rule", None)
+            details.pop("_LOCK_REMOTE_RULE", None)
+            details.pop("_REMOTE_RULE_SOURCE", None)
+
+            if "in-office" in badge or "in office" in badge or "on-site" in badge or "onsite" in badge:
+                details["Remote Rule"] = "Onsite"
+            elif "hybrid" in badge:
+                details["Remote Rule"] = "Hybrid"
+            elif "remote" in badge:
+                details["Remote Rule"] = "Remote"
+
+            # ✅ Lock only if we actually set a value
+            if details.get("Remote Rule"):
+                details["_LOCK_REMOTE_RULE"] = True
+                details["_REMOTE_RULE_SOURCE"] = "BADGE"
+
+            log_line(
+                "BIV INPUTS",
+                f"... | builtin_meta_location={bm_loc!r} | workplace_badge={details.get('workplace_badge')!r}"
+            )
+
         except Exception:
             builtin_meta = {}
+        
+        log_line("DEBUG", f"[REMOTE_RULE_SET_BY_BADGE] badge={badge!r} -> Remote Rule={details.get('Remote Rule')!r}")
 
         # Built In tooltip extraction must happen before any pruning.
         # Use a fresh soup so later mutations cannot break the scan.
         soup_tooltip = BeautifulSoup(html or "", "html.parser")
-
-        try:
-            best = _builtin_tooltip_locations_any(soup_tooltip)
-            log_line(
-                "DEBUG",
-                f"[BIVDBG] tooltip_extract_result url={job_url} best_len={len(best)} best_sample={(best[:3] if best else [])}",
-            )
-
-            if best and len(best) > 1:
-                details["_LOCK_LOCATION_CHIPS"] = True
-                details["Location Chips Source"] = "TOOLTIP"
-                details["BIV Tooltip Locations"] = best
-                details["Location"] = " / ".join(best)
-                details.setdefault("Location Raw", details["Location"])
-                details["Location Chips"] = "|".join(best)
-        except Exception as e:
-            _debug_biv_loc("builtin tooltip extract failed", details, {"err": str(e)})
-
+        
         if "builtin.com" in host:
             soup_pre = BeautifulSoup(html or "", "html.parser")
             pre_nodes = soup_pre.select("[data-bs-toggle='tooltip'], [data-toggle='tooltip']")
             log_line("DEBUG", f"[BIVDBG] pre_prune_tooltip_nodes={len(pre_nodes)}")
+
+            # Always initialize so later "if new_val:" never crashes
+            new_val = ""
 
             tooltip_best = _builtin_tooltip_locations_from_html(html or "")
             log_line(
@@ -3478,12 +3998,17 @@ def extract_job_details(html: str, job_url: str) -> dict:
             )
 
             if tooltip_best and len(tooltip_best) > 1:
-                details["_LOCK_LOCATION_CHIPS"] = True
                 details["Location Chips Source"] = "TOOLTIP"
                 details["BIV Tooltip Locations"] = tooltip_best
+                details["_LOCK_LOCATION_FROM_TOOLTIP"] = True
+                details["_LOCK_LOCATION_CHIPS"] = True  # optional but recommended
                 details["Location"] = " / ".join(tooltip_best)
-                details.setdefault("Location Raw", details["Location"])
-                details["Location Chips"] = "|".join(tooltip_best)
+
+                new_val = _chips_pipe_from_location_strings(tooltip_best)
+
+            # Safe now
+            if new_val:
+                _set_loc_chips(details, new_val, "TOOLTIP chips from tooltip_best", force=True)
 
                 if vis_loc:
                     cur = (details.get("Location") or "").strip().lower()
@@ -3541,7 +4066,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
                     if loc_txt and loc_txt.lower() not in {"remote", "hybrid"}:
                         cur = (details.get("Location") or "").strip().lower()
                         if not cur or cur in {"us", "usa", "united states", "remote"}:
-                            details["Location"] = loc_txt
+                            if not (is_biv and details.get("_LOCK_LOCATION_FROM_TOOLTIP")):
+                                details["Location"] = loc_txt
                             details.setdefault("Location Raw", loc_txt)
                             details["Location Source"] = "PAGE"
                             details["Location Chips Source"] = details.get("Location Chips Source") or "PAGE"
@@ -3554,38 +4080,47 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
         if "builtin.com" in host:
             h = html or ""
+
+            has_nloc = bool(re.search(r"\b\d+\s+Locations\b", h))
+            has_tooltip = 'data-bs-toggle="tooltip"' in h
+            has_col = "col-lg-6" in h
+            has_title_attr = ('title="&lt;div' in h) or ('title="<div' in h)
+
             log_line(
                 "DEBUG",
                 "[BIVDBG] html_probe "
                 f"len={len(h)} "
-                f"has_5loc={'5 Locations' in h} "
-                f"has_tooltip={'data-bs-toggle=\"tooltip\"' in h} "
-                f"has_col={'col-lg-6' in h} "
+                f"has_nloc={has_nloc} "
+                f"has_tooltip={has_tooltip} "
+                f"has_col={has_col} "
                 f"has_austin={'Austin, TX, USA' in h} "
-                f"has_title_attr=('title=\"&lt;div' in h or 'title=\"<div' in h)"
+                f"has_title_attr={has_title_attr}"
             )
-
 
         # Built In: multi-location list is stored in a tooltip attribute as escaped HTML.
         # Extract this EARLY so later fallbacks do not lock us to one city.
-        if ("builtinvancouver.org" in host or "builtin.com" in host) and not details.get("BIV Tooltip Locations"):
+        if ("builtinvancouver.org" in host) and not details.get("BIV Tooltip Locations"):
             try:
-                best = _builtin_tooltip_locations_any(soup)
-                log_line(
-                    "DEBUG",
-                    f"[BIVDBG] tooltip_extract_result url={job_url} best_len={len(best)} best_sample={(best[:3] if best else [])}",
-                )
-
+                best = _builtin_tooltip_locations(soup)
                 if best and len(best) > 1:
-                    details["_LOCK_LOCATION_CHIPS"] = True
-                    details["Location Chips Source"] = "TOOLTIP"
-                    details["BIV Tooltip Locations"] = best  # keep list for debugging if you want
-
+                    details["Builtin Tooltip Locations"] = best
                     details["Location"] = " / ".join(best)
+                    details["_LOCK_LOCATION_FROM_TOOLTIP"] = True
+                    details["_LOCK_LOCATION_CHIPS"] = True
                     details.setdefault("Location Raw", details["Location"])
 
-                    # IMPORTANT: store chips as a pipe string when locked
-                    details["Location Chips"] = "|".join(best)
+                    # Do not overwrite locked chips from earlier authoritative sources
+                    if details.get("_LOCK_LOCATION_CHIPS") is True:
+                        pass
+                    else:
+                        new_val = _chips_pipe_from_location_strings(best)
+
+                        details["Location Chips Source"] = "TOOLTIP"
+                        details["_LOCATION_CHIPS_SOURCE"] = "TOOLTIP"
+                        details["_LOCK_LOCATION_CHIPS"] = True
+
+                        if new_val:
+                            _set_loc_chips(details, new_val, "TOOLTIP chips from Builtin Tooltip Locations")
 
                     _debug_biv_loc(
                         "after builtin tooltip locations early extract",
@@ -3637,7 +4172,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
                     if loc_txt:
                         cur = (details.get("Location") or "").strip().lower()
                         if not cur or cur in {"us", "usa", "united states", "remote"}:
-                            details["Location"] = loc_txt
+                            if not (is_biv and details.get("_LOCK_LOCATION_FROM_TOOLTIP")):
+                                details["Location"] = loc_txt
                             details.setdefault("Location Raw", loc_txt)
                             details["Location Source"] = "PAGE"
                             details["Location Chips Source"] = details.get("Location Chips Source") or "PAGE"
@@ -3656,6 +4192,26 @@ def extract_job_details(html: str, job_url: str) -> dict:
         except Exception:
             h = ""
 
+        # --- BIV canonicalize Location using other signals when it is too broad ---
+        if "builtinvancouver.org" in host:
+            loc = (details.get("Location") or "").strip()
+            raw = (details.get("LocationRaw") or "").strip()
+
+            loc_low = loc.lower()
+            has_can = "canada" in loc_low or "can" == loc_low
+            has_us = ("united states" in loc_low) or ("usa" in loc_low) or ("/ us" in loc_low) or (loc_low.endswith(" us"))
+
+            title_low = (details.get("Title") or "").lower()
+            snip_low = (details.get("Description Snippet") or "").lower()
+
+            canada_strong = ("- canada" in title_low) or (" in canada" in snip_low)
+
+            if has_can and has_us and canada_strong:
+                details["Location"] = "Canada"
+                if not (details.get("LocationRaw") or "").strip():
+                    details["LocationRaw"] = "Canada"
+                details["Location Source"] = (details.get("Location Source") or "") + "|CANADA_STRONG_WINS"
+
         yc = ("ycombinator.com" in h)
 
         if yc:
@@ -3670,8 +4226,9 @@ def extract_job_details(html: str, job_url: str) -> dict:
         loc_low = existing_loc.lower()
         if hero_country and loc_low in {"", "canada", "ca", "can"}:
             details["Location"] = hero_country
-            details["Location Raw"] = hero_country
-            details = _derive_location_rules(details)
+            details["LocationRaw"] = hero_country
+            if not details.get("_DERIVE_LOCATION_RULES_DONE"):
+                details = _derive_location_rules(details)
             _debug_biv(details, host, "after hero_country lock + derive")
         else:
             _debug_biv(details, host, "skipped hero_country lock (location already set)")
@@ -3683,7 +4240,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
             dice_loc = _dice_extract_location_from_soup(soup)
             if dice_loc:
                 details["Location"] = dice_loc
-                details["Location Raw"] = dice_loc
+                details["LocationRaw"] = dice_loc
 
 
 
@@ -3809,7 +4366,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
         title = soup.title.get_text(strip=True)
     if builtin_meta.get("title"):
         title = builtin_meta["title"]
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _builtin_fill_title_company_from_builtinsignals(details, soup, html)
         title = _strip_builtin_brand(title)
 
@@ -3865,7 +4422,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
     yc_loc_jsonld = _yc_extract_location_from_jsonld(html)
     if yc_loc_jsonld:
         details["Location"] = yc_loc_jsonld
-        details["Location Raw"] = yc_loc_jsonld
+        details["LocationRaw"] = yc_loc_jsonld
     else:
         # fall back to your existing YC location extraction
         # (leave your current code here)
@@ -3903,7 +4460,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
             # Assign only if we found a plausible location
             if yc_loc:
                 details["Location"] = yc_loc
-                details["Location Raw"] = yc_loc
+                details["LocationRaw"] = yc_loc
                 _yc_loc_sandwich("YC LOC AFTER EXTRACT", details, host, job_url)
                 # Optional, tiny and useful:
                 # log_line("YC LOC SRC", f"src={yc_src} loc={yc_loc!r} url={job_url}")
@@ -3976,9 +4533,9 @@ def extract_job_details(html: str, job_url: str) -> dict:
                                     loc_txt = ", ".join(str(p).strip() for p in parts)
                                     details.setdefault("Location", loc_txt)
                                     details.setdefault("Location Raw", loc_txt)
-                                    details["Location Chips"] = "|".join(
-                                        p.strip().lower() for p in loc_txt.split(",") if p.strip()
-                                    )
+                                    chips_pipe = _chips_pipe_from_location_strings([loc_txt])
+                                    if chips_pipe:
+                                        details["Location Chips"] = chips_pipe
                                     break
                     if details.get("Location"):
                         break
@@ -4134,6 +4691,14 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
     if builtin_meta.get("company"):
         company = builtin_meta["company"]
+    if not company and "builtinseattle.com" in host:
+        cnode = (
+            soup.select_one('a[data-id="company-title"]')
+            or soup.select_one('h2[data-id="company-title"]')
+            or soup.select_one('[data-id="company-title"] span')
+        )
+        if cnode:
+            company = (cnode.get_text(" ", strip=True) or "").strip()
 
     # Helper that can be reused for missing companies
     def company_from_header_meta(page_host: str, html_text: str) -> str | None:
@@ -4149,11 +4714,49 @@ def extract_job_details(html: str, job_url: str) -> dict:
                 if 2 <= len(maybe) <= 80:
                     return maybe
         h = page_host.lower()
+        if "builtinseattle.com" in h:
+            # Built In city pages sometimes expose the company only in meta tags
+            # even when the visible DOM/header selectors are missing.
+            cnode = (
+                s2.select_one('a[data-id="company-title"]')
+                or s2.select_one('h2[data-id="company-title"]')
+                or s2.select_one('[data-id="company-title"] span')
+            )
+            if cnode:
+                ctxt = (cnode.get_text(" ", strip=True) or "").strip()
+                if ctxt:
+                    return ctxt
+
+            ogt = s2.find("meta", attrs={"property": "og:title"})
+            for cand in [
+                (ogt.get("content") if ogt and ogt.get("content") else ""),
+                (t2.get_text(" ", strip=True) if t2 else ""),
+            ]:
+                txt = (cand or "").strip()
+                if not txt:
+                    continue
+                if "| Built In" in txt:
+                    left = txt.split("| Built In", 1)[0].strip()
+                    parts = [p.strip() for p in left.split(" - ") if p.strip()]
+                    if len(parts) >= 2:
+                        return parts[-1]
+
+            for meta_sel in [
+                ("meta", {"name": "description"}),
+                ("meta", {"property": "og:description"}),
+            ]:
+                mtag = s2.find(meta_sel[0], attrs=meta_sel[1])
+                txt = (mtag.get("content") or "").strip() if mtag else ""
+                if not txt:
+                    continue
+                m = re.match(r"\s*([A-Za-z0-9&.,'()\\-/ ]{2,120}?)\s+is hiring\b", txt, re.I)
+                if m:
+                    return m.group(1).strip()
         if "greenhouse.io" in h:
             bc = s2.select_one('[data-mapped="employer_name"], .company-name, .app-title')
             if bc:
                 return bc.get_text(" ", strip=True)
-        if "builtin.com" in h:
+        if "builtin.com" in h or "builtinseattle.com" in h:
             c = s2.select_one('a[href*="/company/"], .company__name, [data-test="company-name"]')
             if c:
                 return c.get_text(" ", strip=True)
@@ -4176,7 +4779,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
     locs_unique: list[str] = []
 
     # Built In tooltip locations (central and Vancouver)
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _builtin_fill_title_company_from_builtinsignals(details, soup, html)
         import html as _html
 
@@ -4227,7 +4830,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         if txt:
                             locs.append(txt)
 
-            # Deduplicate while preserving order
+            # Dedupe Deduplicate while preserving order
             seen = set()
             unique = []
             for x in locs:
@@ -4242,7 +4845,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
         if locs_unique:
             details["Location"] = " / ".join(locs_unique)
-            details["Location Chips"] = locs_unique  # optional, but useful
+            if locs_unique:
+                details["Location Chips"] = locs_unique  # optional, but useful
             loc_text = details["Location"]  # prevents later single-location fallback from overwriting
             details["BIV Tooltip Location Count"] = len(locs_unique)  # so your final preservation block actually fires
 
@@ -4272,6 +4876,29 @@ def extract_job_details(html: str, job_url: str) -> dict:
     if not page_text and desc:
         page_text = desc
 
+    if "builtinseattle.com" in host:
+        # Preserve any earlier Seattle values from Built In-specific passes.
+        title = (title or details.get("Title") or "").strip()
+        company = (company or details.get("Company") or "").strip()
+
+        # Seattle fallback from raw HTML main card / page title if generic title stayed empty.
+        if not title:
+            try:
+                s_sea = BeautifulSoup(html or "", "html.parser")
+                h1_sea = s_sea.select_one("div[data-id='job-card'] h1") or s_sea.find("h1")
+                if h1_sea:
+                    title = (h1_sea.get_text(" ", strip=True) or "").strip()
+                if not title:
+                    t_sea = s_sea.find("title")
+                    raw_t = (t_sea.get_text(" ", strip=True) if t_sea else "").strip()
+                    if raw_t and "| Built In Seattle" in raw_t:
+                        left = raw_t.split("| Built In Seattle", 1)[0].strip()
+                        parts = [p.strip() for p in left.split(" - ") if p.strip()]
+                        if parts:
+                            title = parts[0]
+            except Exception:
+                pass
+
     details.update({
         "Title": title,
         "Company": company,
@@ -4295,6 +4922,10 @@ def extract_job_details(html: str, job_url: str) -> dict:
             details["Remote Rule"] = "Onsite"
         elif remote_flag in ("false", "0", "hybrid", "telework", "occasional telework"):
             details["Remote Rule"] = "Hybrid"
+    if details.get("Remote Rule"):
+        details["_LOCK_REMOTE_RULE"] = True
+    details["_REMOTE_RULE_SOURCE"] = "BADGE"
+    log_line("DEBUG", f"[BIVDBG] remote_rule_locked={details.get('_LOCK_REMOTE_RULE')!r} remote_rule_now={details.get('Remote Rule')!r}")
 
     # Workday location enrich before rules
     if "workday" in host or "myworkday" in host or "myworkdaysite" in host:
@@ -4381,7 +5012,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
     # Built In (both builtin.com and builtinvancouver.org):
     # Multi-location list is stored in a tooltip attribute as escaped HTML.
     # Extract EARLY so later fallbacks do not lock us to one city.
-    if ("builtin.com" in host or "builtinvancouver.org" in host) and not details.get("Builtin Tooltip Locations"):
+    if ("builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host) and not details.get("Builtin Tooltip Locations"):
         try:
             import html as _html
 
@@ -4436,7 +5067,10 @@ def extract_job_details(html: str, job_url: str) -> dict:
                 details["Location"] = " / ".join(best)
                 details.setdefault("Location Raw", details["Location"])
                 # Keep as a LIST so downstream logic can keep city-level detail
-                details["Location Chips"] = best
+                new_val = _chips_pipe_from_location_strings(best)
+                if new_val:
+                    details["Location Chips"] = new_val
+
         except Exception as e:
             # keep quiet unless you want BuiltIn debug noise
             pass
@@ -4458,7 +5092,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
     except Exception:
         pass
 
-    details = _derive_location_rules(details)
+    if not details.get("_DERIVE_LOCATION_RULES_DONE"):
+        details = _derive_location_rules(details)
     _yc_trace(details, "YC RULES POST")
 
     _debug_biv(details, host, "after base enrich + derive")
@@ -4469,7 +5104,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
     # Built In: for central site, prefer tooltip locations and add ", USA" when obviously missing.
     # For Built In Vancouver, prefer tooltip but never force USA.
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _builtin_fill_title_company_from_builtinsignals(details, soup, html)
         try:
             # 0) Scope to the main job header so we do NOT scrape Similar Jobs
@@ -4613,28 +5248,41 @@ def extract_job_details(html: str, job_url: str) -> dict:
                 _debug_biv(
                     {
                         "Location": loc_text,
-                        "Location Chips": locs_unique,
+                        "Location Chips": _as_pipe_location_chips(details.get("Location Chips")) or "",
                         "Canada Rule": details.get("Canada Rule", ""),
                         "US Rule": details.get("US Rule", ""),
                         "WA Rule": details.get("WA Rule", ""),
+                        "BC Rule": details.get("BC Rule", ""),
+                        "ON Rule": details.get("ON Rule", ""),
                         "Remote Rule": details.get("Remote Rule", ""),
-                        "Applicant Regions": _as_pipe_chips(details.get("Applicant Regions")) or "",
+                        "Applicant Regions": _as_pipe_applicant_regions(details.get("Applicant Regions")) or "",
                         "Applicant Regions Source": details.get("Applicant Regions Source", ""),
                     },
                     host,
                     "tooltip extraction raw",
                 )
 
-
-
             if locs_unique:
                 details["BIV Tooltip Location Count"] = len(locs_unique)
                 details["Location"] = " / ".join(locs_unique)
-                details["Location Chips"] = "|".join(locs_unique)
-                loc_text = details["Location"]  # stop later fallbacks from overwriting
+                details.setdefault("Location Raw", details["Location"])
+
+                if details.get("_LOCK_LOCATION_CHIPS") is True:
+                    loc_text = details["Location"]
+                else:
+                    new_val = _chips_pipe_from_location_strings(locs_unique)
+
+                    details["Location Chips Source"] = "TOOLTIP"
+                    details["_LOCATION_CHIPS_SOURCE"] = "TOOLTIP"
+                    details["_LOCK_LOCATION_CHIPS"] = True
+
+                    if new_val:
+                        _set_loc_chips(details, new_val, "TOOLTIP chips from locs_unique (header scope)")
+
+                    loc_text = details["Location"]  # stop later fallbacks from overwriting
+
                 if "builtinvancouver.org" in host:
                     details["BIV Tooltip Location Count"] = len(locs_unique)
-
 
             # 2) Built In Vancouver specific: “Hiring Remotely in Canada”
             #    (only check inside the header scope)
@@ -4660,7 +5308,8 @@ def extract_job_details(html: str, job_url: str) -> dict:
                         loc_text = span_texts[0]
 
             if loc_text:
-                details["Location"] = loc_text
+                if not (is_biv and details.get("_LOCK_LOCATION_FROM_TOOLTIP")):
+                    details["Location"] = loc_text
 
             if "builtinvancouver.org" in host and loc_text:
                 details["BIV Tooltip Location Count"] = loc_text.count("/") + 1
@@ -4670,20 +5319,31 @@ def extract_job_details(html: str, job_url: str) -> dict:
             pass
 
     # Re run location rules after Built In overrides
-    details = _derive_location_rules(details)
+    if not details.get("_DERIVE_LOCATION_RULES_DONE"):
+        details = _derive_location_rules(details)
 
     # If we extracted full tooltip locations, keep them as the displayed Location
     if details.get("BIV Tooltip Locations"):
         tooltip_locs = [str(x).strip() for x in details["BIV Tooltip Locations"] if str(x).strip()]
 
         if len(tooltip_locs) > 1:
-            # Tooltip locations are authoritative. Lock them.
-            details["_LOCK_LOCATION_CHIPS"] = True
-            details["Location Chips Source"] = "TOOLTIP"
-
             details["Location"] = " / ".join(tooltip_locs)
             details.setdefault("Location Raw", details["Location"])
-            details["Location Chips"] = "|".join(tooltip_locs)
+
+            # Tooltip locations are authoritative. Lock them, but do not recompute if already locked.
+            if details.get("_LOCK_LOCATION_CHIPS") is not True:
+                new_val = _chips_pipe_from_location_strings(tooltip_locs)
+
+                details["Location Chips Source"] = "TOOLTIP"
+                details["_LOCATION_CHIPS_SOURCE"] = "TOOLTIP"
+                details["_LOCK_LOCATION_CHIPS"] = True
+
+                if new_val:
+                    _set_loc_chips(details, new_val, "TOOLTIP chips from BIV Tooltip Locations (finalize)")
+
+            # after setting Location / Location Raw / Location Chips / Source from tooltip
+            details["_DERIVE_LOCATION_RULES_DONE"] = False
+            details = _derive_location_rules(details)
 
         return details
 
@@ -4762,28 +5422,91 @@ def extract_job_details(html: str, job_url: str) -> dict:
 
     # Final Built In Vancouver lock, after all other location sources
     if "builtinvancouver.org" in host:
+        # Prevent BIV hero lock from running twice for the same job
+        if details.get("_BIV_HERO_LOCK_DONE"):
+            return details
+
         hero_country = _builtin_hero_country(soup)
+        hero_text = ""
+        try:
+            # This scope is optional. If you already have a "scope" for hero, use that instead.
+            hero_text = soup.get_text(" ", strip=True)
+        except Exception:
+            hero_text = ""
+
+        hero_is_remote = bool(re.search(r"\bRemote\b", hero_text, flags=re.I)) or bool(
+            re.search(r"Hiring\s+Remotely\s+in", hero_text, flags=re.I)
+        )
+
+        if hero_is_remote and (details.get("Remote Rule") or "").strip().lower() in {"", "default", "unknown"}:
+            details["Remote Rule"] = "Remote"
+            details["Eligibility Notes"] = (details.get("Eligibility Notes") or "") + "|BIV_HERO_REMOTE"
+
         loc = (details.get("Location") or "").lower()
-        if hero_country and loc in {"", "canada", "ca", "can"}:
-            details["Location"] = hero_country
-            details["Location Raw"] = hero_country
-            details = _derive_location_rules(details)
-            _debug_biv(details, host, "after hero_country lock + derive")
+        if hero_country:
+            loc_raw = (details.get("LocationRaw") or "").strip().lower()
+            loc_now = (details.get("Location") or "").strip().lower()
+
+            # If Raw indicates Canada and hero says CAN, override any polluted multi location display
+            raw_is_can = loc_raw in {"can", "canada"}
+            polluted_multi = (" / " in loc_now) or ("usa" in loc_now) or ("united states" in loc_now)
+
+            if raw_is_can and polluted_multi:
+                details["Location"] = hero_country
+                details["LocationRaw"] = hero_country
+                _set_loc_chips(details, "CAN", "HERO_LOCK set CAN only")
+                details["Location Chips Source"] = "HERO_LOCK"
+                details["_LOCATION_CHIPS_SOURCE"] = "HERO_LOCK"
+                details["_LOCK_LOCATION_CHIPS"] = True
+                details["HERO_LOCK"] = True
+                details["Remote Rule"] = "Remote"
+                _debug_biv(details, host, "after hero_country lock override (raw_can + polluted)")
+
+            # Keep your original behavior too (covers clean cases)
+            elif loc_now in {"", "canada", "ca", "can"}:
+                details["Location"] = hero_country
+                details["LocationRaw"] = hero_country
+                _debug_biv(details, host, "after hero_country lock + derive")
+            
+            details["_BIV_HERO_LOCK_DONE"] = True
+
 
         # Location chips and country chips
+        # If HERO_LOCK fired, ensure CAN chip is present.
+        if "HERO_LOCK" in (details.get("Location Chips Source") or ""):
+            loc_now = (details.get("Location") or "").strip().upper()
+            # Built In Vancouver: if hero location resolved to CAN, chips must be CAN only
+            if loc_now in ("CAN", "CANADA"):
+                # Force overwrite even if chips are already locked
+                _set_loc_chips(details, "CAN", "HERO_LOCK set CAN only", force=True)
+
+                # Also make the stored string explicit, in case downstream code reads it directly
+                details["Location Chips"] = "CAN"
+                details["Location Chips Source"] = "HERO_LOCK"
+                details["_LOCK_LOCATION_CHIPS"] = True
+                details["_LOCATION_CHIPS_SOURCE"] = "HERO_LOCK"
+
+        debug(f"[NORM PRE] chips_type={type(details.get('Location Chips')).__name__} chips={details.get('Location Chips')!r}")
         _normalize_canada_provinces_in_details(details)
+        debug(f"[NORM POST] chips_type={type(details.get('Location Chips')).__name__} chips={details.get('Location Chips')!r}")
 
         if details.get("BIV Tooltip Locations"):
             tooltip_locs = [str(x).strip() for x in details["BIV Tooltip Locations"] if str(x).strip()]
             if len(tooltip_locs) > 1:
-                details["Location Chips Source"] = "TOOLTIP"
-                details["_LOCK_LOCATION_CHIPS"] = True
-
                 details["Location"] = " / ".join(tooltip_locs)
                 details.setdefault("Location Raw", details["Location"])
-                details["Location Chips"] = "|".join(tooltip_locs)
 
-                return details  # keep this return, but only when locked
+                if details.get("_LOCK_LOCATION_CHIPS") is not True:
+                    new_val = _chips_pipe_from_location_strings(tooltip_locs)
+
+                    details["Location Chips Source"] = "TOOLTIP"
+                    details["_LOCATION_CHIPS_SOURCE"] = "TOOLTIP"
+                    details["_LOCK_LOCATION_CHIPS"] = True
+
+                    if new_val:
+                        _set_loc_chips(details, new_val, "TOOLTIP chips from BIV Tooltip Locations (post normalize)")
+
+                return details  # keep this return, but only when tooltip list is authoritative
 
         # Do not normalize locked tooltip chips (commas are part of the location string).
         if details.get("_LOCK_LOCATION_CHIPS"):
@@ -4799,12 +5522,37 @@ def extract_job_details(html: str, job_url: str) -> dict:
             elif isinstance(lc, str):
                 s = lc.strip()
                 if s:
-                    # Only split commas when chips are not tooltip locked
-                    if not details.get("_LOCK_LOCATION_CHIPS") and "," in s:
-                        parts = s.replace(" / ", "|").replace(",", "|").split("|")
-                        chips.update(p.strip() for p in parts if p.strip())
+                    # Always split into tokens. Pipes and slashes are valid separators too.
+                    parts = s.replace(" / ", "|").replace(",", "|").split("|")
+                    chips.update(p.strip() for p in parts if p.strip())
 
-            details["Location Chips"] = "|".join(sorted(chips)) if chips else ""
+            # Persist chips string deterministically again, but do not overwrite when locked
+            if not details.get("_LOCK_LOCATION_CHIPS"):
+                def _chip_sort_key(tok: str):
+                    t = (tok or "").strip().upper()
+
+                    # Countries first, with explicit order
+                    if t == "CAN":
+                        return (0, 0, t)
+                    if t == "USA":
+                        return (0, 1, t)
+
+                    # Then known state and province tokens (alphabetical within)
+                    # Keep this aligned with your project stance that "CA" is California, not Canada.
+                    STATE_PROV_TOKENS = {"WA", "CA", "DC", "IL", "BC", "ON"}  # extend as needed
+                    if t in STATE_PROV_TOKENS:
+                        return (1, 0, t)
+
+                    # Everything else last
+                    return (2, 0, t)
+
+                uniq = sorted({c.strip().upper() for c in chips_list if str(c).strip()}, key=_chip_sort_key)
+                details["Location Chips"] = "|".join(uniq)
+            existing_lc = (details.get("Location Chips") or "").strip()
+            normalized_lc = "|".join(sorted(chips)) if chips else ""
+
+            if normalized_lc or not existing_lc:
+                details["Location Chips"] = normalized_lc
 
     # --- initialize Country Chips container for all hosts ---
     country: set[str] = set()
@@ -4830,6 +5578,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
         # fallback to page text only for non Built In pages
         if (
             "builtin.com" not in host
+            and "builtinseattle.com" not in host
             and "builtinvancouver.org" not in host
             and "ycombinator.com" not in host
         ):
@@ -4858,6 +5607,19 @@ def extract_job_details(html: str, job_url: str) -> dict:
     # Final company cleanup
     existing_company = _normalize_company_name(details.get("Company", ""))
     builtin_company = _strip_builtin_brand(builtin_meta.get("company")) if builtin_meta else ""
+    company_source = ""
+    for src_name, src_val in [
+        ("existing_company", existing_company),
+        ("builtin_meta.company", (builtin_meta.get("company") if builtin_meta else "")),
+        ("company_from_header", company_from_header),
+        ("builtin_meta.company_stripped", builtin_company),
+        ("common_selectors", _company_from_common_selectors(soup)),
+        ("meta_or_title", _company_from_meta_or_title(host, soup)),
+        ("url_fallback", company_from_url_fallback(job_url)),
+    ]:
+        if _normalize_company_name(src_val):
+            company_source = src_name
+            break
     company_final = (
         existing_company
         or builtin_meta.get("company")
@@ -4873,10 +5635,20 @@ def extract_job_details(html: str, job_url: str) -> dict:
         fallback = company_from_header_meta(host, html)
         if fallback:
             company_final = fallback
+            company_source = company_source or "header_meta"
     if "builtin.com" in host:
         company_final = _strip_builtin_brand(company_final)
     if not details.get("Company"):
         details["Company"] = company_final or "No Company Found"
+    if "builtinseattle.com" in host:
+        html_dbg = html or ""
+        log_line(
+            "DEBUG",
+            f"[BIVDBG] final_company url={job_url} company={details.get('Company')} source={company_source or 'none'} "
+            f"html_len={len(html_dbg)} has_jobpostinit={'Builtin.jobPostInit' in html_dbg} "
+            f"has_jsonld={'application/ld+json' in html_dbg} has_title={'<title' in html_dbg.lower()} "
+            f"has_meta_desc={'name=\"description\"' in html_dbg.lower()} has_og_desc={'property=\"og:description\"' in html_dbg.lower()}",
+        )
 
     # Final title cleanup based on company
     details["Title"] = normalize_title(details.get("Title"), details.get("Company"))
@@ -4886,7 +5658,7 @@ def extract_job_details(html: str, job_url: str) -> dict:
     if not details.get("salary_min") and not details.get("salary_max"):
         lo = hi = None
 
-        if "builtin.com" in host or "builtinvancouver.org" in host:
+        if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
             _builtin_fill_title_company_from_builtinsignals(details, soup, html)
             # Use the Built In specific extractor
             lo, hi = extract_salary_builtin(details.get("html_raw", ""))
@@ -4907,45 +5679,66 @@ def extract_job_details(html: str, job_url: str) -> dict:
     try:
         #_yc_trace(details, "YC RULES BEFORE ASSIGN")
         details["Location"] = (details.get("Location") or "").strip()
-        details["Location Raw"] = (details.get("Location Raw") or "").strip()
+        details["LocationRaw"] = (details.get("LocationRaw") or "").strip()
 
-        # Ensure Location Chips is always a pipe string
-        details["Location Chips"] = _as_pipe_chips(details.get("Location Chips")) or ""
+        # --- Built In Vancouver: final pass to prevent broadened Location ---
+        # If Location got polluted (ex: "Canada / United States") but Raw is clean ("Canada"),
+        # prefer Raw at the very end so later steps cannot re-expand it.
+        if "builtinvancouver.org" in host:
+            loc = (details.get("Location") or "").strip()
+            raw = (details.get("LocationRaw") or "").strip()
+
+            if raw and loc and (" / " in loc):
+                loc_low = loc.lower()
+                raw_low = raw.lower()
+
+                has_can = ("canada" in loc_low) or (loc_low == "can")
+                has_us = ("united states" in loc_low) or ("usa" in loc_low) or (loc_low == "us")
+
+                raw_is_can = raw_low in {"canada", "can"}
+                raw_is_us = raw_low in {"united states", "usa", "us"}
+
+                if (has_can and has_us) and (raw_is_can or raw_is_us):
+                    if not (is_biv and details.get("_LOCK_LOCATION_FROM_TOOLTIP")):
+                        details["Location"] = raw
+                    details["Location Source"] = (details.get("Location Source") or "") + "|RAW_WINS_FINAL"
+
+        log_line("DEBUG", f"[PRE_AS_PIPE] Location Chips before normalize={details.get('Location Chips')!r}")
+
+        # Ensure Location Chips is always a pipe string, but do not wipe truth
+        # Normalize Location Chips without wiping an existing truth signal
+        lc_existing = details.get("Location Chips")
+        lc_norm = _as_pipe_location_chips(lc_existing)
+        if lc_norm:
+            details["Location Chips"] = lc_norm or ""
+
+        if "Applicant Regions" in details:
+            details["Applicant Regions"] = _as_pipe_regions(details.get("Applicant Regions"))
+
+        # Do NOT pipe normalize Applicant Regions Source
+        if "Applicant Regions Source" in details:
+            details["Applicant Regions Source"] = _as_pipe_source(details.get("Applicant Regions Source"))
+
+        trace_chips(details, "AFTER_AS_PIPE_CHIPS")
 
         # Optional, but keeps related fields consistent too
         if "Country Chips" in details:
             details["Country Chips"] = _as_pipe_chips(details.get("Country Chips")) or ""
+        
+        log_line("DEBUG", f"[POST_AS_PIPE] Location Chips after normalize={details.get('Location Chips')!r}")
 
-        if "Applicant Regions" in details:
-            details["Applicant Regions"] = _as_pipe_regions(details.get("Applicant Regions"))
-    except Exception:
-        pass
-
+    except Exception as e:
+        log_line("ERROR", f"[PIPE_NORMALIZE_ERROR] {e}")
+        raise
 
     # Finished populating details; return the dict
     return details
 
-_ALLOWED_REGION_TOKENS = {
-    "us", "us-only",
-    "ca", "ca-only",
-    "na", "north-america",
-    "emea", "eu", "eea",
-    "apac",
-    "global",
-}
-
-_REGION_SYNONYMS = {
-    "usa": "us",
-    "united states": "us",
-    "canada": "ca",
-    "north america": "na",
-    "worldwide": "global",
-}
 
 def _as_pipe_regions(val) -> str:
     if not val:
         return ""
-    parts = []
+
     if isinstance(val, (list, tuple, set)):
         parts = [str(x) for x in val]
     else:
@@ -4957,24 +5750,259 @@ def _as_pipe_regions(val) -> str:
         t = p.strip().lower()
         if not t:
             continue
-        t = _REGION_SYNONYMS.get(t, t)
-        if t in _ALLOWED_REGION_TOKENS:
+
+        # Normalize synonyms first
+        t = REGION_SYNONYMS.get(t, t)
+
+        # Normalize Canada ambiguity: treat "ca" as "can"
+        #if t == "ca":
+            #t = "can"
+
+        # Only accept allowed tokens
+        if t in ALLOWED_REGION_TOKENS:
             out.add(t)
 
     return "|".join(sorted(out))
 
-def _as_pipe_chips(val) -> str:
-    if val is None:
+def _as_pipe_location_chips(val) -> str:
+    """
+    Canonical Location Chips:
+    - uppercase tokens
+    - must be in ALLOWED_LOCATION_CHIPS
+    - pipe-delimited
+    """
+    if not val:
         return ""
-    if isinstance(val, str):
-        s = val.strip()
-        if not s:
-            return ""
-        parts = s.replace(" / ", "|").split("|")
-        return "|".join(p.strip() for p in parts if p.strip())
+
     if isinstance(val, (list, tuple, set)):
-        return "|".join(str(x).strip() for x in val if str(x).strip())
-    return str(val).strip()
+        parts = [str(x) for x in val]
+    else:
+        s = str(val)
+        parts = s.replace(" / ", "|").replace(",", "|").split("|")
+
+    out = []
+    seen = set()
+    for p in parts:
+        t = p.strip().upper()
+        if not t:
+            continue
+        if t not in ALLOWED_LOCATION_CHIPS:
+            continue
+        if t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+
+    return "|".join(out)
+
+
+def _as_pipe_applicant_regions(val) -> str:
+    """
+    Canonical Applicant Regions:
+    - lowercase tokens
+    - synonyms applied (REGION_SYNONYMS)
+    - must be in ALLOWED_REGION_TOKENS
+    - pipe-delimited, sorted
+    """
+    if not val:
+        return ""
+
+    if isinstance(val, (list, tuple, set)):
+        parts = [str(x) for x in val]
+    else:
+        s = str(val)
+        parts = s.replace(" / ", "|").replace(",", "|").split("|")
+
+    out = set()
+    for p in parts:
+        t = p.strip().lower()
+        if not t:
+            continue
+        t = REGION_SYNONYMS.get(t, t)
+        if t in ALLOWED_REGION_TOKENS:
+            out.add(t)
+
+    return "|".join(sorted(out))
+
+def _biv_detect_countries_from_location(loc_s: str) -> list[str]:
+    """
+    Detect country chips from a BuiltInVancouver multi-location string.
+    Uses:
+      - word hints (NON_US_HINTS) for countries spelled out
+      - 3-letter country codes common in BIV lists (CAN, PHL, ESP, PRT, USA)
+    Returns unique chips preserving order.
+    """
+    if not loc_s:
+        return []
+
+    loc_up = loc_s.upper()
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(chip: str) -> None:
+        if chip and chip not in seen:
+            seen.add(chip)
+            out.append(chip)
+
+    # 1) 3-letter code detection
+    for m in BIV_COUNTRY_CODE_RX.finditer(loc_up):
+        code = m.group(1)
+        chip = _BIV_COUNTRY_3_TO_CHIP.get(code)
+        if chip:
+            add(chip)
+
+    # 2) word hints for non-US countries (Portugal, Spain, etc)
+    # We only add the ones you already support in your country maps.
+    loc_low = loc_s.lower()
+    if NON_US_HINTS.search(loc_low):
+        # Only add supported ones to keep chips consistent
+        for cc, word in _COUNTRY_CODE_TO_WORD.items():
+            if word and word in loc_low:
+                # use 2-letter cc as chip if you want, but you currently use CAN, USA, etc.
+                # For EU countries, use their ISO2 as chip (ES, etc) OR map to 3-letter if you prefer.
+                add(cc)
+
+    # 3) US word hints if present
+    if US_HINTS.search(loc_s):
+        add("USA")
+
+    return out
+
+def _canonical_country_words_from_location(loc: str) -> set[str]:
+    """
+    Country words for internal debug or internal logic.
+    Returns: {"canada"} or {"united states"} or both.
+    Never returns abbreviations like 'ca'.
+    """
+    s = (loc or "").strip().lower()
+    out: set[str] = set()
+
+    if "canada" in s or s in {"can", "can / remote", "canada / remote"}:
+        out.add("canada")
+
+    if "united states" in s or "usa" in s or "u.s." in s or s in {"us", "us / remote"}:
+        out.add("united states")
+
+    return out
+
+def _as_pipe_chips(val) -> str:
+    if not val:
+        return ""
+
+    if isinstance(val, (list, tuple, set)):
+        parts = [str(x) for x in val]
+    else:
+        s = str(val)
+        parts = s.replace(" / ", "|").split("|")
+
+    out = []
+    seen = set()
+    dropped = []
+
+    for p in parts:
+        t = p.strip().upper()
+        if not t:
+            continue
+
+        t = LOCATION_CHIP_SYNONYMS.get(t, t)
+
+        if t not in ALLOWED_LOCATION_CHIPS:
+            dropped.append(t)
+            continue
+        if t in seen:
+            continue
+
+        seen.add(t)
+        out.append(t)
+
+    if dropped:
+        try:
+            from logging_utils import debug
+            debug(f"[AS_PIPE_CHIPS] dropped={sorted(set(dropped))} allowed_sample={sorted(list(ALLOWED_LOCATION_CHIPS))[:20]}")
+        except Exception:
+            pass
+
+    return "|".join(out)
+
+def _as_pipe_source(val) -> str:
+    """
+    Pipe normalize a Source field (not regions).
+    Keeps arbitrary tokens like TEXT, BIV_RULES, CHIPS_BACKFILL, LDJSON.
+    """
+    if not val:
+        return ""
+    if isinstance(val, (list, tuple, set)):
+        parts = [str(x) for x in val]
+    else:
+        parts = str(val).replace(" / ", "|").replace(",", "|").split("|")
+
+    out = []
+    seen = set()
+    for p in parts:
+        t = p.strip().upper()
+        if not t:
+            continue
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return "|".join(out)
+
+def _chips_pipe_from_location_strings(locs: list[str]) -> str:
+    """
+    Convert a list of location strings into a pipe-delimited chip string.
+
+    Examples:
+      ["Chicago, IL, USA", "Los Angeles, CA, USA", "Washington, DC, USA"]
+        -> "USA|CA|IL|DC"
+    """
+    chips: set[str] = set()
+
+    # Import or reference your canonical set of state abbreviations (lowercase).
+    # If this already exists in your project, use that instead of re-defining it here.
+    try:
+        US_STATE_ABBRS = set(_US_ABBR.keys()) | {"dc"}  # lowercase
+    except Exception:
+        # very defensive fallback, but ideally you should never hit this
+        US_STATE_ABBRS = {"al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la",
+                         "me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok",
+                         "or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc"}
+
+    for raw in (locs or []):
+        s = (raw or "").strip()
+        if not s:
+            continue
+
+        low = s.lower()
+
+        # Country chips. Only allow true countries.
+        if ("usa" in low) or ("united states" in low) or re.search(r"\bus\b", s, flags=re.I):
+            chips.add("USA")
+
+        if ("canada" in low) or re.search(r"\bcan\b", s, flags=re.I):
+            chips.add("CAN")
+
+        # State chips: capture ALL instances of ", XX," (IL, CA, DC, etc.)
+        # Works for: "Chicago, IL, USA" and "Washington, DC, USA"
+        for abbr in re.findall(r",\s*([A-Za-z]{2})\s*,", s):
+            ab = abbr.strip().lower()
+            if ab in US_STATE_ABBRS:
+                chips.add(ab.upper())
+
+        # Optional: handle District of Columbia long forms if they ever appear
+        if ("district of columbia" in low) or ("washington d.c." in low):
+            chips.add("DC")
+            chips.add("USA")
+
+    # Stable ordering: countries first, then the rest alphabetically
+    order = []
+    for c in ("USA", "CAN"):
+        if c in chips:
+            order.append(c)
+            chips.remove(c)
+
+    order.extend(sorted(chips))
+
+    return "|".join(order)
 
 def _looks_like_id(s: str | None) -> bool:
     return bool(s and ID_LIKE_RX.fullmatch(s.strip()))
@@ -5086,8 +6114,9 @@ def _builtin_extract_location_from_card(card) -> str | None:
         best: list[str] = []
 
         for sp in candidates:
-            label = (sp.get_text(" ", strip=True) or "").lower()
-            if ("location" not in label) and (not re.search(r"\b\d+\s+locations?\b", label)):
+            label_raw = (sp.get_text(" ", strip=True) or "").strip()
+            # Only accept the exact widget text like "3 Locations" (or "1 Location")
+            if not re.search(r"^\d+\s+locations?$", label_raw, re.I):
                 continue
 
             raw = (sp.get("title") or "").strip()
@@ -5100,6 +6129,12 @@ def _builtin_extract_location_from_card(card) -> str | None:
 
             inner = BeautifulSoup(unesc, "html.parser")
             locs = [d.get_text(" ", strip=True) for d in inner.select("div.col-lg-6")]
+            locs = [x for x in locs if x]
+
+            if not locs:
+                locs = [d.get_text(" ", strip=True) for d in inner.select("div.text-truncate")]
+            if not locs:
+                locs = [d.get_text(" ", strip=True) for d in inner.select("div")]
             locs = [x for x in locs if x]
 
             if len(locs) > len(best):
@@ -5192,8 +6227,8 @@ def _builtin_extract_location_from_card(card) -> str | None:
 
     locs = []
     for c in candidates:
-        if re.search(r"\bLocations?\b", c, re.I):
-            continue
+        if not re.search(r"\bLocations?\b", c, re.I) and "job locations" not in c.lower():
+                continue
         if re.search(r"\b(remote|hybrid)\b", c, re.I):
             continue
 
@@ -5399,20 +6434,57 @@ def _is_remote(d: dict) -> bool:
     mode = classify_work_mode(text).lower()
     return mode in ("remote", "hybrid")
 
+def _matches_locality(region_key: str, loc: str, chips: list[str], url: str = "") -> bool:
+    cfg = geo_constants.LOCALITY_HINTS.get(region_key, {})
 
-# Shared Seattle/WA locality hints
-SEATTLE_TERMS = [
-    "seattle, wa",
-    "seattle campus",
-    "harborview medical center",
-    "uw medical center",
-    "south lake union",
-    "renton, wa",
-    "tacoma, wa",
-    "bellevue, wa",
-    "kirkland, wa",
-    "redmond, wa",
-]
+    any_terms = [t.lower().strip() for t in cfg.get("any", []) if str(t).strip()]
+    tokens_cfg = [t.lower().strip() for t in cfg.get("tokens", []) if str(t).strip()]
+
+    low_loc = (loc or "").lower()
+    low_url = (url or "").lower()
+
+    # Chips are structured, so treat them as exact tokens
+    chips_tokens = {c.strip().upper() for c in (chips or []) if str(c).strip()}
+
+    # Tokenize location and url into words (prevents "on" matching "washington")
+    # We keep it simple and deterministic.
+    norm_loc = low_loc.replace("d.c.", "dc").replace("d. c.", "dc")
+    norm_url = low_url.replace("d.c.", "dc").replace("d. c.", "dc")
+    loc_words = set(re.findall(r"[a-z]{2,}", norm_loc))
+    url_words = set(re.findall(r"[a-z]{2,}", norm_url))
+    word_set = loc_words | url_words
+
+    # Strong match first: phrase style hints (substring is OK here)
+    chips_text = "|".join(sorted({c.lower() for c in chips_tokens}))
+    haystacks = [low_loc, chips_text, low_url]
+    for term in any_terms:
+        if term and any(term in h for h in haystacks):
+            return True
+
+    # Weak match: token style hints must be safe
+    for tok in tokens_cfg:
+        if not tok:
+            continue
+
+        # 2-letter province/state style tokens must match as whole token
+        # - ON should only match "on" as a token or as a chip, not inside "washington"
+        if len(tok) == 2:
+            if tok.upper() in chips_tokens:
+                return True
+            if tok in word_set:
+                return True
+            continue
+
+        # Longer tokens like "ontario" or "british columbia" can be checked safely
+        # Prefer whole-word membership when possible, otherwise phrase match.
+        if tok in word_set:
+            return True
+
+        # Allow multi word tokens via substring, but only for 3+ chars to reduce noise
+        if len(tok) >= 3 and (tok in low_loc or tok in low_url):
+            return True
+
+    return False
 
 def _is_us_canada_eligible(d: dict) -> bool:
     """
@@ -5450,7 +6522,9 @@ def _is_us_canada_eligible(d: dict) -> bool:
         return True
 
     # 1) Strong positives – clearly US / Canada
-    if countries & {"us", "usa", "united states", "united states of america", "canada", "ca"}:
+    CANON_COUNTRIES = {"canada", "united states"}
+
+    if {c.strip().lower() for c in countries} & CANON_COUNTRIES:
         return True
 
     # Treat Remote/Nationwide US variants as hard positives
@@ -6041,6 +7115,8 @@ PLAYWRIGHT_DOMAINS = {
     "edtech.com", "www.edtech.com",
     "edtechjobs.io/", "www.edtechjobs.io",
     "builtin.com", "www.builtin.com",
+    "builtinseattle.com", "www.builtinseattle.com",
+    "remoteok.com", "www.remoteok.com",
     "builtinvancouver.org", "www.builtinvancouver.org",
     "wellfound.com", "www.wellfound.com",
     "welcometothejungle.com", "www.welcometothejungle.com",
@@ -6071,6 +7147,9 @@ KNOWN = {
     # …keep existing…
     "remoteok.com": "Remote OK",
     "builtin.com": "Built In",
+    "www.builtin.com": "Built In",
+    "builtinseattle.com": "Built In Seattle",
+    "www.builtinseattle.com": "Built In Seattle",
     "wellfound.com": "Wellfound",
     "builtinvancouver.org": "Built In Vancouver",
     "www.builtinvancouver.org": "Built In Vancouver",
@@ -6122,8 +7201,11 @@ SKIPPED_KEYS = [
     "Job URL",
     "Reason Skipped",
     "WA Rule",
+    "BC Rule",
+    "ON Rule",
     "Remote Rule",
     "US Rule",
+    "Canada Rule",
     "Salary Max Detected",
     "Salary Rule",
     "Location Chips",
@@ -6189,11 +7271,16 @@ STARTING_PAGES = [
     "https://www.themuse.com/search/location/remote-flexible/keyword/product+manager",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=product%20manager",
     "https://www.builtin.com/jobs?search=product%20manager&remote=true",
+    "https://www.builtin.com/jobs?search=product%20owner&remote=true",
+    "https://www.builtinseattle.com/jobs?search=product%20manager&remote=true",
+    "https://www.builtinseattle.com/jobs?search=product%20owner&remote=true",
     "https://builtinvancouver.org/jobs?search=Product+Manager",
+    "https://builtinvancouver.org/jobs?search=Product+Owner",
     "https://www.simplyhired.com/search?q=product+manager&l=remote",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+manager",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
     "https://builtinvancouver.org/jobs/product-management/product-manager",
+    "https://builtinvancouver.org/jobs/product-management/product-owner",
 
 
 
@@ -6217,8 +7304,13 @@ STARTING_PAGES = [
     # Business Analyst / Systems Analyst
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
+    "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=systems%20analyst",
     "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
+    "https://www.builtin.com/jobs?search=systems%20analyst&remote=true",
+    "https://www.builtinseattle.com/jobs?search=business%20analyst&remote=true",
+    "https://www.builtinseattle.com/jobs?search=systems%20analyst&remote=true",
     "https://builtinvancouver.org/jobs?search=Business+Analyst",
+    "https://builtinvancouver.org/jobs?search=Systems+Analyst",
     "https://www.simplyhired.com/search?q=systems+analyst&l=remote",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=systems+analyst",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=business+analyst",
@@ -6229,6 +7321,8 @@ STARTING_PAGES = [
     # Scrum Master / RTE
     "https://remotive.com/remote-jobs/product?search=scrum%20master",
     "https://www.builtin.com/jobs?search=scrum%20master&remote=true",
+    "https://www.builtinseattle.com/jobs?search=scrum%20master&remote=true",
+    "https://builtinvancouver.org/jobs?search=Scrum+Master",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=scrum+master",
 
 
@@ -6328,6 +7422,25 @@ STARTING_PAGES = [
 
 assert all(u.startswith("http") for u in STARTING_PAGES), "A STARTING_PAGES entry is missing a comma."
 
+# -------------------------------------------------------------------
+# LEGACY TEXT BASED GEO HEURISTICS (DO NOT EXTEND IN THIS SOW)
+#
+# Purpose:
+# - Historical helper logic used by older boards and earlier iterations.
+#
+# Current strategy:
+# - BuiltIn, BuiltIn Vancouver, and Y Combinator are the only boards considered "complete."
+# - The canonical geo pipeline for complete boards is:
+#     Location + Location Chips -> _extract_location_signals -> gates (classification_rules)
+#
+# Policy:
+# - Do NOT add new geo behavior here.
+# - Do NOT add new countries, states, or equivalence rules here.
+# - If a complete board needs new geo behavior, update geo_constants and/or the gate pipeline instead.
+#
+# Future refactor SOW:
+# - Convert any still needed pieces into "chip inference only" utilities, or delete.
+# -------------------------------------------------------------------
 
 # Company careers pages to scan for ATS boards (PUBLIC sources)
 # Notes:
@@ -6385,7 +7498,7 @@ PM_REGEX   = re.compile(r"\b(product\s+manager|product\s+management)\b", re.I)
 
 _COUNTRY_CODE_TO_NAME = {
     "US": "United States",
-    "CA": "Canada",
+    #"CA": "Canada",
     "IN": "India",
     "GB": "United Kingdom",
     "AE": "United Arab Emirates",
@@ -6403,6 +7516,37 @@ _COUNTRY_CODE_TO_NAME = {
     "PL": "Poland",
 }
 
+_COUNTRY_CODE_TO_WORD = {
+    "US": "united states",
+    #"CA": "canada",
+    "IN": "india",
+    "GB": "united kingdom",
+    "AE": "united arab emirates",
+    "SG": "singapore",
+    "AU": "australia",
+    "DE": "germany",
+    "FR": "france",
+    "NL": "netherlands",
+    "SE": "sweden",
+    "NO": "norway",
+    "DK": "denmark",
+    "IE": "ireland",
+    "ES": "spain",
+    "IT": "italy",
+    "PL": "poland",
+}
+
+# BIV location lists often contain 3-letter country codes like CAN, PHL, ESP, PRT.
+BIV_COUNTRY_CODE_RX = re.compile(r"(?:^|[,\s/])([A-Z]{3})(?:$|[,\s/])")
+
+# Map 3-letter codes we care about into the chip tokens used downstream.
+_BIV_COUNTRY_3_TO_CHIP = {
+    "CAN": "CAN",
+    "USA": "USA",
+    "PHL": "PHL",
+    "ESP": "ESP",
+    "PRT": "PRT",
+}
 
 # Soft non-NA hints (used only for the soft rule on remote boards)
 NON_US_HINTS = re.compile(
@@ -6434,32 +7578,6 @@ NON_US_STRONG = re.compile(
     re.I,
 )
 
-# ---- US state normalization and "excluded states" extractor ----
-HOME_STATE = "Washington"   # set your home state once
-
-_US_STATE_NAMES = [
-    "alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware",
-    "florida","georgia","hawaii","idaho","illinois","indiana","iowa","kansas","kentucky","louisiana",
-    "maine","maryland","massachusetts","michigan","minnesota","mississippi","missouri","montana",
-    "nebraska","nevada","new hampshire","new jersey","new mexico","new york","north carolina",
-    "north dakota","ohio","oklahoma","oregon","pennsylvania","rhode island","south carolina",
-    "south dakota","tennessee","texas","utah","vermont","virginia","washington","west virginia",
-    "wisconsin","wyoming","washington d.c.","district of columbia","dc"
-]
-_US_ABBR = {
-    "al":"alabama","ak":"alaska","az":"arizona","ar":"arkansas","ca":"california","co":"colorado",
-    "ct":"connecticut","de":"delaware","fl":"florida","ga":"georgia","hi":"hawaii","id":"idaho",
-    "il":"illinois","in":"indiana","ia":"iowa","ks":"kansas","ky":"kentucky","la":"louisiana",
-    "me":"maine","md":"maryland","ma":"massachusetts","mi":"michigan","mn":"minnesota","ms":"mississippi",
-    "mo":"missouri","mt":"montana","ne":"nebraska","nv":"nevada","nh":"new hampshire","nj":"new jersey",
-    "nm":"new mexico","ny":"new york","nc":"north carolina","nd":"north dakota","oh":"ohio","ok":"oklahoma",
-    "or":"oregon","pa":"pennsylvania","ri":"rhode island","sc":"south carolina","sd":"south dakota",
-    "tn":"tennessee","tx":"texas","ut":"utah","vt":"vermont","va":"virginia","wa":"washington",
-    "wv":"west virginia","wi":"wisconsin","wy":"wyoming","dc":"washington d.c."
-}
-_STATES_RX = re.compile(r"\b(" + "|".join(
-    [re.escape(s) for s in _US_STATE_NAMES] + list(_US_ABBR.keys())
-) + r")\b", re.I)
 
 def _extract_excluded_states(text: str) -> set[str]:
     """
@@ -6500,35 +7618,10 @@ NON_NA_STRONG = re.compile(
     re.I,
 )
 
-
 REMOTE_REGEX = re.compile(
     r"\b(remote|work from anywhere|wfh|distributed|telecommute)\b"
     r"|usa\s*only|u\.s\.a?\s*only|us\s*only", re.I
 )
-
-
-
-# Canada eligibility signals
-CA_HINTS = re.compile(
-    r"\b(canada|canadian|eligible to work in canada|authorized to work in canada|"
-    r"(?:^|[^A-Z])(AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)(?:[^A-Z]|$)|"
-    r"time\s*zone\s*[:\-]?\s*(ast|adt|nst|ndt))\b",
-    re.I,
-)
-
-REMOTE_KEYWORDS = [
-    r"\bremote\b", r"remote[-\s]?first", r"\b(us|u\.s\.)\s*remote\b",
-    r"\banywhere\b.*\b(us|u\.s\.)\b", r"\bwork from home\b"
-]
-ONSITE_BLOCKERS = [
-    r"\bon[-\s]?site\b", r"\boffice[-\s]?based\b"
-]
-SINGLE_CITY_PATTERNS = [
-    r"\bnew york( city)?\b|\bnyc\b", r"\bsan francisco\b|\bsf\b",
-    r"\bseattle\b", r"\baustin\b", r"\blondon\b", r"\bparis\b"
-    # add more as you encounter them
-]
-
 
 # ---- Helpers ----
 # Exact column order for "keep" CSV (Columns A–AD)
@@ -6551,8 +7644,11 @@ KEEP_FIELDS = [
     "Apply URL Note",
     "Description Snippet",
     "WA Rule",
+    "BC Rule",
+    "ON Rule",
     "Remote Rule",
     "US Rule",
+    "Canada Rule",
     "Salary Max Detected",
     "Salary Rule",
     "Salary Near Min",
@@ -6583,8 +7679,11 @@ SKIP_FIELDS = [
     "Job URL",
     "Reason Skipped",
     "WA Rule",
+    "BC Rule",
+    "ON Rule",
     "Remote Rule",
     "US Rule",
+    "Canada Rule",
     "Salary Max Detected",
     "Salary Rule",
     "Location Chips",
@@ -7070,6 +8169,8 @@ def career_board_name(url: str) -> str:
         "glassdoor.com": "Glassdoor",
         "builtin.com": "Built In",
         "www.builtin.com": "Built In",
+        "builtinseattle.com": "Built In Seattle",
+        "www.builtinseattle.com": "Built In Seattle",
         "builtinvancouver.org": "Built In Vancouver",
         "www.builtinvancouver.org": "Built In Vancouver",
         "wellfound.com": "Wellfound (Wellfound)",
@@ -7151,7 +8252,7 @@ def is_job_detail_url(u: str) -> bool:
         return path.startswith("/jobs/") and not path.endswith("-jobs") and path.count("/") >= 2
 
     # Built In (main site) and Built In Vancouver
-    if "builtin.com" in host or "builtinvancouver.org" in host:
+    if "builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host:
         _builtin_fill_title_company_from_builtinsignals(details, soup, html)
         # Real job pages look like: /job/<slug>/<numeric-id>
         # Examples:
@@ -7258,8 +8359,8 @@ def find_job_links(listing_html: str, base_url: str) -> list[str]:
         or "workday.com" in base_host
     )
 
-    # Built In (US) and Built In Vancouver listing pages
-    if "builtin.com" in base_host or "builtinvancouver.org" in base_host:
+    # Built In (US), Built In Seattle, and Built In Vancouver listing pages
+    if "builtin.com" in base_host or "builtinseattle.com" in base_host or "builtinvancouver.org" in base_host:
         for a in anchors:
             href = a["href"].strip()
             if not href:
@@ -7424,7 +8525,7 @@ def gather_location_chips(job_url: str, soup: BeautifulSoup, ld: dict, existing:
                     if any(k in txt.lower() for k in ["remote", "usa", "united states", "canada", "europe", "full-time", "contract", "part-time"]):
                         bits.append(txt)
 
-    elif host.endswith("builtin.com") or host.endswith("www.builtin.com"):
+    elif host.endswith("builtin.com") or host.endswith("www.builtin.com") or host.endswith("builtinseattle.com") or host.endswith("www.builtinseattle.com") or host.endswith("builtinvancouver.org") or host.endswith("www.builtinvancouver.org"):
         # Try common metadata containers; harmless if missing
         for el in soup.select('[data-testid="job-metadata"] li, .job-metadata li, .metadata li'):
             bits.append(el.get_text(" ", strip=True))
@@ -7490,7 +8591,7 @@ def normalize_title(t: str, company: str | None = None) -> str:
         return ""
 
     # Basic unescape + strip
-    t = html.unescape(str(t)).strip()
+    t = _html.unescape(str(t)).strip()
 
     # 1) Strip leading taggy noise like "[Hiring]" / "Hiring:" etc.
     t = _TAG_PREFIX_RX.sub("", t)
@@ -7539,15 +8640,6 @@ def normalize_title(t: str, company: str | None = None) -> str:
 
     return t
 
-
-PLACEHOLDER_RX = re.compile(r"search by company rss feeds public api", re.I)
-
-COUNTRY_RX = {
-    "CANADA": re.compile(r"\b(canada|can)\b", re.I),
-    "US": re.compile(r"\b(united states|usa|us)\b", re.I),
-    "MEXICO": re.compile(r"\bmexico\b", re.I),
-    "UK": re.compile(r"\buk|united kingdom\b", re.I),
-}
 
 def _countries_in(values: list[str]) -> set[str]:
     out: set[str] = set()
@@ -7715,115 +8807,137 @@ def _company_from_common_selectors(soup) -> str:
         return cand.get_text(strip=True)
     return ""
 
-
-US_STATES = {
-    "wa", "washington", "seattle", "bellevue", "tacoma", "spokane", "redmond",
-    "ny", "new york", "ca", "california", "tx", "texas", "co", "colorado",
-    "ma", "massachusetts", "il", "illinois", "fl", "florida", "ga", "georgia",
-    "or", "oregon"
-}
-
-REGION_TOKENS = {
-    "united states": "US",
-    "u.s.": "US",
-    "usa": "US",
-    "us": "US",
-    "us only": "US",
-    "north america": "NA",
-    "canada": "CA",
-    "europe": "EU",
-    "uk": "UK",
-    "united kingdom": "UK",
-    "emea": "EMEA",
-    "apac": "APAC",
-    "asia": "APAC",
-    "australia": "APAC",
-    "latam": "LATAM",
-    "south america": "LATAM",
-}
-
-
-PATH_LOC_MAP = {
-    "seattle": "Seattle, WA",
-    "seattle-non-campus": "Seattle, Non-Campus",
-    "Seattle, Non-Campus": "Seattle, Non-Campus",
-    "tacoma": "Tacoma, WA",
-    "harborview": "Harborview Medical Center, Seattle, WA",
-    "montlake": "Seattle, WA",
-}
-
-
+# Legacy wrapper. Kept temporarily to avoid breaking any missed call sites.
+# Remove once all references to _tokenize_location_chips are eliminated.
 def _tokenize_location_chips(loc: str, page_text: str) -> list[str]:
-    chips = []
-    low = (loc or "").lower()
-    text = (page_text or "").lower()
-    up_loc = (loc or "").upper()
-    up_text = (page_text or "").upper()
+    return tokenize_location_chips(loc, page_text)
 
-    # in _tokenize_location_chips
-    if "ycombinator.com" in (text or "").lower():
-        log_line("YC TOKENS", f"loc={loc!r} | sample_text={text[:250]!r}")
+def _builtin_extract_workplace_badge_text(soup: "BeautifulSoup") -> str:
+    """
+    Try to extract Built In's work mode badge text like:
+    Remote, Hybrid, In Office, In-Office, On-site
+    """
+    if not soup:
+        return ""
 
-    if "remote" in low or "remote" in text:
-        chips.append("Remote")
+    # Common badge patterns on Built In pages (they change this a lot)
+    selectors = [
+        "[data-testid='job-workplace-type']",
+        "[data-testid='workplace-type']",
+        "span.badge:contains('Remote')",
+        "span.badge:contains('Hybrid')",
+        "span.badge:contains('In')",
+        "div:has(i.fa-briefcase) span",
+        "div:has(i.fa-house-laptop) span",
+        "div:has(i.fa-location-dot) span.badge",
+    ]
 
-    for token, label in REGION_TOKENS.items():
-        if token in low or token in text:
-            chips.append(label)
+    # BeautifulSoup does not support :contains in CSS selectors consistently.
+    # So we do a broad scan for small badge-like nodes.
+    candidates = soup.select("span.badge, span[class*='badge'], div.badge, div[class*='badge']")
+    for node in candidates:
+        txt = (node.get_text(" ", strip=True) or "").strip()
+        low = txt.lower()
+        if low in {"remote", "hybrid", "in office", "in-office", "in office only", "on-site", "onsite"}:
+            return txt
 
-    # Recognize ISO country code CAN (Canada) when boards use abbreviations
-    if re.search(r"\bCAN\b", up_loc) or re.search(r"\bCAN\b", up_text):
-        chips.append("CA")
+    # Fallback scan for exact keywords near the top area
+    text = soup.get_text(" ", strip=True)
+    for kw in ["In Office", "In-Office", "On-site", "Onsite", "Hybrid", "Remote"]:
+        if kw.lower() in text.lower():
+            return kw
 
-    for token in US_STATES:
-        if token in low:
-            chips.append("US")
-            chips.append("US-WA" if token in {"wa", "washington", "seattle", "bellevue", "tacoma", "spokane", "redmond"} else "US-State")
-            break
+    return ""
 
-    # Deduplicate while preserving order
-    seen = set()
-    out = []
-    for c in chips:
-        if c in seen:
-            continue
-        seen.add(c)
-        out.append(c)
-    return out
+def _clamp_applicant_regions_using_loc_chips(applicant_regions: list[str], loc_chips_raw: str) -> list[str]:
+    chips = [c.strip().upper() for c in (loc_chips_raw or "").split("|") if c.strip()]
+    if not chips:
+        return applicant_regions
 
+    has_usa = "USA" in chips
+    has_can = "CAN" in chips
 
-import re
+    # If chips say USA and do not say CAN, drop inferred "can"
+    if has_usa and not has_can:
+        applicant_regions = [r for r in applicant_regions if r != "can"]
+
+    return applicant_regions
 
 def _detect_applicant_regions(text: str) -> list[str]:
     t = text or ""
+    t_low = t.lower()
     regions: list[str] = []
 
-    # Match REGION_TOKENS keys case-insensitively, but as whole tokens
-    # Example: token "us" should not match "business"
-    for token, label in REGION_TOKENS.items():
-        tok = (token or "").strip()
-        if not tok:
-            continue
+    # California context means "CA" should not imply Canada.
+    # Only treat as California when it looks like a location signal.
+    is_california_context = bool(
+        re.search(r"\bcalifornia\b", t_low)
+        or re.search(r"\bcalif\.?\b", t_low)
+        or re.search(r",\s*ca\b", t_low)                # "San Jose, CA"
+        or re.search(r"\bca\s*,\s*(?:us|usa)\b", t_low) # "CA, USA"
+    )
 
-        # If your tokens include spaces or punctuation, \b may not work perfectly.
-        # For simple alphabetic tokens (US, EU, EMEA, APAC, etc) this is ideal.
-        if re.search(rf"\b{re.escape(tok)}\b", t, flags=re.IGNORECASE):
-            regions.append(label)
+    # US
+    if re.search(r"\b(united states|u\.s\.|usa|us)\b", t_low):
+        regions.append("us")
 
-    # Explicit Canada abbreviation handling (CAN -> CA)
-    if re.search(r"\bCAN\b", t, flags=re.IGNORECASE):
-        regions.append("CA")
+    if "canada" in t_low or re.search(r"(?:^|[,\s])can(?:$|[,\s])", t_low):
+        i = t_low.find("canada")
+        if i != -1:
+            debug(f"[APPREGIONS] canada_context={t[i-60:i+80]!r}")
 
-    # Deduplicate preserving order
+    # Canada (conservative)
+    if not is_california_context:
+        if re.search(r"\bcanada\b", t_low) or re.search(r"(?:^|[,\s])can(?:$|[,\s])", t_low):
+            regions.append("can")
+
+    # Special CA handling: only allow CA to imply Canada when explicitly framed as eligibility.
+    if (not is_california_context) and re.search(r"\bCA\b", t, flags=re.IGNORECASE):
+        california_location_pattern = bool(
+            re.search(r",\s*CA\s*,\s*(USA|US)\b", t, flags=re.IGNORECASE)
+            or re.search(r"\bCalifornia\b", t, flags=re.IGNORECASE)
+            or re.search(r"\bCalif\.?\b", t, flags=re.IGNORECASE)
+            or re.search(r"\bCA\s*,\s*(USA|US)\b", t, flags=re.IGNORECASE)
+        )
+
+        # Special CA handling (CA is ambiguous: California vs Canada)
+        # Only infer Canada from "CA" when we are NOT in a California context.
+        if not is_california_context:
+            eligibility_framed = bool(
+                re.search(
+                    r"\b(eligible|eligibility|applicants?|candidates?|residents?|hiring|work authorization|authorized)\b"
+                    r".{0,80}?"
+                    r"\b(US|USA|United States)\s*(/|and|&)\s*CA\b",
+                    text or "",
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                or re.search(
+                    r"\b(eligible|eligibility|applicants?|candidates?|residents?|hiring|work authorization|authorized)\b"
+                    r".{0,80}?"
+                    r"\bCA\s*(/|and|&)\s*(US|USA|United States)\b",
+                    text or "",
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+                or re.search(
+                    r"\b(eligible|eligibility|applicants?|candidates?|residents?|hiring|work authorization|authorized)\b"
+                    r".{0,80}?"
+                    r"\bCA\s+only\b",
+                    text or "",
+                    flags=re.IGNORECASE | re.DOTALL,
+                )
+            )
+
+            if eligibility_framed:
+                regions.append("can")
+                debug(f"[APPREGIONS] added 'can' via CA eligibility framed text; t_sample={(text or '')[:160]!r}")
+
+    # Dedupe preserve order
     seen: set[str] = set()
     out: list[str] = []
     for r in regions:
-        r = (r or "").strip()
-        if not r or r in seen:
-            continue
-        seen.add(r)
-        out.append(r)
-
+        if r not in seen:
+            seen.add(r)
+            out.append(r)
     return out
 
 def _apply_path_location_hint(details: dict, url: str | None = None) -> None:
@@ -7870,23 +8984,6 @@ def _apply_path_location_hint(details: dict, url: str | None = None) -> None:
     except Exception:
         pass
 
-
-CAN_PROV_RX = re.compile(r"\b(BC|AB|SK|MB|ON|QC|NB|NS|NL|PE|YT|NT|NU)\b", re.I)
-CAN_PROV_MAP = {
-    "alberta": "AB",
-    "british columbia": "BC",
-    "manitoba": "MB",
-    "new brunswick": "NB",
-    "newfoundland and labrador": "NL",
-    "nova scotia": "NS",
-    "ontario": "ON",
-    "prince edward island": "PE",
-    "quebec": "QC",
-    "saskatchewan": "SK",
-    "northwest territories": "NT",
-    "nunavut": "NU",
-    "yukon": "YT",
-}
 
 def _has_can_province_signal(text: str) -> bool:
     """
@@ -7936,13 +9033,32 @@ def _normalize_canada_province_tokens(loc: str) -> str:
 def _normalize_canada_provinces_value(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         return value
-    parts = re.split(r"\s*/\s*", value)
-    normalized = [_normalize_canada_province_tokens(p) for p in parts]
-    return " / ".join(normalized) if len(parts) > 1 else normalized[0]
+
+    parts = re.split(r"\s*/\s*", value.strip())
+    out = []
+
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        np = _normalize_canada_province_tokens(p)
+
+        from logging_utils import debug
+        debug(f"[NORM CHECK] token='CAN' -> {_normalize_canada_province_tokens('CAN')!r}")
+
+        # If normalization returns empty, keep the original token
+        if not isinstance(np, str) or not np.strip():
+            out.append(p)
+        else:
+            out.append(np.strip())
+
+    if not out:
+        return value
+
+    return " / ".join(out) if len(parts) > 1 else out[0]
 
 def _normalize_canada_provinces_in_details(details: dict) -> None:
-    if details.get("_LOCK_LOCATION_CHIPS"):
-        return
+    lock_chips = bool(details.get("_LOCK_LOCATION_CHIPS"))
 
     for key in ("Location", "Location Raw"):
         if isinstance(details.get(key), str):
@@ -7953,199 +9069,807 @@ def _normalize_canada_provinces_in_details(details: dict) -> None:
         if isinstance(vals, list):
             details[list_key] = [_normalize_canada_provinces_value(v) for v in vals if v]
 
+    if lock_chips:
+        return
+
     chips = details.get("Location Chips")
     if isinstance(chips, list):
-        norm = [_normalize_canada_provinces_value(v) for v in chips if v]
-        norm = [str(x).strip() for x in norm if str(x).strip()]
-        details["Location Chips"] = "|".join(sorted(set(norm)))
+        norm = []
+        for v in chips:
+            if not v:
+                continue
+            nv = _normalize_canada_provinces_value(v)
+            nv = str(nv).strip()
+            if nv:
+                norm.append(nv)
+
+        # Preserve order, do not sort
+        seen = set()
+        out = []
+        for v in norm:
+            if v in seen:
+                continue
+            seen.add(v)
+            out.append(v)
+
+        details["Location Chips"] = "|".join(out)
 
     elif isinstance(chips, str) and chips.strip():
         parts = [p.strip() for p in chips.split("|") if p.strip()]
         parts = [_normalize_canada_provinces_value(p) for p in parts]
-        details["Location Chips"] = "|".join(parts)
+        details["Location Chips"] = "|".join([p for p in (str(x).strip() for x in parts) if p])
 
-def _derive_location_rules(details: dict) -> dict:
-    loc = details.get("Location", "") or details.get("display_location", "")
-    job_url = details.get("job_url") or details.get("Job URL") or ""
-    # Always define this up front so later appends are safe
+def _normalize_biv_location_value(s: str) -> str:
+    """
+    Normalize BuiltIn Vancouver display location to a consistent vocabulary.
+
+    Rules:
+    - CAN for Canada
+    - USA for United States
+    - remove any '/ Remote' fragments
+    - collapse whitespace
+    """
+    if not s:
+        return ""
+    x = str(s).strip()
+
+    # Remove Remote from display locations
+    x = re.sub(r"\s*/\s*remote\b", "", x, flags=re.I)
+    x = re.sub(r"\bremote\b", "", x, flags=re.I).strip()
+
+    # Normalize country words to CAN / USA
+    x = re.sub(r"\bcanada\b", "CAN", x, flags=re.I)
+    x = re.sub(r"\bunited states\b", "USA", x, flags=re.I)
+
+    # Normalize bare US variants to USA (only as a standalone token)
+    x = re.sub(r"\bU\.S\.\b", "USA", x, flags=re.I)
+    x = re.sub(r"\bUSA\b", "USA", x, flags=re.I)
+    x = re.sub(r"\bUS\b", "USA", x, flags=re.I)
+
+    # Normalize CA -> CAN only when context suggests Canada
+    if re.search(r"\bcanada\b", x, flags=re.I) or _has_can_province_signal(x.lower()):
+        x = re.sub(r"\bCA\b", "CAN", x)
+
+    # Clean separators
+    x = re.sub(r"\s*/\s*", " / ", x).strip()
+    x = re.sub(r"\s{2,}", " ", x).strip()
+
+    # Final safety: never allow Canada to become CA (California ambiguity).
+    # If we intended Canada, represent as CAN.
+    if x.strip().upper() == "CA":
+        x = "CAN"
+
+    return x
+
+def _canon_work_mode(v: str) -> str:
+    v = (v or "").strip().lower()
+    if v == "remote":
+        return "Remote"
+    if v == "hybrid":
+        return "Hybrid"
+    if v in {"onsite", "on-site", "on site", "in-office", "in office"}:
+        return "Onsite"
+    return "Unknown"
+
+def _set_location_chips_source(details: dict, source: str) -> None:
+    source = (source or "").strip()
+    details["_LOCATION_CHIPS_SOURCE"] = source
+    details["Location Chips Source"] = source
+
+
+def _set_loc_chips(details: dict, value: str, source: str, force: bool = False) -> None:
+    """
+    Single place to set Location Chips consistently and log the change.
+
+    value can be:
+      - pipe string "USA|WA"
+      - list ["USA", "WA"]
+      - set/tuple
+      - single token "CAN"
+    """
+    from logging_utils import debug  # local import avoids cycles
+
+    # If locked and not forcing, skip
+    if details.get("_LOCK_LOCATION_CHIPS") and not force:
+        debug(f"[LOC_CHIPS_SET] SKIP (locked) {source} | value={value!r}")
+        return
+
+    before = details.get("Location Chips")
+
+    # Normalize to pipe string
+    normalized = _as_pipe_location_chips(value)
+
+    # Filter to allowed chips only
+    chips_list = [c for c in normalized.split("|") if c] if normalized else []
+    chips_list = [c for c in chips_list if c in ALLOWED_LOCATION_CHIPS]
+    normalized = "|".join(chips_list)
+
+    details["Location Chips"] = normalized
+    details["Location Chips Source"] = source
+    details["_LOCATION_CHIPS_SOURCE"] = source
+
+    debug(f"[LOC_CHIPS_SET] {source} | before={before!r} -> after={normalized!r} | force={force}")
+
+    # Normalize into canonical pipe string
+    try:
+        normalized = _as_pipe_chips(value)
+    except Exception:
+        # last resort
+        if isinstance(value, (list, tuple, set)):
+            normalized = "|".join([str(x).strip().upper() for x in value if str(x).strip()])
+        else:
+            normalized = str(value or "").strip().upper()
+
+    details["Location Chips"] = normalized
+
+    # Preserve or backfill a source if caller did not set one yet
+    if not (details.get("Location Chips Source") or "").strip():
+        details["Location Chips Source"] = (
+            details.get("_LOCATION_CHIPS_SOURCE")
+            or ""
+        )
+
+    debug(f"[LOC_CHIPS_SET] {source} | before={before!r} -> after={normalized!r} | force={force}")
+
+def _derive_location_rules(details: dict, html: str = "") -> dict:
+    # ----------------------------
+    # Stage 0: Inputs and host type
+    # ----------------------------
+    job_url = details.get("Job URL") or ""
+    job_url_low = job_url.lower()
+    
+    # Fallback: retrieve html from details if not passed as parameter
+    if not html:
+        html = details.get("html_raw", "")
+
+    # Normalize LocationRaw key. Support both legacy "Location Raw" and newer "LocationRaw".
+    if not (details.get("LocationRaw") or "").strip():
+        legacy = (details.get("Location Raw") or "").strip()
+        if legacy:
+            details["LocationRaw"] = legacy
+
+    # Optional: if you want the output column to always be populated too
+    if not (details.get("Location Raw") or "").strip():
+        normalized = (details.get("LocationRaw") or "").strip()
+        if normalized:
+            details["Location Raw"] = normalized
+
+    # 1) If we do not know the URL yet, do nothing
+    if not job_url_low.strip():
+        return details
+
+    # 2) Run once per job record
+    if details.get("_DERIVE_LOCATION_RULES_DONE"):
+        return details
+
+    is_biv = "builtinvancouver.org" in job_url_low
+    is_builtin = ("builtin.com" in job_url_low) or is_biv
+
+    # --- BIV: prefer hero LocationRaw if specific ---
+    if is_biv:
+        loc_raw = (details.get("LocationRaw") or "").strip()
+        if loc_raw and loc_raw.upper() not in {"CAN", "CANADA"} and "," in loc_raw:
+            details["Location"] = loc_raw
+            details["_LOCK_LOCATION_FROM_HERO"] = True
+
+            if not (details.get("Applicant Regions Source") or "").strip():
+                details["Applicant Regions Source"] = "BIV_LOCATION_HINT"
+
+    # Use the same location precedence you already use
+    loc = details.get("Location", "") or details.get("display_location", "") or ""
+    loc = loc if isinstance(loc, str) else str(loc)
+    loc_s = loc.strip()
+    loc_low = loc_s.lower()
+
+    # Build once, reused later
     text_for_rules = ""
-    m = re.search(r"\b([A-Z]{2,3})\b\s*$", loc)
-    if m:
-        code = m.group(1)
-        name = _COUNTRY_CODE_TO_NAME.get(code)
-        if name:
-            country_chips = details.get("Country Chips") or []
-            if isinstance(country_chips, str):
-                country_chips = [c for c in country_chips.split("|") if c]
-            if name not in country_chips:
-                country_chips.append(name)
-            details["Country Chips"] = country_chips
 
-    loc_for_rules = " ".join([
-        str(details.get("Location Raw") or ""),
-        str(details.get("Location") or ""),
-        str(details.get("Locations Text") or ""),
-    ]).strip()
+    # BIV: Prefer explicit "Hiring Remotely in ..." over tooltip lists.
+    # Tooltip can be noisy (often includes US + Canadian provinces).
+    if is_biv:
+        try:
+            page_html = html or ""  # use the real page HTML string
 
+            # -------------------------------------------------
+            # Tier 1: "Hiring Remotely in CAN" (authoritative)
+            # -------------------------------------------------
+            hiring_loc = _extract_biv_hiring_remotely_location(page_html)
+            if hiring_loc:
+                details["Location"] = hiring_loc
+                details["Location Raw"] = hiring_loc
+
+                # Chips: lock to country level (CAN, or USA, etc.)
+                country_chips = _extract_biv_hiring_remotely_country_chips(page_html)
+
+                # Normalize chips ordering deterministically and safely
+                if country_chips:
+                    # Keep preferred order for common pairs
+                    preferred = ["USA", "CAN"]
+                    ordered = [c for c in preferred if c in country_chips] + sorted(
+                        [c for c in country_chips if c not in set(preferred)]
+                    )
+                    details["Location Chips"] = "|".join(ordered)
+                else:
+                    # Your Lumos case lands here
+                    details["Location Chips"] = "CAN"
+
+                details["_LOCK_LOCATION_FROM_HIRING_REMOTELY"] = True
+                details["_LOCK_LOCATION_FROM_TOOLTIP"] = False
+                details["_LOCK_LOCATION_CHIPS"] = True
+
+                log_line("DEBUG", f"[BIVDBG] hiring_remotely_lock_success loc='{hiring_loc}' chips='{details.get('Location Chips')}'")
+
+            # -------------------------------------------------
+            # Tier 3: Tooltip locations (fallback only)
+            # -------------------------------------------------
+            if not details.get("_LOCK_LOCATION_CHIPS"):
+                tooltip_locs = _builtin_primary_locations_from_html(page_html)
+                if not tooltip_locs:
+                    tooltip_locs = _builtin_tooltip_locations_from_html(page_html)  # fallback
+
+                if tooltip_locs:
+                    loc_joined = " / ".join(tooltip_locs)
+
+                    details["BIV Tooltip Locations"] = tooltip_locs
+
+                    # Set every location field variant your pipeline might read later
+                    details["Location"] = loc_joined
+                    details["Location Raw"] = loc_joined
+                    details["LocationRaw"] = loc_joined   # this is the missing one that bit you
+
+                    # Locks
+                    details["_LOCK_LOCATION_FROM_TOOLTIP"] = True
+                    details["_LOCK_LOCATION"] = True
+                    details["_LOCK_LOCATION_CHIPS"] = True
+
+                    log_line("DEBUG", f"[BIVDBG] tooltip_lock_success locs={tooltip_locs}")
+                
+                if details.get("_LOCK_LOCATION_FROM_TOOLTIP"):
+                    log_line("DEBUG", "[BIVDBG] location overwrite blocked (tooltip lock)")
+                    # If this is inside a function, do this:
+                    # return details
+                    # If you cannot return here, at least prevent later logic from running:
+                    # (use a flag)
+                    pass
+
+        except Exception as e:
+            log_line("DEBUG", f"[BIVDBG] biv_lock_failed err={e}")
+
+    if is_biv:
+        log_line(
+            "BIV INPUTS",
+            " | ".join(
+                [
+                    f"url={job_url}",
+                    f"Location={details.get('Location')!r}",
+                    f"Location Raw={details.get('Location Raw')!r}",
+                    f"LocationRaw={details.get('LocationRaw')!r}",
+                    f"LocationsText={details.get('Locations Text')!r}",
+                    f"workplace_type={details.get('workplace_type')!r}",
+                    f"work_mode={details.get('work_mode')!r}",
+                    f"workplace_badge={details.get('workplace_badge')!r}",
+                    f"display_location={details.get('display_location')!r}",
+                ]
+            ),
+        )
+
+    # ---------------------------------------------------------
+    # Stage 0b: HERO_LOCK (BIV only) can set chips and lock them
+    # ---------------------------------------------------------
+    if is_biv:
+        hero = (
+            details.get("Hero Location")
+            or details.get("Hero Country")
+            or details.get("hero_location")
+            or details.get("hero_country")
+            or ""
+        )
+        hero_up = str(hero).strip().upper()
+
+        if hero_up in ("CAN", "CANADA") and not details.get("_LOCK_LOCATION_FROM_HERO"):
+            details["HERO_LOCK"] = True
+
+            # Lock location display to Canada
+            details["Location"] = "CAN"
+            details["LocationRaw"] = "CAN"
+
+            # Lock chips to CAN only, overriding anything earlier
+            details["_LOCK_LOCATION_CHIPS"] = True
+            details["_LOCATION_CHIPS_SOURCE"] = "HERO_LOCK"
+            details["Location Chips Source"] = "HERO_LOCK"
+            _set_loc_chips(details, "CAN", "HERO_LOCK set CAN only", force=True)
+
+    # -----------------------------------------
+    # Stage 1: Chips from structured location only
+    # -----------------------------------------
+    # Rule:
+    # - Built In and BIV chips come ONLY from the structured location string.
+    # - Non Built In sources can use page scan tokenization.
+
+    if details.get("_LOCK_LOCATION_CHIPS"):
+        lc = (details.get("Location Chips") or "").strip()
+        if not lc:
+            tooltip_locs = details.get("BIV Tooltip Locations") or []
+            loc_text = " / ".join(tooltip_locs) if tooltip_locs else (details.get("Location") or "")
+
+            lc_new = derive_locked_location_chips(loc_text)
+
+            if lc_new:
+                details["Location Chips"] = lc_new
+
+                # Keep a more-specific source if it already exists, otherwise mark fallback
+                details["Location Chips Source"] = (details.get("Location Chips Source") or "LOCKED_FALLBACK")
+
+                log_line(
+                    "DEBUG",
+                    f"[CHIPS_LOCK_FALLBACK] filled Location Chips={lc_new!r} from loc_text={loc_text!r}"
+                )
+            else:
+                # Could not derive chips. Prefer to keep lock if tooltip was the authority,
+                # but mark the error so it is explainable.
+                if tooltip_locs:
+                    details["_LOCK_LOCATION_CHIPS"] = True
+                    details["_BIV_CHIPS_ERROR"] = True
+                    details["Location Chips Source"] = "BIV_TOOLTIP_ERROR_EMPTY"
+                else:
+                    # No tooltip authority: allow downstream normal flow instead of crashing.
+                    details["_LOCK_LOCATION_CHIPS"] = False
+                    if not (details.get("Location Chips Source") or "").strip():
+                        details["Location Chips Source"] = "UNLOCKED_FALLBACK_EMPTY"
+
+                log_line(
+                    "DEBUG",
+                    f"[CHIPS_LOCK_FALLBACK] Could not derive chips from locked signals. "
+                    f"tooltip={bool(tooltip_locs)} loc_text={loc_text!r}"
+                )
+
+    existing_src = (details.get("Location Chips Source") or "").upper()
+
+    if is_builtin:
+        if ("HERO_LOCK" in existing_src) or ("TOOLTIP" in existing_src) or (details.get("_LOCK_LOCATION_CHIPS") is True):
+            if not (details.get("Location Chips") or "").strip():
+                raise RuntimeError(
+                    "LOCKED chips but Location Chips is empty. Expected Location Chips to be set before lock."
+                )
+            trace_chips(details, "AFTER_STAGE1_CHIPS")
+        else:
+            loc_chips: list[str] = []
+
+            # BIV: multi-location strings with multiple countries must produce country-only chips.
+            if is_biv and " / " in loc_s:
+                countries = _biv_detect_countries_from_location(loc_s)
+                # treat as multi-country only if we have 2+ distinct countries
+                if len(countries) >= 2:
+                    details["_BIV_MULTI_COUNTRY"] = True
+                    _set_loc_chips(details, "|".join(countries), "BIV multi-country country-only", force=True)
+                    details["_LOCK_LOCATION_CHIPS"] = True
+                    details["Location Chips Source"] = "BIV_MULTI_COUNTRY_COUNTRY_ONLY"
+                    trace_chips(details, "AFTER_STAGE1_CHIPS")
+                    # Skip parsing provinces and cities for this record
+                    goto_stage3 = True
+                else:
+                    goto_stage3 = False
+            else:
+                goto_stage3 = False
+
+            if not goto_stage3:
+                # Built In Vancouver: if we somehow still have a multi-location string, do not extract chips from it.
+                # Multi-location parsing is a known source of false positives for BIV.
+                if is_biv and " / " in loc_s:
+                    loc_for_parse = loc_s.split(" / ")[0]
+                else:
+                    loc_for_parse = loc_s
+
+                state_hits = re.findall(r",\s*([A-Z]{2})\b", loc_for_parse)
+
+                for st in state_hits:
+                    st_up = st.upper()
+
+                    # Strict 2 letter validation, includes "dc" in US_STATE_ABBRS
+                    if st_up.lower() in US_STATE_ABBRS:
+                        if "USA" not in loc_chips:
+                            loc_chips.append("USA")
+                        if st_up not in loc_chips:
+                            loc_chips.append(st_up)
+
+                # Canada signals from structured location and Raw hints
+                raw_low = (details.get("LocationRaw") or "").strip().lower()
+                if loc_s.strip().upper() == "CAN" or loc_low in {"can", "canada"}:
+                    loc_chips.append("CAN")
+                elif raw_low in {"can", "canada", "ca"}:
+                    loc_chips.append("CAN")
+                elif CAN_PROV_RX.search(loc_low):
+                    loc_chips.append("CAN")
+
+                # Finalize chips list for Built In
+                chips = []
+                if loc_low != "remote":
+                    chips = sorted(set([c for c in loc_chips if c]))
+
+                # --- BIV: if hero LocationRaw is specific (e.g., "Vancouver, BC"), force CAN|<PROV> ---
+                if is_biv and (not chips or chips == ["CAN"]):
+                    m = re.search(r",\s*([A-Z]{2})\b", (loc_s or "").strip(), flags=re.IGNORECASE)
+                    if m:
+                        prov = m.group(1).upper()
+                        if prov in {"BC", "ON", "AB", "QC", "MB", "SK", "NS", "NB", "NL", "PE", "NT", "NU", "YT"}:
+                            chips = ["CAN", prov]
+                            details["Location Chips Source"] = (
+                                (details.get("Location Chips Source") or "") + "|BIV_HERO_LOC_RAW"
+                            )
+                            details["_LOCK_LOCATION_CHIPS"] = True
+
+                src_up = (details.get("Location Chips Source") or "").upper()
+
+                if src_up in {"TOOLTIP", "HERO_LOCK", "BIV_MULTI_COUNTRY_COUNTRY_ONLY"}:
+                    # Do not overwrite chips
+                    if src_up == "TOOLTIP":
+                        details["_LOCK_LOCATION_CHIPS"] = True
+                    trace_chips(details, "AFTER_STAGE1_CHIPS")
+                else:
+                    _set_location_chips_source(details, "BUILTIN_LOCATION_ONLY")
+                    details["_LOCATION_CHIPS_SOURCE"] = "BUILTIN_LOCATION_ONLY"
+                    details["Location Chips Source"] = "BUILTIN_LOCATION_ONLY"
+
+                    _set_loc_chips(
+                        details,
+                        "|".join(chips) if chips else "",
+                        "STAGE1 BUILTIN_LOCATION_ONLY derived from loc_s",
+                        force=True,
+                    )
+                    trace_chips(details, "AFTER_STAGE1_CHIPS")
+
+            else:
+                # multi-country BIV already set chips and locked them
+                # Do not overwrite source, do not recompute, do not re-trace if you do not want duplicate logs
+                pass
+
+    else:
+        # Not Built In: allow page scan tokenizer
+        details["_LOCK_LOCATION_CHIPS"] = False
+        details["_LOCATION_CHIPS_SOURCE"] = "PAGE_SCAN"
+        details["Location Chips Source"] = "PAGE_SCAN"
+
+        loc_hint = " ".join(
+            [
+                str(details.get("LocationRaw") or ""),
+                str(details.get("Location") or ""),
+                str(details.get("Locations Text") or ""),
+                str(details.get("display_location") or ""),
+            ]
+        ).strip()
+
+        page_text = " ".join(
+            [
+                details.get("page_text") or "",
+                details.get("Description") or "",
+                details.get("Description Snippet") or "",
+            ]
+        ).strip()
+
+        chips = tokenize_location_chips(loc_hint, page_text)
+
+        _set_loc_chips(
+            details,
+            "|".join(chips) if chips else "",
+            "STAGE1 PAGE_SCAN tokenize_location_chips (loc_hint + page_text)",
+            force=True,
+        )
+
+        trace_chips(details, "AFTER_STAGE1_CHIPS")
+
+    # -----------------------------------------
+    # Stage 2: Build text_for_rules once
+    # -----------------------------------------
+    loc_for_rules = " ".join(
+        [
+            str(details.get("LocationRaw") or ""),
+            str(details.get("Location") or ""),
+            str(details.get("Locations Text") or ""),
+        ]
+    ).strip()
     if loc_for_rules:
         text_for_rules = f"{text_for_rules} {loc_for_rules}".strip()
 
-    text = " ".join([
-        details.get("page_text") or "",
-        details.get("Description") or "",
-        details.get("Description Snippet") or "",
-    ]).strip()
-
+    text = " ".join(
+        [
+            details.get("page_text") or "",
+            details.get("Description") or "",
+            details.get("Description Snippet") or "",
+        ]
+    ).strip()
     if text:
         text_for_rules = f"{text_for_rules} {text}".strip()
 
-    loc_low = (loc or "").lower()
-
-    text_for_chips = "" if ("builtinvancouver.org" in job_url or "ycombinator.com" in job_url.lower()) else text
-    chips = _tokenize_location_chips(loc, text_for_chips)
-
-    # --- Applicant Regions (derived from text_for_rules) ---
+    # -----------------------------------------
+    # Stage 3: Applicant Regions list, never None
+    # -----------------------------------------
     applicant_regions: list[str] = _detect_applicant_regions(text_for_rules) or []
 
-    # If we found regions via text, persist them now.
-    # Do NOT pipe-convert yet; keep as list until after BIV overrides.
-    if applicant_regions:
-        details["Applicant Regions"] = applicant_regions
-        # Only set source if not already set
-        if not (details.get("Applicant Regions Source") or "").strip():
-            details["Applicant Regions Source"] = "TEXT"
+    # Normalize to lowercase tokens early
+    applicant_regions = [str(r).strip().lower() for r in applicant_regions if str(r).strip()]
 
-    # Normalize an existing source field if something upstream set it
-    if "Applicant Regions Source" in details:
-        details["Applicant Regions Source"] = (details.get("Applicant Regions Source") or "").strip().upper()
+    # Dedupe while preserving order
+    seen = set()
+    applicant_regions = [r for r in applicant_regions if not (r in seen or seen.add(r))]
 
-    # BuiltIn Vancouver overrides may remove US/NA and may imply Canada
-    chips, applicant_regions = _apply_builtinvancouver_overrides(
+    # Normalize to lowercase tokens early
+    applicant_regions = [str(r).strip().lower() for r in applicant_regions if str(r).strip()]
+
+    # Dedupe while preserving order
+    seen = set()
+    applicant_regions = [r for r in applicant_regions if not (r in seen or seen.add(r))]
+
+    # If detector found something and no source is set yet, mark it
+    if applicant_regions and not (details.get("Applicant Regions Source") or "").strip():
+        details["Applicant Regions Source"] = "TEXT"
+
+    # If detector found something and no source is set yet, mark it
+    if applicant_regions and not (details.get("Applicant Regions Source") or "").strip():
+        details["Applicant Regions Source"] = "TEXT"
+
+    # Backfill from chips if detector found nothing
+    if not applicant_regions:
+        chips_now = {c.strip().upper() for c in (details.get("Location Chips") or "").split("|") if c.strip()}
+        if "CAN" in chips_now:
+            applicant_regions = ["can"]
+            if not (details.get("Applicant Regions Source") or "").strip():
+                details["Applicant Regions Source"] = "CHIPS_BACKFILL"
+        elif "USA" in chips_now:
+            applicant_regions = ["us"]
+            if not (details.get("Applicant Regions Source") or "").strip():
+                details["Applicant Regions Source"] = "CHIPS_BACKFILL"
+
+    details["_APPLICANT_REGIONS_LIST"] = list(applicant_regions)
+
+    # -----------------------------------------
+    # Stage 4: Apply BIV overrides once
+    # -----------------------------------------
+    chips_list = [c.strip().upper() for c in _as_listish(details.get("Location Chips")) if c.strip()]
+
+    chips_list, applicant_regions = _apply_builtinvancouver_overrides(
         details=details,
         job_url=job_url,
         loc_low=loc_low,
-        chips=chips,
+        chips=chips_list,
         applicant_regions=applicant_regions,
     )
 
-    # Persist final applicant regions after overrides (pipe format expected downstream)
-    if "Applicant Regions" in details:
-        details["Applicant Regions"] = _as_pipe_regions(details.get("Applicant Regions"))
-    else:
-        details["Applicant Regions"] = ""
+    # Persist chips back into the row in your canonical representation
+    details["Location Chips"] = "|".join(chips_list)
 
-    # Merge chips if something already wrote Location Chips as a string
-    chips_field = details.get("Location Chips") or ""
-    if isinstance(chips_field, str) and chips_field.strip():
-        extra = [c for c in re.split(r"[|,]", chips_field) if c.strip()]
-        for c in extra:
-            if c not in chips:
-                chips.append(c)
-    
-    # Start with any explicit remote rule we already extracted (Built In badge parsing)
-    remote_rule = details.get("Remote Rule") or details.get("remote_flag") or "Unknown"
+    # Persist chips deterministically again, but do not overwrite when locked
+    if not details.get("_LOCK_LOCATION_CHIPS"):
+        ordered = _order_location_chips([c for c in chips_list if c])
+        details["Location Chips"] = "|".join(ordered)
+        raw = [c for c in chips_list if c]
+        uniq = []
+        seen = set()
+        for c in raw:
+            if c not in seen:
+                uniq.append(c)
+                seen.add(c)
 
-    badge_text = " ".join([
-        details.get("workplace_type") or "",
-        details.get("work_mode") or "",
-        details.get("workplace_badge") or "",
-    ]).strip()
+        preferred = ["USA", "CAN"]  # add if needed
+        def sort_key(token: str):
+            t = token.upper()
+            if t in preferred:
+                return (0, preferred.index(t))
+            if len(t) == 2:  # likely state or province code
+                return (1, t)
+            return (2, t)
 
-    is_biv = "builtinvancouver.org" in job_url
+        details["Location Chips"] = "|".join(sorted(uniq, key=sort_key))
 
-    # If we already have an explicit rule (Remote/Hybrid/Onsite), do not overwrite it
-    if remote_rule in {"Remote", "Hybrid", "Onsite"}:
-        pass
-    else:
+    trace_chips(details, "AFTER_STAGE4_OVERRIDES")
+
+    # -----------------------------------------
+    # Stage 5: Determine remote_rule once
+    # -----------------------------------------
+    remote_rule = _canon_work_mode(details.get("Remote Rule") or details.get("remote_flag") or "Unknown")
+    remote_locked = remote_rule in {"Remote", "Hybrid", "Onsite"}
+
+    badge_text = " ".join(
+        [
+            details.get("workplace_type") or "",
+            details.get("work_mode") or "",
+            details.get("workplace_badge") or "",
+        ]
+    ).strip()
+
+    snip_low = (details.get("Description Snippet") or "").lower()
+
+    if is_biv:
+        says_remote = ("remote" in loc_low) or ("remote" in snip_low)
+        if says_remote and remote_rule not in {"Remote", "Hybrid"}:
+            remote_rule = _canon_work_mode("Remote")
+            details["Remote Rule Source"] = (details.get("Remote Rule Source") or "") + "|BIV_REMOTE_FALLBACK"
+            remote_locked = True
+
+    if not remote_locked:
         if is_biv:
-            # For BIV, avoid page_text (nav contains "REMOTE"). Use badge_text if present.
-            if badge_text:
-                remote_rule = classify_work_mode(badge_text)
-            else:
-                remote_rule = "Unknown"
+            remote_rule = _canon_work_mode(classify_work_mode(badge_text) if badge_text else "Unknown")
         else:
-            remote_rule = classify_work_mode(f"{text} {badge_text}".lower())
+            remote_rule = _canon_work_mode(classify_work_mode(f"{text.lower()} {badge_text}".lower()))
 
-    onsite_terms = ("in-office", "in office", "onsite", "on-site", "on site")
+    # -----------------------------------------
+    # Stage 6: Remote parity once, late
+    # -----------------------------------------
+    is_remote_like = (remote_rule.lower() == "remote")
+    if is_remote_like:
+        parts = list(applicant_regions)
+        parts_low = {p.lower() for p in parts}
 
-    if "ycombinator.com" in job_url.lower():
-        _yc_trace("YC RULES PRE US", f"loc={loc!r} chips={chips!r} app_regions={applicant_regions!r} existing_us_rule={details.get('US Rule')!r}")
+        # Parity only if can present and us absent
+        if "can" in parts_low and "us" not in parts_low:
+            if not (is_biv and ca_rule_raw == "pass" and us_rule_raw == "fail"):
+                parts.append("us")
 
-    # US rule
-    us_rule = details.get("US Rule") or ""
+        applicant_regions = parts
+
+    # -----------------------------------------
+    # Stage 7: Compute rules, finalize, and exit
+    # -----------------------------------------
+    chips_final_str = details.get("Location Chips") or ""
+    chips_list = [c.strip().upper() for c in chips_final_str.split("|") if c.strip()]
+    chips_set = set(chips_list)
+    chips_set = {c.strip().upper() for c in chips_final_str.split("|") if c.strip()}
+    ar_set = {r.strip().lower() for r in applicant_regions if r.strip()}
+
+    # US Rule
+    us_rule = (details.get("US Rule") or "").strip()
     if not us_rule or us_rule.lower() == "default":
-        if any(c in {"US", "NA"} for c in chips) or (not loc and any(r in {"US", "NA"} for r in applicant_regions)):
+        if ("USA" in chips_set) or (not loc_s and ("us" in ar_set or "na" in ar_set)):
             us_rule = "Pass"
-        elif any(c in {"EU", "UK", "EMEA", "APAC", "LATAM"} for c in chips + applicant_regions):
+        elif any(x in chips_set for x in {"EU", "UK", "EMEA", "APAC", "LATAM"}) or any(
+            x in ar_set for x in {"eu", "uk", "emea", "apac", "latam"}
+        ):
             us_rule = "Fail"
         else:
-            low_loc = (loc or "").lower()
-            if any(tok in low_loc for tok in ("united states", "usa", "u.s.")) or any(s in low_loc for s in US_STATES):
+            if any(tok in loc_low for tok in ("united states", "usa", "u.s.")) or any(
+                s in loc_low for s in US_STATE_ABBRS
+            ):
                 us_rule = "Pass"
             else:
                 us_rule = "Fail"
-    
-    # Canada rule
-    canada_rule = details.get("Canada Rule") or ""
+
+    has_canada_word = False
+    has_can_token = False
+    has_can_chip = False
+
+    debug(
+        f"[CAN_RULE] has_canada_word={has_canada_word} "
+        f"has_can_token={has_can_token} has_can_chip={has_can_chip} "
+        f"prov={bool(CAN_PROV_RX.search(loc_low))} loc_low_sample={loc_low[:120]!r}"
+        )
+
+    # Canada Rule
+    canada_rule = (details.get("Canada Rule") or "").strip()
     if not canada_rule or canada_rule.lower() == "default":
-        low_loc = (loc or "").lower()
-        chips_text = "|".join(chips).lower()
-        if (
-            "canada" in low_loc
-            or CAN_PROV_RX.search(low_loc)
-            or low_loc.endswith(", ca")
-            or "canada" in chips_text
-            or "|ca|" in f"|{chips_text}|"
-        ):
+        has_can_chip = "CAN" in chips_set
+        has_can_token = bool(re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low))
+        has_canada_word = ("canada" in loc_low)
+
+        if has_canada_word or CAN_PROV_RX.search(loc_low) or has_can_chip or has_can_token:
             canada_rule = "Pass"
         else:
             canada_rule = "Fail"
 
-    # WA rule
-    wa_rule = details.get("WA Rule") or ""
+    chips_list = _as_listish(chips_final_str)
+    chips_set = {c.strip().upper() for c in chips_list if c.strip()}
+
+    # WA Rule
+    wa_rule = (details.get("WA Rule") or "").strip()
     if not wa_rule or wa_rule.lower() == "default":
-        low_loc = (loc or "").lower()
-        chips_text = "|".join(chips).lower()
-        if any(tok in low_loc for tok in ("seattle", "wa", "washington", "bellevue", "redmond", "tacoma", "spokane", "everett", "kirkland", "renton")):
-            wa_rule = "Pass"
-        elif any(tok in chips_text for tok in ("wa", "seattle", "washington", "bellevue", "redmond", "tacoma", "spokane")):
-            wa_rule = "Pass"
-        elif remote_rule == "Remote" and us_rule == "Pass":
+        wa_rule = "Fail"
+
+        # Primary signal: WA explicitly present
+        if _matches_locality("WA", loc=loc_s, chips=chips_list, url=job_url):
             wa_rule = "Pass"
         else:
-            wa_rule = "Fail"
+            # Remote fallback must respect explicit state restrictions
+            is_remote = (remote_rule or "").strip().lower() == "remote"
+            is_us_pass = (us_rule or "").strip().lower() == "pass"
 
-    details["Remote Rule"] = remote_rule
-    details["US Rule"] = us_rule
-    details["Canada Rule"] = canada_rule
-    details["WA Rule"] = wa_rule
+            if is_remote and is_us_pass:
+                us_state_hits = {c for c in chips_set if c in US_STATE_CHIPS}  # includes DC
 
-    # Keep these consistently pipe delimited since the rest of the pipeline expects that often
-    lc = details.get("Location Chips")
-    if isinstance(lc, (list, tuple, set)):
-        lc = "|".join(str(x).strip() for x in lc if str(x).strip())
-    elif lc is None:
-        lc = ""
-    details["Location Chips"] = lc or "|".join(chips)
-    if "Applicant Regions" in details:
-        details["Applicant Regions"] = _as_pipe_regions(details.get("Applicant Regions"))
+                if us_state_hits and "WA" not in us_state_hits:
+                    wa_rule = "Fail"
+                else:
+                    wa_rule = "Pass"
+
+    # BC Rule
+    bc_rule = (details.get("BC Rule") or "").strip()
+    if not bc_rule or bc_rule.lower() == "default":
+        bc_rule = "Pass" if _matches_locality("BC", loc=loc_s, chips=chips_list, url=job_url) else "Fail"
+
+    # ON Rule
+    on_rule = (details.get("ON Rule") or "").strip()
+    loc_tokens = set(_as_listish(loc_s))
+    chip_tokens = {c.upper() for c in chips_list}
+
+    has_on_token = ("ontario" in loc_tokens) or ("toronto" in loc_tokens) or ("ottawa" in loc_tokens)
+    has_on_chip = ("ON" in chip_tokens)
+
+    if not on_rule or on_rule.lower() == "default":
+        if has_on_chip or has_on_token:
+            on_rule = "Pass" if _matches_locality("ON", loc=loc_s, chips=chips_list, url=job_url) else "Fail"
+        else:
+            on_rule = "Fail"
+
+    # Province scoped fallback for Canada
+    if (canada_rule or "").strip().lower() == "fail" and (bc_rule == "Pass" or on_rule == "Pass"):
+        loc_low = (loc_s or "").lower()
+
+        has_can_chip = "CAN" in chips_set
+        has_can_token = bool(re.search(r"\bcan\b", loc_low))
+        has_canada_word = ("canada" in loc_low)
+        has_can_prov = bool(CAN_PROV_RX.search(loc_low)) if "CAN_PROV_RX" in globals() else False
+
+        if has_can_chip or has_can_token or has_canada_word or has_can_prov:
+            canada_rule = "Pass"
+
+    def _canon_rule(x: str) -> str:
+        x = (x or "").strip().lower()
+        if x == "pass":
+            return "Pass"
+        if x == "fail":
+            return "Fail"
+        if x == "remote":
+            return "Remote"
+        if x == "hybrid":
+            return "Hybrid"
+        if x == "onsite":
+            return "Onsite"
+        if x in {"", "unknown"}:
+            return "Unknown"
+        return x.capitalize()
+
+    details["US Rule"] = _canon_rule(us_rule)
+    details["Canada Rule"] = _canon_rule(canada_rule)
+    details["Remote Rule"] = _canon_rule(remote_rule)
+    details["WA Rule"] = _canon_rule(wa_rule)
+    details["BC Rule"] = _canon_rule(bc_rule)
+    details["ON Rule"] = _canon_rule(on_rule)
+
+    applicant_regions = _clamp_applicant_regions_using_loc_chips(
+        applicant_regions,
+        details.get("Location Chips") or ""
+    )
+    # Finalize Applicant Regions once, pipe format
+    details["Applicant Regions"] = _as_pipe_regions(applicant_regions)
+    debug(f"[APPREGIONS FINALIZE] applicant_regions={applicant_regions!r} | chips={details.get('Location Chips')!r} | loc={details.get('Location')!r}")
 
     if "Applicant Regions Source" in details:
-        details["Applicant Regions Source"] = (details.get("Applicant Regions Source") or "").strip().upper()
+        details["Applicant Regions Source"] = _as_pipe_source(details.get("Applicant Regions Source"))
 
-    # If we already have multiple locations, keep them
+    # Location Chips normalization
+    # Important: do not normalize locked chips. Some normalizers drop tokens like DC or IL.
+    if details.get("_LOCK_LOCATION_CHIPS"):
+        details["Location Chips"] = (details.get("Location Chips") or "").strip()
+    else:
+        details["Location Chips"] = _as_pipe_chips(details.get("Location Chips") or "")
+
+    # Respect multiple location display
     if isinstance(details.get("Location"), str) and " / " in details["Location"]:
+        _yc_trace(details, "YC RULES EXIT", DOTL)
+        details["_DERIVE_LOCATION_RULES_DONE"] = True
         return details
 
-    try:
-        details["Location"] = best_location_for_display(details, details.get("Location Chips", ""), loc)
-    except Exception:
-        pass
+    # Update display location if not locked
+    if not details.get("_LOCK_LOCATION_CHIPS"):
+        try:
+            details["Location"] = best_location_for_display(details, details.get("Location Chips", ""), loc_s)
+        except Exception:
+            pass
 
-    _yc_trace(details, "YC RULES EXIT", DOTL)   # 🐞
+    _yc_trace(details, "YC RULES EXIT", DOTL)
+    details["_DERIVE_LOCATION_RULES_DONE"] = True
+
+    if not (details.get("Applicant Regions Source") or "").strip():
+        details["Applicant Regions Source"] = "UNKNOWN"
 
     return details
-
 
 from bs4 import BeautifulSoup  # keep this where it already is
 
@@ -8217,7 +9941,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     # --- Built In (incl. city sites like Built In Vancouver) ---
     # If Built In did NOT give us a structured salary, be conservative:
     # don't keep tiny or obviously bogus dollar amounts scraped from the text.
-    if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
+    if page_host and ("builtin.com" in page_host or "builtinseattle.com" in page_host or "builtinvancouver.org" in page_host):
         have_structured = bool(d.get("Salary Range") or d.get("Salary Text"))
         if not have_structured:
             # If a later pass guessed a salary but it's tiny (e.g. $12)
@@ -8247,7 +9971,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
     ]
 
     # Built In: include raw HTML because salary ranges are often split across spans
-    if page_host and ("builtin.com" in page_host or "builtinvancouver.org" in page_host):
+    if page_host and ("builtin.com" in page_host or "builtinseattle.com" in page_host or "builtinvancouver.org" in page_host):
         blob_parts.append(d.get("html_raw") or "")
 
     blob = " ".join(str(x or "") for x in blob_parts)
@@ -8478,6 +10202,7 @@ def enrich_salary_fields(d: dict, page_host: str | None = None) -> dict:
         ("themuse.com" in phost)
         or ("remotive.com" in phost)
         or ("builtin.com" in phost)
+        or ("builtinseattle.com" in phost)
         or ("builtinvancouver.org" in phost)
     )
 
@@ -8946,7 +10671,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 except Exception:
                     cur_url = ""
 
-                if ("builtin.com/job/" in cur_url) or ("builtin.com" in (cur_url or "")):
+                if ("builtin.com/job/" in cur_url) or ("builtinseattle.com/job/" in cur_url) or ("builtinvancouver.org/job/" in cur_url) or ("builtin.com" in (cur_url or "")) or ("builtinseattle.com" in (cur_url or "")) or ("builtinvancouver.org" in (cur_url or "")):
                     try:
                         page.wait_for_function(
                             """() => {
@@ -8960,14 +10685,46 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                         )
                     except Exception:
                         pass
+                    # Seattle pages sometimes hydrate later but expose stable DOM markers first.
+                    if "builtinseattle.com/job/" in (cur_url or ""):
+                        try:
+                            page.wait_for_selector(
+                                "[data-id='company-title'], div[data-id='job-card'] h1",
+                                timeout=15000,
+                            )
+                        except Exception:
+                            pass
 
                 # ---------------------------
                 # 6. Capture HTML and bump counters
                 # ---------------------------
                 html = page.content()
 
+                # Built In Seattle can intermittently return a partial shell first
+                # (title present, but no JSON-LD / jobPostInit / company node yet).
+                if "builtinseattle.com/job/" in (cur_url or ""):
+                    def _sea_has_strong_job_signals(h: str) -> bool:
+                        h_low = (h or "").lower()
+                        return (
+                            ("Builtin.jobPostInit" in (h or ""))
+                            or ("hiringOrganization" in (h or ""))
+                            or ('data-id="company-title"' in (h or ""))
+                            or ("job-post-body-" in h_low)
+                            or ('<meta name="description"' in h_low)
+                        )
+
+                    if not _sea_has_strong_job_signals(html):
+                        for _ in range(3):  # additive wait budget ~9s
+                            try:
+                                page.wait_for_timeout(3000)
+                            except Exception:
+                                break
+                            html = page.content()
+                            if _sea_has_strong_job_signals(html):
+                                break
+
                 # If we still got a tiny shell, try one reload once.
-                if ("builtin.com/job/" in cur_url) and (not html or len(html) < 50000):
+                if (("builtin.com/job/" in cur_url) or ("builtinseattle.com/job/" in cur_url)) and (not html or len(html) < 50000):
                     try:
                         page.reload(wait_until="domcontentloaded")
                         try:
@@ -8983,7 +10740,32 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             )
                         except Exception:
                             pass
+                        if "builtinseattle.com/job/" in (cur_url or ""):
+                            try:
+                                page.wait_for_selector(
+                                    "[data-id='company-title'], div[data-id='job-card'] h1",
+                                    timeout=15000,
+                                )
+                            except Exception:
+                                pass
                         html = page.content()
+                        if "builtinseattle.com/job/" in (cur_url or ""):
+                            # One more short poll after reload for slower Seattle hydration.
+                            for _ in range(2):
+                                html_low = (html or "").lower()
+                                if (
+                                    "Builtin.jobPostInit" in (html or "")
+                                    or "hiringOrganization" in (html or "")
+                                    or 'data-id="company-title"' in (html or "")
+                                    or "job-post-body-" in html_low
+                                    or '<meta name="description"' in html_low
+                                ):
+                                    break
+                                try:
+                                    page.wait_for_timeout(2500)
+                                except Exception:
+                                    break
+                                html = page.content()
                     except Exception:
                         pass
 
@@ -9031,10 +10813,57 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
         return None
 
 
+def _is_partial_builtinseattle_job_shell(url: str, html: str | None) -> bool:
+    try:
+        u = str(url or "")
+        h = str(html or "")
+        if "builtinseattle.com/job/" not in u.lower():
+            return False
+        if not h:
+            return False
+        h_low = h.lower()
+        has_title = "<title" in h_low
+        has_jobpostinit = "Builtin.jobPostInit" in h
+        has_jsonld = ('type="application/ld+json"' in h) or ("hiringOrganization" in h)
+        has_company_node = 'data-id="company-title"' in h
+        has_meta_desc = '<meta name="description"' in h_low
+        has_job_body = "job-post-body-" in h_low
+        # The problematic shell consistently has title but lacks real job signals.
+        return has_title and not any([has_jobpostinit, has_jsonld, has_company_node, has_meta_desc, has_job_body])
+    except Exception:
+        return False
+
+
 def get_html(url):
     domain = up.urlparse(url).netloc.lower()
     if domain in PLAYWRIGHT_DOMAINS:
         html = fetch_html_with_playwright(url)
+        if _is_partial_builtinseattle_job_shell(url, html):
+            try:
+                log_line("DEBUG", f"[BIVDBG] Seattle partial shell detected, retrying Playwright once: {url}")
+            except Exception:
+                pass
+            html_retry = fetch_html_with_playwright(url)
+            if html_retry and not _is_partial_builtinseattle_job_shell(url, html_retry):
+                html = html_retry
+            else:
+                # Seattle-only additive fallback: some pages are server-rendered well enough via requests.
+                try:
+                    resp = polite_get(url)
+                except Exception:
+                    resp = None
+                html_req = resp.text if resp else None
+                if html_req and not _is_partial_builtinseattle_job_shell(url, html_req):
+                    try:
+                        log_line("DEBUG", f"[BIVDBG] Seattle partial shell resolved via requests fallback: {url}")
+                    except Exception:
+                        pass
+                    html = html_req
+                else:
+                    # One more PW try for intermittent Seattle pages (kept Seattle-only).
+                    html_retry2 = fetch_html_with_playwright(url)
+                    if html_retry2 and not _is_partial_builtinseattle_job_shell(url, html_retry2):
+                        html = html_retry2
         return html  # do not attempt requests() fallback for PW-only sites
     resp = polite_get(url)
     return resp.text if resp else None
@@ -10118,7 +11947,8 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
                     cur = (details.get("Location") or "").strip().lower()
                     # overwrite only when current value is generic
                     if cur in ("", "us", "united states", "remote"):
-                        details["Location"] = loc_txt
+                        if not details.get("_LOCK_LOCATION_FROM_TOOLTIP"):
+                            details["Location"] = loc_txt
         except Exception:
             pass
 
@@ -10258,9 +12088,9 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
                 loc_cur = (details.get("Location") or "").lower()
                 if (not loc_cur or loc_cur in {"", "us", "united states"} or "remote" in loc_cur):
                     details["Location"] = nice
-                chips.add("US")
-                chips.add("WA")
-                chips.add(nice)
+                chips.append("US")
+                chips.append("WA")
+                chips.append(nice)
                 break
         
         # Final write for Location Chips should happen after ALL chip sources are merged,
@@ -10272,7 +12102,17 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
 
     except Exception:
         pass
-    return details
+        
+    # Dedupe Deduplicate while preserving order
+    seen = set()
+    out = []
+    for c in chips:
+        c = str(c).strip().upper()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    return out
 
 
 
@@ -10536,8 +12376,11 @@ def _normalize_job_defaults(d: dict) -> dict:
     # Text and rules
     d["Description Snippet"] = d.get("Description Snippet") or d.get("description_snippet") or ""
     d["WA Rule"]             = d.get("WA Rule") or d.get("wa_rule") or "Default"
+    d["BC Rule"]             = d.get("BC Rule") or d.get("bc_rule") or "Default"
+    d["ON Rule"]             = d.get("ON Rule") or d.get("on_rule") or "Default"
     d["Remote Rule"]         = d.get("Remote Rule") or d.get("remote_rule") or "Default"
     d["US Rule"]             = d.get("US Rule") or d.get("us_rule") or "Default"
+    d["Canada Rule"]         = d.get("Canada Rule") or d.get("canada_rule") or "Default"
 
     return d
 
@@ -10997,8 +12840,11 @@ def _normalize_skip_defaults(row: dict) -> dict:
         "Job URL": row.get("Job URL", ""),
         "Reason Skipped": row.get("Reason Skipped", row.get("Reason", "")),
         "WA Rule": row.get("WA Rule", ""),
+        "BC Rule": row.get("BC Rule", ""),
+        "ON Rule": row.get("ON Rule", ""),
         "Remote Rule": row.get("Remote Rule", ""),
         "US Rule": row.get("US Rule", ""),
+        "Canada Rule": row.get("Canada Rule", ""),
         "Salary Max Detected": row.get("Salary Max Detected", ""),
         "Salary Rule": row.get("Salary Rule", ""),
         "Location Chips": row.get("Location Chips", ""),
@@ -11476,7 +13322,7 @@ def main(args: argparse.Namespace | None = None) -> None:
         ))
         return clean
 
-    # before you start deduping
+    # before you start dedupe and deduping
     before_total = len(all_detail_links)
 
     deduped = []
@@ -11568,8 +13414,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                         "Career Board": board or "Missing Board",
                         "Reason Skipped": default_reason,
                         "WA Rule": "",
+                        "BC Rule": "",
+                        "ON Rule": "",
                         "Remote Rule": "",
                         "US Rule": "",
+                        "Canada Rule": "",
                         "Salary Max Detected": "",
                         "Salary Rule": "",
                         "Location Chips": "",
@@ -11656,8 +13505,11 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                                     # compute derived fields once
                 details["WA Rule"] = details.get("WA Rule", "default")
+                details["BC Rule"] = details.get("BC Rule", "default")
+                details["ON Rule"] = details.get("ON Rule", "default")
                 details["Remote Rule"] = details.get("Remote Rule", "default")
-                details["US Rule"] = details.get("US Rule", "default")
+                details["US Rule"] = details.get("US Rule", "default") 
+                details["Canada Rule"] = details.get("Canada Rule", "default")
                 details["Reason"] = details.get("Reason","")  # leave as-is unless you set it
                 vis, score, mark = compute_visibility_and_confidence(details)
                 details["Visibility Status"] = vis
@@ -11682,8 +13534,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                         "Valid Through":        details.get("Valid Through",""),
                         "Reason Skipped":       rm_reason,
                         "WA Rule":              details.get("WA Rule","default"),
+                        "BC Rule":              details.get("BC Rule","default"),
+                        "ON Rule":              details.get("ON Rule","default"),
                         "Remote Rule":          details.get("Remote Rule","default"),
                         "US Rule":              details.get("US Rule","default"),
+                        "Canada Rule":          details.get("Canada Rule","default"),
                         "Salary Max Detected":  details.get("Salary Max Detected",""),
                         "Salary Rule":          details.get("Salary Rule",""),
                         "Salary Status":        details.get("Salary Status",""),
@@ -11716,8 +13571,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                     "Apply URL": details.get("apply_url", link),
                     "Description Snippet": details.get("Description Snippet", ""),
                     "WA Rule": details.get("WA Rule", "default"),
+                    "BC Rule": details.get("BC Rule", "default"),
+                    "ON Rule": details.get("ON Rule", "default"),
                     "Remote Rule": details.get("Remote Rule") or details.get("is_remote_flag", "unknown_or_onsite"),
                     "US Rule": details.get("US Rule", "default"),
+                    "Canada Rule": details.get("Canada Rule", "default"),
                     "Salary Max Detected": details.get("Salary Max Detected", ""),
                     "Salary Rule": details.get("Salary Rule", ""),
                     "Salary Status": details.get("Salary Status", ""),
@@ -11725,13 +13583,15 @@ def main(args: argparse.Namespace | None = None) -> None:
                     "Salary Near Min": details.get("Salary Near Min", ""),
                     "Salary Est. (Low-High)": details.get("Salary Est. (Low-High)", ""),
                     "Location Chips": _as_pipe_chips(details.get("Location Chips")) or "",
-                    "Applicant Regions": _as_pipe_chips(details.get("Applicant Regions")) or "",
+                    "Applicant Regions": _as_pipe_regions(details.get("Applicant Regions")) or "",
                     "Applicant Regions Source": (details.get("Applicant Regions Source") or "").strip().upper(),
                     "Visibility Status": details.get("Visibility Status", ""),
                     "Confidence Score": details.get("Confidence Score", ""),
                     "Confidence Mark": details.get("Confidence Mark", ""),
                 }
 
+                log_line("DEBUG", f"[AS_PIPE_CHIPS] pre_normalize Location Chips raw={details.get('Location Chips')!r}")
+                log_line("DEBUG", f"[AS_PIPE_CHIPS] pre_normalize Location Chips norm={_as_pipe_chips(details.get('Location Chips'))!r}")
                 # Basic remote/US rules (lightweight; you can expand later)
                 remote_flag = details.get("is_remote_flag", "unknown_or_onsite")
                 remote_rule = "default" if remote_flag == "remote" else "no_remote_signal"
@@ -11743,15 +13603,8 @@ def main(args: argparse.Namespace | None = None) -> None:
                 keep_row["Title"]   = normalize_title(keep_row["Title"], keep_row["Company"])
 
                 # Derive location/remote/US rules now that details are populated
-                keep_row_normalized = _derive_location_rules({
-                    **keep_row,
-                    "Remote Rule": remote_rule,
-                    "US Rule": us_rule,
-                    "WA Rule": wa_rule,
-                    "page_text": details.get("page_text", ""),
-                    "Description": details.get("Description", keep_row.get("Description Snippet", "")),
-                    "Description Snippet": keep_row.get("Description Snippet", ""),
-                })
+                keep_row_normalized = keep_row
+
                 keep_row.update({
                     "Location": keep_row_normalized.get("Location", keep_row.get("Location", "")),
                     "Location Chips": keep_row_normalized.get("Location Chips", keep_row.get("Location Chips", "")),
@@ -11761,16 +13614,17 @@ def main(args: argparse.Namespace | None = None) -> None:
                         keep_row.get("Applicant Regions Source", "")
                     ),
                 })
+
                 remote_rule = keep_row_normalized.get("Remote Rule", remote_rule)
                 us_rule = keep_row_normalized.get("US Rule", us_rule)
                 wa_rule = keep_row_normalized.get("WA Rule", wa_rule)
                 keep_row["Remote Rule"] = remote_rule
                 keep_row["US Rule"] = us_rule
                 keep_row["WA Rule"] = wa_rule
+
                 # Preserve explicit remote flag fields for downstream consumers/logs
                 keep_row["remote_flag"] = details.get("remote_flag") or details.get("is_remote_flag") or remote_rule
                 keep_row["Remote Flag"] = keep_row["remote_flag"]
-
 
                 # IMPORTANT: carry Canada Rule into the row used by the classifier
                 keep_row["Canada Rule"] = keep_row_normalized.get("Canada Rule") or details.get("Canada Rule", "")
@@ -11782,7 +13636,6 @@ def main(args: argparse.Namespace | None = None) -> None:
                     if inferred_title:
                         keep_row["Title"] = inferred_title
 
-
                 # Classification via the new rules helper
                 row_for_classification = {
                     **keep_row,
@@ -11790,27 +13643,47 @@ def main(args: argparse.Namespace | None = None) -> None:
                     "Canada Rule": keep_row.get("Canada Rule") or details.get("Canada Rule", ""),
                 }
 
+                is_biv = "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower()
+                if is_biv:
+                    raw_chips = (
+                        row_for_classification.get("Location Chips")
+                        or keep_row.get("Location Chips")
+                        or details.get("Location Chips")
+                        or ""
+                    )
 
+                    chips_set = {p.strip().upper() for p in re.split(r"[|,;/]", str(raw_chips)) if p.strip()}
 
-                if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
-                    log_print(f"{_box('ROW CHECK')}{DOT6}WA Rule= {row_for_classification.get('WA Rule')} "
+                    # Only ever upgrade Fail -> Pass (never downgrade Pass -> Fail)
+                    if "WA" in chips_set:
+                        row_for_classification["WA Rule"] = "Pass"
+                        keep_row["WA Rule"] = "Pass"
+
+                    if ("USA" in chips_set) or ("US" in chips_set):
+                        row_for_classification["US Rule"] = "Pass"
+                        keep_row["US Rule"] = "Pass"
+
+                    if ("CAN" in chips_set) or ("CANADA" in chips_set):
+                        row_for_classification["Canada Rule"] = "Pass"
+                        keep_row["Canada Rule"] = "Pass"
+
+                    log_print(
+                        f"{_box('ROW CHECK')}{DOT6}WA Rule= {row_for_classification.get('WA Rule')} "
                         f" |  Remote Rule= {row_for_classification.get('Remote Rule')} "
                         f" |  Canada Rule= {row_for_classification.get('Canada Rule')} "
                     )
 
-                if "builtinvancouver.org" in (keep_row.get("Job URL") or "").lower():
-                    log_print(f"{_box('ROW CHECK')}{DOT6}US Rule= {row_for_classification.get('US Rule')} "
+                    log_print(
+                        f"{_box('ROW CHECK')}{DOT6}US Rule= {row_for_classification.get('US Rule')} "
                         f" |  Location= {row_for_classification.get('Location')}"
                         f" |  US Rule= {row_for_classification.get('US Rule')} "
                     )
-
 
                 is_keep, reason = classify_keep_or_skip(
                     row_for_classification,
                     CLASSIFIER_CONFIG,
                     seen_keys_this_run,
                 )
-
 
                 if not is_keep:
                     skip_row = _normalize_skip_defaults({
@@ -11828,9 +13701,9 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                 salary_blocked = False
                 if _salary_status in ("near_min", "below_floor"):
-                    if _salary_status == "near_min" and detected_max and detected_max >= SOFT_SALARY_FLOOR:
+                    if _salary_status == "near_min" and detect_salary_max and detect_salary_max >= SOFT_SALARY_FLOOR:
                         keep_row["Salary Rule"]       = "soft_keep"
-                        keep_row["Salary Near Min"]   = detected_max
+                        keep_row["Salary Near Min"]   = detect_salary_max
                         keep_row["Visibility Status"] = "quiet"
                         keep_row["Confidence Mark"]   = "🟠"
                     elif _salary_status == "below_floor":
@@ -11846,12 +13719,15 @@ def main(args: argparse.Namespace | None = None) -> None:
                             "Posted":              keep_row["Posted"],
                             "Posting Date":        keep_row["Posting Date"],
                             "Valid Through":       keep_row["Valid Through"],
-                            "Reason Skipped":      f"... out of target range (status={_salary_status}, max={detected_max})",
+                            "Reason Skipped":      f"... out of target range (status={_salary_status}, max={detect_salary_max}",
                             "Apply URL":           keep_row["Apply URL"],
                             "Description Snippet": keep_row["Description Snippet"],
                             "WA Rule":             keep_row.get("WA Rule", ""),
+                            "BC Rule":             keep_row.get("BC Rule", ""),
+                            "ON Rule":             keep_row.get("ON Rule", ""),
                             "Remote Rule":         keep_row.get("Remote Rule", ""),
                             "US Rule":             keep_row.get("US Rule", ""),
+                            "Canada Rule":         keep_row.get("Canada Rule", ""),
                             "Salary Max Detected": keep_row.get("Salary Max Detected", ""),
                             "Salary Rule":         rule_label,
                             "Salary Status":       keep_row.get("Salary Status", ""),
@@ -11898,8 +13774,11 @@ def main(args: argparse.Namespace | None = None) -> None:
                     "Job URL": link,
                     "Reason Skipped": err_msg,
                     "WA Rule": "",
+                    "BC Rule": "",
+                    "ON Rule": "",
                     "Remote Rule": "",
                     "US Rule": "",
+                    "Canada Rule": "",
                     "Salary Max Detected": "",
                     "Salary Rule": "",
                     "Location Chips": "",
@@ -11941,7 +13820,9 @@ def main(args: argparse.Namespace | None = None) -> None:
     # ------------------------------------------------------------------
 
     # 3) Write CSVs once per run
-    log_line("DEBUG", f"[FIELDS] Location={details.get('Location')} | Location Chips={details.get('Location Chips')} | Applicant Regions={details.get('Applicant Regions')} | ApplicantRegions={details.get('ApplicantRegions')}")
+    if "details" in locals() and isinstance(details, dict):
+        trace_chips(details, "FINAL_BEFORE_OUTPUT")
+        log_line("DEBUG", f"[FIELDS] Location={details.get('Location')} | Location Chips={details.get('Location Chips')} | Applicant Regions={details.get('Applicant Regions')} | ApplicantRegions={details.get('ApplicantRegions')}")
     write_rows_csv(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
     write_rows_csv(SKIPPED_CSV, skipped_rows, SKIP_FIELDS)
 

@@ -74,6 +74,17 @@ def _log(level: str, message: str, *, prefix: str = "") -> None:
     # Match the po_job_scraper dot-prefix style and color the whole line
     print(body, file=LOG_STREAM)
 
+def trace_chips(details: dict, label: str) -> None:
+    try:
+        log_line(
+            "DEBUG",
+            f"[CHIPS TRACE] {label} | "
+            f"Location={details.get('Location')!r} | "
+            f"Location Chips={details.get('Location Chips')!r} | "
+            f"Source={details.get('Location Chips Source')!r}"
+        )
+    except Exception:
+        pass
 
 # Public API for other modules to use
 def log_line(

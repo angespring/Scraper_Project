@@ -1,15 +1,23 @@
 # classification_rules.py
 
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import os
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from datetime import datetime
+from config import geo_constants
 from logging_utils import debug
 import re
-
+from config.geo_constants import (
+    CAN_PROV_MAP,
+    DC_NAME_TOKENS,
+    WA_STATE_NAME_TOKENS,
+    US_STATE_ABBR_TO_NAME,
+    US_STATE_NAME_TO_ABBR,
+)
+CA_PROV_ABBRS_LOWER = {v.lower() for v in CAN_PROV_MAP.values()}
+CA_PROV_NAMES_LOWER = set(CAN_PROV_MAP.keys())  # already lowercase in geo_constants
 DEBUG_LOCATION = False
-
-
 
 @dataclass
 class ClassificationConfig:
@@ -18,25 +26,30 @@ class ClassificationConfig:
     allow_near_min_salary: bool = True
     strict_age_policy: bool = False
     max_post_age_days: int = 90
-    allowed_cities: Set[str] = None
-    allowed_states: Set[str] = None
-    allowed_countries: Set[str] = None
+
+    # Gate behavior
+    require_us: bool = False  # <-- ADD THIS (fixes REQUIRE_US-style errors)
+
+    # Allow lists
+    allowed_cities: Set[str] = field(default_factory=set)
+    allowed_states: Set[str] = field(default_factory=set)
+    allowed_countries: Set[str] = field(default_factory=set)
+
+    # Optional: where to persist this gate's pass/fail into the row
+    rule_field: Optional[str] = None
 
     def __post_init__(self):
-        if self.allowed_cities is None:
-            self.allowed_cities = {"seattle"}  # extend later
-        if self.allowed_states is None:
-            self.allowed_states = {"wa", "washington"}
-        if self.allowed_countries is None:
-            self.allowed_countries = {"us", "ca"}
+        if not self.allowed_cities or not self.allowed_states:
+            cities, states = _allowed_from_locality_hints()
 
+            if not self.allowed_cities:
+                self.allowed_cities = cities
 
- 
+            if not self.allowed_states:
+                self.allowed_states = states
 
-
-from dataclasses import dataclass
-from typing import Iterable
-import re
+        if not self.allowed_countries:
+            self.allowed_countries = {"us", "can"}
 
 @dataclass(frozen=True)
 class WorkModeTerms:
@@ -73,6 +86,38 @@ _REMOTE_RX       = re.compile(
     re.I,
 )
 
+def _allowed_from_locality_hints() -> tuple[set[str], set[str]]:
+    """
+    Returns (allowed_cities, allowed_states) derived from LOCALITY_HINTS.
+
+    - allowed_states are the region keys like WA, BC, ON (lowercased)
+    - allowed_cities are safe city tokens defined explicitly in LOCALITY_HINTS["tokens"]
+      excluding 2-letter state/province abbreviations
+    """
+
+    allowed_states: set[str] = set()
+    allowed_cities: set[str] = set()
+
+    for region_key, cfg in (geo_constants.LOCALITY_HINTS or {}).items():
+        if not region_key:
+            continue
+
+        # region keys are authoritative states/provinces
+        allowed_states.add(region_key.strip().lower())
+
+        for token in (cfg.get("tokens") or []):
+            s = str(token).strip().lower()
+            if not s:
+                continue
+
+            # skip 2-letter state/province codes
+            if len(s) == 2:
+                continue
+
+            allowed_cities.add(s)
+
+    return allowed_cities, allowed_states
+
 def classify_work_mode(text: str) -> str:
     """
     Returns: "Remote" | "Hybrid" | "Onsite" | "Unknown"
@@ -99,8 +144,6 @@ def classify_work_mode(text: str) -> str:
         return "Remote"
 
     return "Unknown"
-
-
 
 def classify_keep_or_skip(
     row: Dict[str, Any],
@@ -129,8 +172,8 @@ def classify_keep_or_skip(
             seen_keys_this_run.add(job_key)
 
     # STEP 3: region
-    if not _region_gate(row):
-        reasons.append(_region_gate_reason(row))
+    if not _region_gate(row, config):
+        reasons.append(_region_gate_reason(row, config))
 
     # STEP 4: remote/location
     if not _remote_location_gate(row, config):
@@ -150,16 +193,23 @@ def classify_keep_or_skip(
     if not age_ok and age_reason:
         reasons.append(age_reason)
 
+    for i, r in enumerate(reasons):
+        if not isinstance(r, str):
+            print(f"[DEBUG] reasons[{i}] is {type(r).__name__}: {r!r}")
+
     # DECISION
     if not reasons:
         return True, ""
 
+    if any(not isinstance(r, str) for r in reasons):
+        bad = [(type(r).__name__, r) for r in reasons if not isinstance(r, str)]
+        print("[DEBUG] reasons contains non-strings:", bad)
+
     if config.mode == "review":
-        return False, " | ".join(reasons)
+        return False, " | ".join([str(r) for r in reasons if r])
 
     # strict: pick the first reason for now
-    return False, reasons[0]
-
+    return False, str(reasons[0])
 
 # ---------- Helpers below ----------
 
@@ -175,7 +225,6 @@ def _get_job_key(row: Dict[str, Any]) -> Optional[str]:
         str(row.get(field, "") or "").strip().lower()
         for field in ("Company", "Title", "Job URL")
     )
-
 
 def _as_listish(v) -> List[str]:
     if v is None:
@@ -196,92 +245,114 @@ def _as_listish(v) -> List[str]:
         return [p.lower() for p in parts if p]
     return [str(v).strip().lower()] if str(v).strip() else []
 
+def _region_gate(row: Dict[str, Any], config: Any) -> bool:
+    def _norm_rule(v: str) -> str:
+        s = (v or "").strip().lower()
+        return "pass" if s == "pass" else "fail" if s == "fail" else ""
 
-def _region_gate(row: Dict[str, Any]) -> bool:
-    us_rule = (row.get("US Rule") or "").strip().lower()
-    canada_rule = (row.get("Canada Rule") or "").strip().lower()
+    us_rule = _norm_rule(row.get("US Rule"))
+    canada_rule = _norm_rule(row.get("Canada Rule"))
 
     applicant_regions = _as_listish(row.get("Applicant Regions"))
     chips = _as_listish(row.get("Location Chips"))
 
-    # Normalize common phrases into “only” blocks
-    joined = " ".join(applicant_regions + chips)
+    # For phrase matching, do NOT include chips
+    joined_regions = " ".join(applicant_regions).lower()
+    # For broad signal fallback, chips are fine
+    joined_all = " ".join(applicant_regions + chips).lower()
 
-    # Hard “only” exclusions stay exclusions (handle both token and phrase variants)
+    # Hard “only” exclusions (non target regions)
     only_blocks = (
         ("eu only", "europe only"),
-        ("uk only",),
+        ("uk only", "united kingdom only"),
         ("apac only",),
         ("latam only", "latin america only"),
     )
-    for phrases in only_blocks:
-        if any(p in joined for p in phrases):
-            return False
-
-    # If either region is eligible, pass
-    if us_rule == "pass":
-        return True
-    if canada_rule == "pass":
-        return True
-
-    # Fallback inference from chips/regions
-    is_canada_implied = ("canada" in chips) or ("canada" in applicant_regions) or ("ca" in chips)
-    is_us_implied = ("us" in chips) or ("usa" in chips) or ("united states" in joined) or ("na" in chips)
-
-    if is_canada_implied:
-        return True
-    if is_us_implied:
-        return True
-
-    # If US is explicitly fail and Canada is not pass, fail
-    if us_rule == "fail":
+    if any(any(p in joined_regions for p in phrases) for phrases in only_blocks):
         return False
 
-    # Default conservative
+    # US-only / Canada-only driven by explicit text phrases (not chips)
+    if any(p in joined_regions for p in ("us only", "usa only", "united states only")):
+        return us_rule == "pass"
+    if any(p in joined_regions for p in ("canada only", "can only")):
+        return canada_rule == "pass"
+
+    # Explicit pass wins
+    if us_rule == "pass" or canada_rule == "pass":
+        return True
+
+    # If config forces US
+    if getattr(config, "require_us", False):
+        # If Canada is explicitly allowed, keep parity
+        if canada_rule == "pass":
+            return True
+        return us_rule == "pass"
+
+    # Fallback truth signals
+    ar_set = {a.strip().lower() for a in applicant_regions if a.strip()}
+    chips_set = {c.strip().upper() for c in chips if c.strip()}
+
+    if ar_set & {"us", "can", "na", "global"}:
+        return True
+    if chips_set & {"USA", "CAN"}:
+        return True
+
+    # As a last resort, allow if joined has broad region tokens
+    if any(p in joined_all for p in ("north america", "na", "global", "worldwide")):
+        return True
+
     return False
 
+def _region_gate_reason(row: Dict[str, Any], config: Any) -> str:
+    def _norm_rule(v: str) -> str:
+        s = (v or "").strip().lower()
+        return "pass" if s == "pass" else "fail" if s == "fail" else ""
 
-def _region_gate_reason(row: Dict[str, Any]) -> str:
-    us_rule = (row.get("US Rule") or "").strip().lower() or "missing"
-    ca_rule = (row.get("Canada Rule") or "").strip().lower() or "missing"
+    us_rule = _norm_rule(row.get("US Rule"))
+    canada_rule = _norm_rule(row.get("Canada Rule"))
 
     applicant_regions = _as_listish(row.get("Applicant Regions"))
     chips = _as_listish(row.get("Location Chips"))
-    joined = " ".join(applicant_regions + chips)
 
-    # If we hit a hard only exclusion, say that explicitly
-    only_hits = []
-    if "eu only" in joined or "europe only" in joined:
-        only_hits.append("EU only")
-    if "uk only" in joined:
-        only_hits.append("UK only")
-    if "apac only" in joined:
-        only_hits.append("APAC only")
-    if "latam only" in joined or "latin america only" in joined:
-        only_hits.append("LATAM only")
+    joined_regions = " ".join(applicant_regions).lower()
 
-    if only_hits:
-        return f"Region Gate failed ({', '.join(only_hits)})"
+    if "eu only" in joined_regions or "europe only" in joined_regions:
+        return "Region Gate failed (EU only)"
+    if "uk only" in joined_regions or "united kingdom only" in joined_regions:
+        return "Region Gate failed (UK only)"
+    if "apac only" in joined_regions:
+        return "Region Gate failed (APAC only)"
+    if "latam only" in joined_regions or "latin america only" in joined_regions:
+        return "Region Gate failed (LATAM only)"
 
-    # Otherwise explain the rule state
-    chips_preview = "|".join(chips[:8])
-    regions_preview = "|".join(applicant_regions[:8])
-    return f"Region Gate failed (US={us_rule}, Canada={ca_rule}, chips={chips_preview}, regions={regions_preview})"
+    if any(p in joined_regions for p in ("us only", "usa only", "united states only")):
+        return "Region Gate failed (US-only posting but US Rule != Pass)" if us_rule != "pass" else "Region Gate passed"
+    if any(p in joined_regions for p in ("canada only", "can only")):
+        return "Region Gate failed (Canada-only posting but Canada Rule != Pass)" if canada_rule != "pass" else "Region Gate passed"
 
+    if getattr(config, "require_us", False) and us_rule != "pass" and canada_rule != "pass":
+        return "Region Gate failed (config.require_us=True but US Rule != Pass and Canada Rule != Pass)"
 
+    # Generic fallback (no signal)
+    ar_preview = ", ".join(sorted({a for a in applicant_regions if a})) or "none"
+    chips_preview = "|".join(sorted({c.upper() for c in chips if c})) or "none"
+    return f"Region Gate failed (no explicit US/CAN/NA/Global signal; Applicant Regions={ar_preview}; Chips={chips_preview})"
 
 def _location_debug_line(
     row: dict,
+    label: str,
     remote_rule: str,
     chips,
     countries,
     states,
     cities,
+    applied=None,
 ) -> None:
     """
     Emit a compact, multi-line debug summary of the location rules.
 
-    Uses logging_utils.debug(), so it plays nicely with the progress line.
+    label: "RAW" (pre-equivalence) or "GATE" (post-equivalence) or any short tag
+    applied: optional list of applied equivalence mappings
     """
     if not DEBUG_LOCATION:
         return
@@ -301,104 +372,286 @@ def _location_debug_line(
 
     header = " | ".join(header_parts) or "(no title)"
 
-    # First line: simple header
     debug("")  # spacer to break cleanly from any in-progress log line
-    debug(f"LOCATION DEBUG {header}")
+    debug(f"LOCATION DEBUG [{label}] {header}")
 
-    # Second part: details, manually wrapped to avoid super-long lines
+    applied_txt = ""
+    if applied:
+        applied_txt = f" | applied={list(applied)}"
+
     payload = (
         f"remote_rule={remote_rule} | "
         f"chips={list(chips)} | "
         f"countries={sorted(countries)} | "
         f"states={sorted(states)} | "
         f"cities={sorted(cities)}"
+        f"{applied_txt}"
     )
 
-    width = 70  # rough wrap
+    width = 70
     for i in range(0, len(payload), width):
         chunk = payload[i : i + width]
         debug(f".LOCATION DEBUG {chunk}")
 
+def _remote_location_gate(row: dict, config) -> bool:
+    DEBUG_LOCATION = False
+    job_url = (row.get("Job URL") or "")
+    company = (row.get("Company") or "")
 
-def _remote_location_gate(row: Dict[str, Any], config: ClassificationConfig) -> bool:
+    if "builtin.com/job/senior-product-owner-digital-training-products/8422182" in job_url or company.lower() == "boeing":
+        DEBUG_LOCATION = True
+
+    debug("[REMOTE_LOCATION_GATE] HIT v2026-03-01a")
     rr = (row.get("Remote Rule") or "")
     loc = (row.get("Location") or "")
     raw_chips = row.get("Location Chips") or []
+    text = row.get("_PAGE_TEXT") or row.get("Page Text") or ""
+
+    # NOTE: this is the debug line you will want to remove or turn off later
+    # global DEBUG_LOCATION
+    # DEBUG_LOCATION = True
 
     if isinstance(raw_chips, str):
         chips = [c.strip().lower() for c in re.split(r"[|,;/]", raw_chips) if c.strip()]
     else:
         chips = [str(c).strip().lower() for c in raw_chips if str(c).strip()]
 
-    countries, states, cities = _extract_location_signals(chips, config)
+    # Expand common country aliases so signal extraction matches chips
+    chips_aug = list(chips)
+    if "can" in chips_aug and "canada" not in chips_aug:
+        chips_aug.append("canada")
+    if "us" in chips_aug and "usa" not in chips_aug:
+        chips_aug.append("usa")
+    if "usa" in chips_aug and "us" not in chips_aug:
+        chips_aug.append("us")
 
-    # One classifier call, one decision
-    mode_text = " ".join([rr, loc, " ".join(chips)])
+    mode_text = " ".join([rr, loc])
     mode = classify_work_mode(mode_text).lower()
-
-    _location_debug_line(row, mode, chips, countries, states, cities)
-
-    # Treat Hybrid like Remote for now, if that is your current preference
-    # If later you want Hybrid to be separate, you can change only this line.
     is_remote_like = mode in {"remote", "hybrid"}
+    is_remote = mode == "remote"
+    is_hybrid = mode == "hybrid"
+    is_onsite = mode == "onsite"
+    is_non_remote = is_hybrid or is_onsite
 
-    if mode == "onsite":
-        # onsite rules unchanged
-        if countries and countries.issubset(config.allowed_countries):
+    def _word_tokens(s: str) -> list[str]:
+        return re.findall(r"[a-z]{2,}", (s or "").lower())
+
+    tokens_for_signals = (
+        chips_aug
+        + _as_listish(loc)
+        + _word_tokens(loc)
+        + _as_listish(text)
+    )
+
+    countries_truth, states_truth, cities_truth = _extract_location_signals(tokens_for_signals, config)
+
+    countries_truth = set(countries_truth or [])
+    states_truth = set(states_truth or [])
+    cities_truth = set(cities_truth or [])
+
+    countries_gate, states_gate, cities_gate, remote_equiv_ok, eq_applied = _apply_equivalence(
+        countries_truth, states_truth, cities_truth, remote_equiv_ok=is_remote
+    )
+
+    debug(
+        "[REMOTE_LOCATION_GATE_DECISION] "
+        f"rr={rr!r} loc={loc!r} mode={mode!r} is_remote_like={is_remote_like} | "
+        f"chips={chips!r} | "
+        f"countries_truth={sorted(countries_truth)!r} states_truth={sorted(states_truth)!r} cities_truth={sorted(cities_truth)!r} | "
+        f"countries_gate={sorted(countries_gate)!r} states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
+    )
+
+    _location_debug_line(row, "RAW", mode, chips, countries_truth, states_truth, cities_truth)
+    _location_debug_line(
+        row,
+        "GATE",
+        mode,
+        chips,
+        countries_gate,
+        states_gate,
+        cities_gate,
+        applied=(eq_applied + (["REMOTE_EQUIV_OK"] if remote_equiv_ok else [])),
+    )
+
+    allowed_states = {
+        str(x).strip().lower()
+        for x in (getattr(config, "allowed_states", set()) or set())
+        if str(x).strip()
+    }
+    allowed_countries = {
+        str(x).strip().lower()
+        for x in (getattr(config, "allowed_countries", set()) or set())
+        if str(x).strip()
+    }
+
+    # Country token aliasing to match chips and equivalence behavior
+    if "us" in allowed_countries:
+        allowed_countries.add("usa")
+    if "can" in allowed_countries:
+        allowed_countries.add("canada")
+
+    allowed_cities = {
+        str(x).strip().lower()
+        for x in (getattr(config, "allowed_cities", set()) or set())
+        if str(x).strip()
+    }
+
+    debug(
+        "[ALLOWLISTS] "
+        f"countries={sorted(allowed_countries)} "
+        f"states={sorted(allowed_states)[:20]} "
+        f"cities_count={len(allowed_cities)}"
+    )
+
+    if DEBUG_LOCATION:
+        debug(
+            "[LOCALITY_CHECK] "
+            f"states_gate={sorted(states_gate)!r} allowed_states_has={sorted(states_gate & allowed_states)!r} "
+            f"cities_gate={sorted(cities_gate)!r} allowed_cities_has={sorted(cities_gate & allowed_cities)!r}"
+        )
+
+    # 2) Onsite and Hybrid pass if they contain any approved locality signal
+    #    Approved city OR approved state (matches your clean mental model)
+    if is_non_remote:
+        if (cities_gate & allowed_cities) or (states_gate & allowed_states):
             return True
-        if cities & config.allowed_cities:
-            return True
-        if states & config.allowed_states and not cities:
+        # Country-only allowed when there are no states or cities
+        if (not states_gate) and (not cities_gate) and countries_gate and countries_gate.issubset(allowed_countries):
             return True
         return False
 
-    if is_remote_like:
-        if states & config.allowed_states:
+    # 3) Remote rules
+    if is_remote:
+        # If an allowed state or province is present, pass
+        if states_gate & allowed_states:
             return True
-        if countries and countries.issubset(config.allowed_countries):
-            return True
-        if countries - config.allowed_countries:
-            if cities & config.allowed_cities:
-                return True
-            if not cities:
-                return True
+
+        # If any explicit states exist and NONE are allowed, fail
+        # This catches things like Remote + CA, IL, DC with no WA anchor
+        if states_gate:
             return False
+
+        # If countries are explicitly present and all are allowed, pass
+        if countries_gate and countries_gate.issubset(allowed_countries):
+            return True
+
+        # If an explicit non allowed country appears with no allowed anchor, fail
+        if countries_gate and (countries_gate - allowed_countries):
+            return False
+
+        # Pure “Remote” with no usable geo signal: allow (your policy)
         return True
 
-    # Unknown
-    if countries and countries.issubset(config.allowed_countries):
+    # 4) Unknown mode fallback
+    # Keep your prior default, but I recommend being conservative:
+    # If explicit states exist and none allowed, fail.
+    if states_gate and not (states_gate & allowed_states):
+        return False
+
+    # If explicit allowed country, pass
+    if countries_gate and countries_gate.issubset(allowed_countries):
         return True
-    if countries - config.allowed_countries and cities:
-        if not (cities & config.allowed_cities):
-            return False
 
     return True
 
+def _apply_equivalence(
+    countries: Iterable[str] | None,
+    states: Iterable[str] | None,
+    cities: Iterable[str] | None,
+    *,
+    remote_equiv_ok: bool = True,
+) -> Tuple[Set[str], Set[str], Set[str], bool, List[str]]:
+    """
+    Stable return contract: always a 5-tuple
+    (countries_set, states_set, cities_set, remote_equiv_ok, applied_list)
+    """
 
-def _extract_location_signals(
-    chips: Iterable[str],
-    config: ClassificationConfig,
-) -> Tuple[Set[str], Set[str], Set[str]]:
-    countries: Set[str] = set()
-    states: Set[str] = set()
-    cities: Set[str] = set()
+    c_set: Set[str] = {_norm_token(x) for x in (countries or []) if str(x).strip()}
+    # states should remain lowercase
+    s_set: Set[str] = {_norm_token(x) for x in (states or []) if str(x).strip()}
+    city_set: Set[str] = {_norm_token(x) for x in (cities or []) if str(x).strip()}
 
-    for chip in chips:
-        token = chip.lower()
-        if token in {"us", "united states", "usa"}:
+    applied: List[str] = []
+
+    # --------------------------
+    # Apply your existing rules
+    # --------------------------
+    # Example patterns (replace with your real equivalence rules):
+    # - normalize US/USA
+    if "us" in c_set:
+        c_set.remove("us")
+        c_set.add("usa")
+        applied.append("country:us->usa")
+
+    # Keep remote_equiv_ok as a boolean, never None
+    remote_ok = bool(remote_equiv_ok)
+
+    return c_set, s_set, city_set, remote_ok, applied
+
+def _norm_token(s: str) -> str:
+    return (s or "").strip().lower()
+
+def _extract_location_signals(tokens, config):
+    countries = set()
+    states = set()
+    cities = set()
+
+    wa_cities = set(getattr(config, "WA_CITIES", []) or [])
+    wa_cities = {_norm_token(x) for x in wa_cities if str(x).strip()}
+    wa_cities.discard("washington")
+    wa_cities.discard("dc")
+    wa_cities.discard("washington dc")
+
+    for raw in tokens or []:
+        tok = _norm_token(raw)
+        if not tok:
+            continue
+
+        # Normalize punctuation and collapse whitespace
+        tok = re.sub(r"[^a-z0-9\s]", " ", tok)
+        tok = " ".join(tok.split())
+
+        # Explicit DC
+        if tok in DC_NAME_TOKENS:
+            states.add("dc")
             countries.add("us")
-        elif token in {"canada", "ca"}:
-            countries.add("ca")
-        elif token in {"portugal", "pt"}:
-            countries.add("pt")
-        elif token in {"wa", "washington"}:
+            continue
+
+        # Explicit Washington State
+        if tok in WA_STATE_NAME_TOKENS:
             states.add("wa")
-        elif token in {"atlanta", "seattle", "lisboa", "lisbon", "vancouver"}:
-            cities.add(token)
-        # extend mapping over time
+            countries.add("us")
+            continue
+
+        # Plain "washington" stays ambiguous on purpose
+        if tok == "washington":
+            continue
+
+        # Two letter abbreviations like "wa", "ca", "dc"
+        if tok in US_STATE_ABBR_TO_NAME:
+            # "wa" is explicit and allowed by policy, "dc" is explicit and allowed
+            states.add(tok)
+            countries.add("us")
+            continue
+
+        # Full state names, but "washington" is not present in the dict by design
+        if tok in US_STATE_NAME_TO_ABBR:
+            abbr = US_STATE_NAME_TO_ABBR[tok]
+            # Extra safety: do not allow WA from name mapping even if it sneaks back in
+            if abbr == "wa":
+                continue
+            states.add(abbr)
+            countries.add("us")
+            continue
+
+        # WA city signals
+        if tok in wa_cities:
+            cities.add(tok)
+            states.add("wa")
+            countries.add("us")
+            continue
 
     return countries, states, cities
-
 
 TARGET_ROLE_KEYWORDS = [
     "product manager",
@@ -451,6 +704,10 @@ def _salary_gate(row: Dict[str, Any], config: ClassificationConfig) -> Tuple[boo
 
     return True, ""
 
+def _push_reason(reasons: List[str], r: Any) -> None:
+    if not r:
+        return
+    reasons.append(r if isinstance(r, str) else str(r))
 
 def _parse_date(s: str) -> Optional[datetime]:
     s = s.strip()
@@ -462,7 +719,6 @@ def _parse_date(s: str) -> Optional[datetime]:
         except ValueError:
             continue
     return None
-
 
 def _staleness_gate(row: Dict[str, Any], config: ClassificationConfig) -> Tuple[bool, str]:
     posting_date_str = row.get("Posting Date") or ""

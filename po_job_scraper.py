@@ -14,7 +14,29 @@ import re
 from config import geo_constants
 from config.location_chips import tokenize_location_chips, derive_locked_location_chips
 from config.locality import matches_locality
-from config.geo_constants import CAN_PROV_MAP, US_STATE_ABBRS, US_STATE_CHIPS, US_STATE_NAMES, REGION_TOKENS, REGION_SYNONYMS, PATH_LOC_MAP, ALLOWED_LOCATION_CHIPS, ALLOWED_REGION_TOKENS, LOCATION_CHIP_SYNONYMS, APPLICANT_REGION_TOKENS
+from config.geo_constants import US_STATE_ABBRS as GEO_US_STATE_ABBRS
+from config.geo_constants import (
+    US_STATE_ABBRS,          # lowercase set like {"wa","ca","tx",...,"dc"}
+    US_STATE_CHIPS,          # uppercase set like {"WA","CA","TX",...,"DC"}
+    US_STATE_ABBR_TO_NAME,
+    US_STATE_NAME_TO_ABBR,
+    CAN_PROV_MAP,              # uppercase map like {"BC": "British Columbia", ...}
+    CAN_PROV_ABBRS,          # uppercase set like {"BC","ON",...}
+    CAN_PROV_ABBRS_LOWER,    # lowercase set like {"bc","on",...}
+    CAN_PROV_CHIPS,
+    REGION_SYNONYMS,
+    ALLOWED_REGION_TOKENS,
+    APPLICANT_REGION_TOKENS,
+    LOCATION_CHIP_SYNONYMS,
+    LOCALITY_HINTS,
+    CAN_PROV_CHIPS,
+    ALLOWED_LOCATION_CHIPS,
+    PATH_LOC_MAP,
+)
+CAN_PROV_RX = re.compile(
+    r"\b(?:%s)\b" % "|".join(sorted(map(re.escape, CAN_PROV_ABBRS_LOWER))),
+    flags=re.IGNORECASE,
+)
 from config.geo_regex import (
     CAN_PROV_RX,
     PLACEHOLDER_RX,
@@ -24,7 +46,6 @@ from config.geo_regex import (
     ONSITE_BLOCKERS,
     SINGLE_CITY_PATTERNS,
 )
-
 from contextlib import contextmanager
 from urllib import robotparser
 from playwright.sync_api import sync_playwright
@@ -59,7 +80,8 @@ from logging_utils import (
     progress_clear_if_needed,
     log_line, trace_chips,
 )
-
+from config.debug_flags import debug_print, load_debug_config
+DEBUG_CFG = load_debug_config()
 
 DOT  = "."              # 1 dot
 DOT2 = ".."             # 2 dots
@@ -3788,7 +3810,7 @@ def _finalize_location_chips(chips: list[str]) -> str:
         t = (c or "").strip().upper()
         if not t:
             continue
-        t = geo_constants.LOCATION_CHIP_SYNONYMS.get(t, t)
+        t = LOCATION_CHIP_SYNONYMS.get(t, t)
         if t == "REMOTE":
             continue
         out.add(t)
@@ -5955,17 +5977,11 @@ def _chips_pipe_from_location_strings(locs: list[str]) -> str:
       ["Chicago, IL, USA", "Los Angeles, CA, USA", "Washington, DC, USA"]
         -> "USA|CA|IL|DC"
     """
+
     chips: set[str] = set()
 
-    # Import or reference your canonical set of state abbreviations (lowercase).
-    # If this already exists in your project, use that instead of re-defining it here.
-    try:
-        US_STATE_ABBRS = set(_US_ABBR.keys()) | {"dc"}  # lowercase
-    except Exception:
-        # very defensive fallback, but ideally you should never hit this
-        US_STATE_ABBRS = {"al","ak","az","ar","ca","co","ct","de","fl","ga","hi","id","il","in","ia","ks","ky","la",
-                         "me","md","ma","mi","mn","ms","mo","mt","ne","nv","nh","nj","nm","ny","nc","nd","oh","ok",
-                         "or","pa","ri","sc","sd","tn","tx","ut","vt","va","wa","wv","wi","wy","dc"}
+    # Canonical sets
+    US_STATE_ABBRS = set(GEO_US_STATE_ABBRS)  # lowercase
 
     for raw in (locs or []):
         s = (raw or "").strip()
@@ -5974,31 +5990,52 @@ def _chips_pipe_from_location_strings(locs: list[str]) -> str:
 
         low = s.lower()
 
-        # Country chips. Only allow true countries.
+        # Handle bare tokens like "CA" or "ON"
+        if re.fullmatch(r"[A-Za-z]{2}", s):
+            ab = s.lower()
+
+            if ab in US_STATE_ABBRS:
+                chips.add(ab.upper())
+
+            elif s.upper() in CAN_PROV_ABBRS:
+                chips.add("CAN")
+                chips.add(s.upper())
+
+            continue
+
+        # Country detection
         if ("usa" in low) or ("united states" in low) or re.search(r"\bus\b", s, flags=re.I):
             chips.add("USA")
 
         if ("canada" in low) or re.search(r"\bcan\b", s, flags=re.I):
             chips.add("CAN")
 
-        # State chips: capture ALL instances of ", XX," (IL, CA, DC, etc.)
-        # Works for: "Chicago, IL, USA" and "Washington, DC, USA"
+        # Extract state / province codes like ", IL," or ", ON,"
         for abbr in re.findall(r",\s*([A-Za-z]{2})\s*,", s):
             ab = abbr.strip().lower()
+
             if ab in US_STATE_ABBRS:
                 chips.add(ab.upper())
 
-        # Optional: handle District of Columbia long forms if they ever appear
-        if ("district of columbia" in low) or ("washington d.c." in low):
-            chips.add("DC")
-            chips.add("USA")
+            elif abbr.upper() in CAN_PROV_ABBRS:
+                chips.add("CAN")
+                chips.add(abbr.upper())
 
-    # Stable ordering: countries first, then the rest alphabetically
+    # Ordering: CAN then provinces, then USA then states
     order = []
-    for c in ("USA", "CAN"):
-        if c in chips:
-            order.append(c)
-            chips.remove(c)
+
+    if "CAN" in chips:
+        order.append("CAN")
+        chips.remove("CAN")
+
+        provs = sorted([c for c in chips if c in CAN_PROV_ABBRS])
+        for p in provs:
+            order.append(p)
+            chips.remove(p)
+
+    if "USA" in chips:
+        order.append("USA")
+        chips.remove("USA")
 
     order.extend(sorted(chips))
 
@@ -6435,7 +6472,7 @@ def _is_remote(d: dict) -> bool:
     return mode in ("remote", "hybrid")
 
 def _matches_locality(region_key: str, loc: str, chips: list[str], url: str = "") -> bool:
-    cfg = geo_constants.LOCALITY_HINTS.get(region_key, {})
+    cfg = LOCALITY_HINTS.get(region_key, {})
 
     any_terms = [t.lower().strip() for t in cfg.get("any", []) if str(t).strip()]
     tokens_cfg = [t.lower().strip() for t in cfg.get("tokens", []) if str(t).strip()]
@@ -8956,7 +8993,7 @@ def _apply_path_location_hint(details: dict, url: str | None = None) -> None:
         if loc_cur_cmp not in ("", "us", "united states", "remote"):
             return
 
-        for token, nice in PATH_LOC_MAP.items():
+        for token, nice in items():
             tok = (token or "").strip()
             if not tok:
                 continue
@@ -8993,11 +9030,9 @@ def _has_can_province_signal(text: str) -> bool:
     """
     t = (text or "").lower()
 
-    # Abbrev signal like "Langley, BC" or "Toronto ON"
     if CAN_PROV_RX.search(t):
         return True
 
-    # Full name signal like "British Columbia"
     for name in CAN_PROV_MAP.keys():
         if name in t:
             return True
@@ -9403,18 +9438,21 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
             tooltip_locs = details.get("BIV Tooltip Locations") or []
             loc_text = " / ".join(tooltip_locs) if tooltip_locs else (details.get("Location") or "")
 
-            lc_new = derive_locked_location_chips(loc_text)
+            # Prefer tooltip locations as structured inputs
+            tooltip_locs = details.get("BIV Tooltip Locations") or []
+            if tooltip_locs:
+                loc_parts = [p.strip() for p in tooltip_locs if str(p).strip()]
+            else:
+                loc_parts = [p.strip() for p in str(loc_text).split("/") if p.strip()]
+
+            lc_new = _chips_pipe_from_location_strings(loc_parts)
 
             if lc_new:
                 details["Location Chips"] = lc_new
 
                 # Keep a more-specific source if it already exists, otherwise mark fallback
                 details["Location Chips Source"] = (details.get("Location Chips Source") or "LOCKED_FALLBACK")
-
-                log_line(
-                    "DEBUG",
-                    f"[CHIPS_LOCK_FALLBACK] filled Location Chips={lc_new!r} from loc_text={loc_text!r}"
-                )
+                debug_print("chips", f"[CHIPS_LOCK_FALLBACK] filled Location Chips={lc_new!r} from loc_text={loc_text!r}")
             else:
                 # Could not derive chips. Prefer to keep lock if tooltip was the authority,
                 # but mark the error so it is explainable.
@@ -9427,11 +9465,9 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
                     details["_LOCK_LOCATION_CHIPS"] = False
                     if not (details.get("Location Chips Source") or "").strip():
                         details["Location Chips Source"] = "UNLOCKED_FALLBACK_EMPTY"
-
-                log_line(
-                    "DEBUG",
-                    f"[CHIPS_LOCK_FALLBACK] Could not derive chips from locked signals. "
-                    f"tooltip={bool(tooltip_locs)} loc_text={loc_text!r}"
+                debug_print(
+                    "chips",
+                    f"[CHIPS_LOCK_FALLBACK] Could not derive chips from locked signals. tooltip={bool(tooltip_locs)} loc_text={loc_text!r}"
                 )
 
     existing_src = (details.get("Location Chips Source") or "").upper()
@@ -9502,8 +9538,8 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
                     m = re.search(r",\s*([A-Z]{2})\b", (loc_s or "").strip(), flags=re.IGNORECASE)
                     if m:
                         prov = m.group(1).upper()
-                        if prov in {"BC", "ON", "AB", "QC", "MB", "SK", "NS", "NB", "NL", "PE", "NT", "NU", "YT"}:
-                            chips = ["CAN", prov]
+                        if prov.upper() in CAN_PROV_ABBRS:
+                            chips = ["CAN", prov.upper()]
                             details["Location Chips Source"] = (
                                 (details.get("Location Chips Source") or "") + "|BIV_HERO_LOC_RAW"
                             )
@@ -12126,7 +12162,7 @@ def _enrich_workday_location(details: dict, html: str, job_url: str = "") -> dic
 
         # Path-derived location hints (e.g., seattle-campus, tacoma-campus, harborview)
         path_lower = (urlparse(details.get("Job URL") or job_url or "").path or "").lower()
-        for token, nice in PATH_LOC_MAP.items():
+        for token, nice in items():
             if token in path_lower:
                 loc_cur = (details.get("Location") or "").lower()
                 if (not loc_cur or loc_cur in {"", "us", "united states"} or "remote" in loc_cur):
@@ -12901,7 +12937,7 @@ def _normalize_skip_defaults(row: dict) -> dict:
         loc_cur = (base.get("Location") or "").strip().lower()
         url = base.get("Job URL") or ""
         path_lower = (up.urlparse(url).path or "").lower()
-        for token, nice in PATH_LOC_MAP.items():
+        for token, nice in items():
             if token in path_lower and loc_cur in ("", "us", "united states", "remote"):
                 base["Location"] = nice
                 chips = base.get("Location Chips") or ""

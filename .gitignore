@@ -15,5 +15,6 @@ playwright/.cache/
 .DS_Store
 Code\ Archive/
 *backup*.py
-
-.zshrc
+yc_debug.html
+.vscode/settings.json
+Run Terminal Here for the first time script.sh

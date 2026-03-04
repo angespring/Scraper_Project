@@ -9217,6 +9217,17 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
     # ----------------------------
     job_url = details.get("Job URL") or ""
     job_url_low = job_url.lower()
+
+    # --- Safety defaults to prevent NameError and preserve intent ---
+    ca_rule_raw = details.get("Canada Rule Raw") or details.get("Canada Rule") or "unknown"
+    us_rule_raw = details.get("US Rule Raw") or details.get("US Rule") or "unknown"
+
+    # Normalize in case you store "Pass"/"Fail" sometimes
+    ca_rule_raw = str(ca_rule_raw).strip().lower()
+    us_rule_raw = str(us_rule_raw).strip().lower()
+
+    if details.get("Source") == "Built In Vancouver" or details.get("Board") == "Built In Vancouver":
+        debug(f"[RULE_RAW_DEBUG] ca_rule_raw={ca_rule_raw!r} us_rule_raw={us_rule_raw!r} keys={list(details.keys())[:30]}")
     
     # Fallback: retrieve html from details if not passed as parameter
     if not html:
@@ -9692,9 +9703,41 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
             remote_rule = _canon_work_mode(classify_work_mode(f"{text.lower()} {badge_text}".lower()))
 
     # -----------------------------------------
+    # Stage 5.5 exists because Stage 6 remote parity needs a Canada-only vs US-only signal,
+    # but final US/Canada rules are computed later in Stage 7. These are provisional "raw" rules
+    # derived from chips + loc text to prevent NameError and to avoid appending "us" for BIV
+    # listings that are clearly Canada-only remote.
+    # Stage 5.5: Provisional CA and US rules for parity gating
+    # -----------------------------------------
+    chips_now = {c.strip().upper() for c in chips_list if c and c.strip()}
+
+    # Provisional US rule
+    us_rule_raw = "fail"
+    if "USA" in chips_now:
+        us_rule_raw = "pass"
+    else:
+        if any(tok in loc_low for tok in ("united states", "usa", "u.s.")) or any(s in loc_low for s in US_STATE_ABBRS):
+            us_rule_raw = "pass"
+
+    # Provisional Canada rule
+    ca_rule_raw = "fail"
+    has_can_chip_now = "CAN" in chips_now
+    has_can_token_now = bool(re.search(r"(?:^|[,\s])can(?:$|[,\s])", loc_low))
+    has_canada_word_now = ("canada" in loc_low)
+    has_can_prov_now = bool(CAN_PROV_RX.search(loc_low)) if "CAN_PROV_RX" in globals() else False
+
+    if has_can_chip_now or has_can_token_now or has_canada_word_now or has_can_prov_now:
+        ca_rule_raw = "pass"
+
+    debug(
+        f"[PARITY_RULES_PROVISIONAL] is_biv={is_biv} ca_rule_raw={ca_rule_raw} us_rule_raw={us_rule_raw} "
+        f"chips_now={sorted(chips_now)} loc_low_sample={loc_low[:80]!r}"
+    )
+
+    # -----------------------------------------
     # Stage 6: Remote parity once, late
     # -----------------------------------------
-    is_remote_like = (remote_rule.lower() == "remote")
+    is_remote_like = (str(remote_rule).lower() == "remote")
     if is_remote_like:
         parts = list(applicant_regions)
         parts_low = {p.lower() for p in parts}
@@ -9711,7 +9754,7 @@ def _derive_location_rules(details: dict, html: str = "") -> dict:
     # -----------------------------------------
     chips_final_str = details.get("Location Chips") or ""
     chips_list = [c.strip().upper() for c in chips_final_str.split("|") if c.strip()]
-    chips_set = set(chips_list)
+    #chips_set = set(chips_list)
     chips_set = {c.strip().upper() for c in chips_final_str.split("|") if c.strip()}
     ar_set = {r.strip().lower() for r in applicant_regions if r.strip()}
 

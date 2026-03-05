@@ -27,9 +27,14 @@ CAN_PROV_ABBR_RX = re.compile(
     r"(?<![A-Z0-9])(?:BC|AB|SK|MB|ON|QC|NB|NS|PE|NL|NT|NU|YT)(?![A-Z0-9])"
 )
 
-# Backward compatible alias for older imports
-CAN_PROV_RX = CAN_PROV_ABBR_RX
-CAN_PROV_ABBR_ANYCASE_RX = re.compile(r"\b(BC|AB|SK|MB|ON|QC|NB|NS|NL|PE|YT|NT|NU)\b", re.I)
+# Canonical province abbreviation regex (case insensitive)
+CAN_PROV_ABBR_ANYCASE_RX = re.compile(
+    r"\b(?:BC|AB|SK|MB|ON|QC|NB|NS|NL|PE|YT|NT|NU)\b",
+    re.I,
+)
+
+# Backward compatible alias
+CAN_PROV_RX = CAN_PROV_ABBR_ANYCASE_RX
 
 PLACEHOLDER_RX = re.compile(r"search by company rss feeds public api", re.I)
 

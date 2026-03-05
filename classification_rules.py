@@ -15,6 +15,8 @@ from config.geo_constants import (
     US_STATE_ABBR_TO_NAME,
     US_STATE_NAME_TO_ABBR,
 )
+from config.debug_flags import debug_print, load_debug_config
+DEBUG_CFG = load_debug_config()
 CA_PROV_ABBRS_LOWER = {v.lower() for v in CAN_PROV_MAP.values()}
 CA_PROV_NAMES_LOWER = set(CAN_PROV_MAP.keys())  # already lowercase in geo_constants
 DEBUG_LOCATION = False
@@ -452,6 +454,35 @@ def _remote_location_gate(row: dict, config) -> bool:
     countries_gate, states_gate, cities_gate, remote_equiv_ok, eq_applied = _apply_equivalence(
         countries_truth, states_truth, cities_truth, remote_equiv_ok=is_remote
     )
+
+    # -----------------------------------------
+    # Remote: country eligibility short circuit
+    # If candidate allows US and job includes US, pass (regardless of which US states are listed)
+    # If candidate allows CAN and job includes CAN, pass (regardless of which provinces are listed)
+    # -----------------------------------------
+    ar_set = {r.strip().lower() for r in _as_listish(row.get("Applicant Regions")) if r and str(r).strip()}
+
+    if is_remote:
+        has_us_country = bool(countries_gate & {"us", "usa"})
+        has_can_country = bool(countries_gate & {"can", "canada"})
+
+        if ("us" in ar_set) and has_us_country:
+            debug(
+                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_US_COUNTRY "
+                f"ar={sorted(ar_set)!r} countries_gate={sorted(countries_gate)!r} "
+                f"states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
+            )
+            _location_debug_line(row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_US"])
+            return True
+
+        if ("can" in ar_set) and has_can_country:
+            debug(
+                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_CAN_COUNTRY "
+                f"ar={sorted(ar_set)!r} countries_gate={sorted(countries_gate)!r} "
+                f"states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
+            )
+            _location_debug_line(row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_CAN"])
+            return True
 
     debug(
         "[REMOTE_LOCATION_GATE_DECISION] "

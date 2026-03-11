@@ -1,6 +1,24 @@
 # config/geo_regex.py
 
 import re
+from config.geo_constants import NON_TARGET_COUNTRY_CODES, NON_TARGET_COUNTRY_WORDS, TARGET_COUNTRY_WORDS
+
+NON_TARGET_COUNTRY_CODE_RX = re.compile(
+    r"(?:^|[,\s/])(?:"
+    + "|".join(re.escape(c) for c in sorted(NON_TARGET_COUNTRY_CODES))
+    + r")(?:$|[,\s/])",
+    re.I,
+)
+
+NON_TARGET_COUNTRY_WORD_RX = re.compile(
+    r"\b(?:"
+    + "|".join(re.escape(w) for w in sorted(NON_TARGET_COUNTRY_WORDS, key=len, reverse=True))
+    + r")\b",
+    re.I,
+)
+
+TARGET_US_RX = re.compile(r"\b(?:united states|usa|us)\b", re.I)
+TARGET_CAN_RX = re.compile(r"\b(?:canada|can)\b", re.I)
 
 # Province names can be matched case insensitively
 CAN_PROV_NAME_RX = re.compile(

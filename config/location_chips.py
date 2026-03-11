@@ -2,7 +2,7 @@ import re
 from typing import List, Set
 
 from config.geo_regex import CAN_PROV_NAME_RX, CAN_PROV_ABBR_RX
-
+from config.geo_constants import LOCALITY_HINTS
 _US_RX = re.compile(r"\bU\.?S\.?A?\b", re.I)
 
 from typing import List, Set
@@ -31,54 +31,70 @@ def tokenize_location_chips(loc: str, page_text: str) -> List[str]:
                 chips.append(v)
 
     def has_token(tok: str) -> bool:
-        # strict token boundary, case sensitive input
         return re.search(rf"(?<![A-Za-z0-9]){re.escape(tok)}(?![A-Za-z0-9])", combined) is not None
 
     def has_state_token(st: str) -> bool:
-        # Require location-like context so prose does not trigger it.
-        # Examples that should match: ", CA", "(CA)", "CA,", "CA /", "CA |"
         return re.search(rf"(?:^|[\s,(/|]){st}(?:$|[\s,)/|])", combined) is not None
 
+    def locality_hit(code: str) -> bool:
+        hints = LOCALITY_HINTS.get(code, {})
+        any_terms = hints.get("any", [])
+        token_terms = hints.get("tokens", [])
+        return any(term in low for term in any_terms + token_terms)
+
     # ----------------------------
-    # Canada guardrail
+    # Canada signals
     # ----------------------------
-    if (
+    has_canada_context = (
         "canada" in low
-        or has_token("CAN")  # strict token only, no uppercasing prose
-        or CAN_PROV_NAME_RX.search(combined)
-        or CAN_PROV_ABBR_RX.search(combined)
-    ):
+        or has_token("CAN")
+        or CAN_PROV_NAME_RX.search(combined) is not None
+        or CAN_PROV_ABBR_RX.search(combined) is not None
+    )
+
+    if has_canada_context:
         add("CAN")
 
     # ----------------------------
     # US country signal
     # ----------------------------
-    # Avoid pronoun "us" by using your regex plus a couple safe phrases.
     if _US_RX.search(combined) or ("united states" in low) or (" usa " in f" {low} "):
         add("USA")
 
     # ----------------------------
-    # US state tokens (explicit only)
+    # US state tokens
     # ----------------------------
-    # CA and WA only when we see explicit 2-letter tokens in location-like context.
-    if has_state_token("CA"):
+    has_ca_token = has_state_token("CA")
+
+    if has_ca_token and not has_canada_context:
         add("CA", "USA")
 
     if has_state_token("WA"):
         add("WA", "USA")
 
     # ----------------------------
-    # City term fallbacks
+    # Province chips
     # ----------------------------
-    # WA city terms
-    wa_terms = {"seattle", "bellevue", "tacoma", "spokane", "redmond"}
-    if any(t in low for t in wa_terms):
+    if re.search(r"\bontario\b", low) or has_state_token("ON"):
+        add("ON", "CAN")
+
+    if re.search(r"\bbritish columbia\b", low) or has_state_token("BC"):
+        add("BC", "CAN")
+
+    # ----------------------------
+    # Locality hint fallbacks from geo_constants
+    # ----------------------------
+    if locality_hit("WA"):
         add("USA", "WA")
 
-    # CA city terms
-    ca_terms = {"san francisco", "los angeles", "san diego", "sacramento", "oakland", "san jose"}
-    if any(t in low for t in ca_terms):
+    if locality_hit("CA") and not has_canada_context:
         add("USA", "CA")
+
+    if locality_hit("BC"):
+        add("CAN", "BC")
+
+    if locality_hit("ON"):
+        add("CAN", "ON")
 
     # ----------------------------
     # Deduplicate while preserving order

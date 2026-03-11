@@ -14,12 +14,19 @@ from config.geo_constants import (
     WA_STATE_NAME_TOKENS,
     US_STATE_ABBR_TO_NAME,
     US_STATE_NAME_TO_ABBR,
+    US_STATE_ABBRS, CAN_PROV_ABBRS,
 )
 from config.debug_flags import debug_print, load_debug_config
 DEBUG_CFG = load_debug_config()
 CA_PROV_ABBRS_LOWER = {v.lower() for v in CAN_PROV_MAP.values()}
 CA_PROV_NAMES_LOWER = set(CAN_PROV_MAP.keys())  # already lowercase in geo_constants
 DEBUG_LOCATION = False
+
+ALL_STATE_PROV_TOKENS = {s.lower() for s in US_STATE_ABBRS}.union(
+    {p.lower() for p in CAN_PROV_ABBRS}
+)
+
+COUNTRY_CHIP_TOKENS = {"can", "canada", "us", "usa"}
 
 @dataclass
 class ClassificationConfig:
@@ -90,29 +97,36 @@ _REMOTE_RX       = re.compile(
 
 def _allowed_from_locality_hints() -> tuple[set[str], set[str]]:
     """
-    Returns (allowed_cities, allowed_states) derived from LOCALITY_HINTS.
+    Returns (allowed_cities, allowed_states) derived from LOCALITY_HINTS,
+    but only for approved target state/province regions.
 
-    - allowed_states are the region keys like WA, BC, ON (lowercased)
-    - allowed_cities are safe city tokens defined explicitly in LOCALITY_HINTS["tokens"]
-      excluding 2-letter state/province abbreviations
+    - allowed_states come from the target geography policy, not all LOCALITY_HINTS keys
+    - allowed_cities come only from LOCALITY_HINTS entries for approved target regions
     """
 
-    allowed_states: set[str] = set()
+    allowed_states: set[str] = {
+        s.strip().lower()
+        for s in (geo_constants.DEFAULT_TARGET_STATE_PROV_CHIPS or set())
+        if str(s).strip()
+    }
+
     allowed_cities: set[str] = set()
 
     for region_key, cfg in (geo_constants.LOCALITY_HINTS or {}).items():
-        if not region_key:
+        region_norm = str(region_key).strip().upper()
+        if not region_norm:
             continue
 
-        # region keys are authoritative states/provinces
-        allowed_states.add(region_key.strip().lower())
+        # Only approved target regions contribute to allowlists
+        if region_norm not in (geo_constants.DEFAULT_TARGET_STATE_PROV_CHIPS or set()):
+            continue
 
         for token in (cfg.get("tokens") or []):
             s = str(token).strip().lower()
             if not s:
                 continue
 
-            # skip 2-letter state/province codes
+            # skip 2-letter state/province abbreviations
             if len(s) == 2:
                 continue
 
@@ -457,40 +471,42 @@ def _remote_location_gate(row: dict, config) -> bool:
 
     # -----------------------------------------
     # Remote: country eligibility short circuit
-    # If candidate allows US and job includes US, pass (regardless of which US states are listed)
-    # If candidate allows CAN and job includes CAN, pass (regardless of which provinces are listed)
+    #
+    # NEW RULE:
+    # - Country-only remote is allowed to pass by country anchor.
+    # - If explicit states or cities exist, do NOT short circuit by country.
+    #   In that case, the job must pass via approved state or approved city.
     # -----------------------------------------
     ar_set = {r.strip().lower() for r in _as_listish(row.get("Applicant Regions")) if r and str(r).strip()}
 
-    if is_remote:
+    if is_remote_like:
         has_us_country = bool(countries_gate & {"us", "usa"})
         has_can_country = bool(countries_gate & {"can", "canada"})
 
-        if ("us" in ar_set) and has_us_country:
+        # Country-only means there are no explicit state or city constraints in the posting
+        country_only = (not states_gate) and (not cities_gate)
+
+        if country_only and ("us" in ar_set) and has_us_country:
             debug(
-                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_US_COUNTRY "
+                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_US_COUNTRY_ONLY "
                 f"ar={sorted(ar_set)!r} countries_gate={sorted(countries_gate)!r} "
                 f"states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
             )
-            _location_debug_line(row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_US"])
+            _location_debug_line(
+                row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_US_COUNTRY_ONLY"]
+            )
             return True
 
-        if ("can" in ar_set) and has_can_country:
+        if country_only and ("can" in ar_set) and has_can_country:
             debug(
-                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_CAN_COUNTRY "
+                "[REMOTE_LOCATION_GATE_SHORTCIRCUIT] PASS_CAN_COUNTRY_ONLY "
                 f"ar={sorted(ar_set)!r} countries_gate={sorted(countries_gate)!r} "
                 f"states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
             )
-            _location_debug_line(row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_CAN"])
+            _location_debug_line(
+                row, "GATE", mode, chips, countries_gate, states_gate, cities_gate, applied=["SHORTCIRCUIT_CAN_COUNTRY_ONLY"]
+            )
             return True
-
-    debug(
-        "[REMOTE_LOCATION_GATE_DECISION] "
-        f"rr={rr!r} loc={loc!r} mode={mode!r} is_remote_like={is_remote_like} | "
-        f"chips={chips!r} | "
-        f"countries_truth={sorted(countries_truth)!r} states_truth={sorted(states_truth)!r} cities_truth={sorted(cities_truth)!r} | "
-        f"countries_gate={sorted(countries_gate)!r} states_gate={sorted(states_gate)!r} cities_gate={sorted(cities_gate)!r}"
-    )
 
     _location_debug_line(row, "RAW", mode, chips, countries_truth, states_truth, cities_truth)
     _location_debug_line(
@@ -542,13 +558,29 @@ def _remote_location_gate(row: dict, config) -> bool:
         )
 
     # 2) Onsite and Hybrid pass if they contain any approved locality signal
-    #    Approved city OR approved state (matches your clean mental model)
+    #    Approved city OR approved state
+    #
+    # Important:
+    # - Trust normalized chips directly for state/country gating
+    # - cities_gate still comes from extracted signals
     if is_non_remote:
-        if (cities_gate & allowed_cities) or (states_gate & allowed_states):
+        chip_set = set(chips)
+
+        # Direct chip based state/province pass
+        if chip_set & allowed_states:
             return True
-        # Country-only allowed when there are no states or cities
-        if (not states_gate) and (not cities_gate) and countries_gate and countries_gate.issubset(allowed_countries):
+
+        # City based pass from extracted signals
+        if cities_gate & allowed_cities:
             return True
+
+        # Country-only allowed when there are no explicit states/provinces or cities
+        chip_countries = chip_set & COUNTRY_CHIP_TOKENS
+        chip_states = chip_set & ALL_STATE_PROV_TOKENS
+
+        if (not chip_states) and (not cities_gate) and chip_countries and chip_countries.issubset(allowed_countries):
+            return True
+
         return False
 
     # 3) Remote rules

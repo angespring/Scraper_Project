@@ -1,5 +1,155 @@
 # config/geo_constants.py
 
+
+# -----------------------------------------
+# Default target geography policy
+# -----------------------------------------
+
+DEFAULT_TARGET_COUNTRY_CODES = {
+    "US",
+    "CAN",
+}
+
+DEFAULT_TARGET_COUNTRY_WORDS = {
+    "united states",
+    "usa",
+    "us",
+    "canada",
+    "can",
+}
+
+DEFAULT_TARGET_COUNTRY_CHIPS = {
+    "USA",
+    "CAN",
+}
+
+DEFAULT_TARGET_STATE_PROV_CHIPS = {
+    "WA",
+    "BC",
+    "ON",
+}
+
+DEFAULT_TARGET_LOCATION_CHIPS = (
+    DEFAULT_TARGET_COUNTRY_CHIPS
+    | DEFAULT_TARGET_STATE_PROV_CHIPS
+)
+
+# Backward compatibility aliases
+TARGET_COUNTRY_CODES = DEFAULT_TARGET_COUNTRY_CODES
+TARGET_COUNTRY_WORDS = DEFAULT_TARGET_COUNTRY_WORDS
+TARGET_LOCATION_CHIPS = DEFAULT_TARGET_LOCATION_CHIPS
+
+TARGET_STATE_PROV_CODES = {
+    "WA",   # Washington
+    "BC",   # British Columbia
+    "ON",   # Ontario
+}
+
+# Optional: if you want a single combined default target chip set
+TARGET_LOCATION_CHIPS = {
+    "USA",
+    "CAN",
+    "WA",
+    "BC",
+    "ON",
+}
+
+_COUNTRY_CODE_TO_NAME = {
+    "US": "United States",
+    #"CA": "Canada",
+    "IN": "India",
+    "GB": "United Kingdom",
+    "AE": "United Arab Emirates",
+    "SG": "Singapore",
+    "AU": "Australia",
+    "DE": "Germany",
+    "FR": "France",
+    "NL": "Netherlands",
+    "SE": "Sweden",
+    "NO": "Norway",
+    "DK": "Denmark",
+    "IE": "Ireland",
+    "ES": "Spain",
+    "IT": "Italy",
+    "PL": "Poland",
+}
+
+_COUNTRY_CODE_TO_WORDS = {
+    "US": "united states",
+    #"CA": "canada", -Never use "ca" as Canada token, it collides with California
+    "IN": "india",
+    "GB": "united kingdom",
+    "AE": "united arab emirates",
+    "SG": "singapore",
+    "AU": "australia",
+    "DE": "germany",
+    "FR": "france",
+    "NL": "netherlands",
+    "SE": "sweden",
+    "NO": "norway",
+    "DK": "denmark",
+    "IE": "ireland",
+    "ES": "spain",
+    "IT": "italy",
+    "PL": "poland",
+}
+
+COUNTRY_CODE_TO_NAME = _COUNTRY_CODE_TO_NAME
+COUNTRY_CODE_TO_WORDS = _COUNTRY_CODE_TO_WORDS
+ALL_KNOWN_COUNTRY_CODES = frozenset(COUNTRY_CODE_TO_NAME.keys())
+ALL_KNOWN_COUNTRY_WORDS = frozenset(
+    v for v in COUNTRY_CODE_TO_WORDS    .values() if v
+)
+
+NON_TARGET_COUNTRY_CODES = frozenset(
+    c for c in ALL_KNOWN_COUNTRY_CODES if c not in TARGET_COUNTRY_CODES
+)
+
+NON_TARGET_COUNTRY_WORDS = frozenset(
+    w for w in ALL_KNOWN_COUNTRY_WORDS if w not in TARGET_COUNTRY_WORDS
+)
+
+# -----------------------------------------
+# Non-target country detection
+# Used to block YC jobs outside US / Canada
+# -----------------------------------------
+
+NON_TARGET_COUNTRY_CODES = {
+    "IN",  # India
+    "DE",  # Germany
+    "GB",  # United Kingdom
+    "AE",  # UAE
+    "SG",  # Singapore
+    "AU",  # Australia
+    "FR",  # France
+    "NL",  # Netherlands
+    "SE",  # Sweden
+    "NO",  # Norway
+    "DK",  # Denmark
+    "IE",  # Ireland
+    "ES",  # Spain
+    "IT",  # Italy
+    "PL",  # Poland
+}
+
+NON_TARGET_COUNTRY_WORDS = {
+    "india",
+    "germany",
+    "united kingdom",
+    "uae",
+    "singapore",
+    "australia",
+    "france",
+    "netherlands",
+    "sweden",
+    "norway",
+    "denmark",
+    "ireland",
+    "spain",
+    "italy",
+    "poland",
+}
+
 # ----------------------------
 # Canada provinces and territories
 # ----------------------------
@@ -23,8 +173,6 @@ CAN_PROV_MAP = {
 # ----------------------------
 # US state normalization
 # ----------------------------
-
-HOME_STATE = "Washington"
 
 # Canonical abbreviation -> full name (lowercase)
 _US_ABBR_TO_NAME = {
@@ -99,6 +247,7 @@ WA_STATE_NAME_TOKENS = {
     "washington state",
     "state of washington",
 }
+
 
 # Strict two letter validation, lowercase tokens
 US_STATE_ABBRS_UPPER = {abbr.upper() for abbr in _US_ABBR_TO_NAME.keys()}
@@ -276,7 +425,88 @@ LOCALITY_HINTS = {
         ],
         "tokens": ["toronto", "ontario"],  # drop "on"
     },
+    "CA": {
+        "any": [
+            "san francisco, ca",
+            "san francisco",
+            "los angeles, ca",
+            "los angeles",
+            "san diego, ca",
+            "san diego",
+            "sacramento, ca",
+            "sacramento",
+            "oakland, ca",
+            "oakland",
+            "san jose, ca",
+            "san jose",
+        ],
+        "tokens": [
+            "san francisco",
+            "los angeles",
+            "san diego",
+            "sacramento",
+            "oakland",
+            "san jose",
+            "california",
+        ],
+    },
 }
+
+# -----------------------------------------
+# Country-field normalization
+# Use ONLY when the source field is explicitly country-scoped
+# (e.g. addressCountry, applicant country requirements, ISO country field)
+# This is intentionally separate from generic token parsing because
+# bare "CA" in free text is ambiguous with California.
+# -----------------------------------------
+
+COUNTRY_FIELD_CODE_NORMALIZATION = {
+    "US": "US",
+    "USA": "US",
+    "UNITED STATES": "US",
+    "UNITED STATES OF AMERICA": "US",
+
+    "CA": "Canada",
+    "CAN": "Canada",
+    "CANADA": "Canada",
+
+    "IN": "India",
+    "GB": "United Kingdom",
+    "AE": "United Arab Emirates",
+    "SG": "Singapore",
+    "AU": "Australia",
+    "DE": "Germany",
+    "FR": "France",
+    "NL": "Netherlands",
+    "SE": "Sweden",
+    "NO": "Norway",
+    "DK": "Denmark",
+    "IE": "Ireland",
+    "ES": "Spain",
+    "IT": "Italy",
+    "PL": "Poland",
+}
+
+def normalize_country_field_value(value: str) -> str:
+    """
+    Normalize a value ONLY when it came from an explicitly country-scoped source field.
+
+    Safe examples:
+    - schema.org addressCountry
+    - applicantLocationRequirements Country.name
+    - ATS country code fields
+    - structured country dropdown values
+
+    Unsafe examples (do NOT use this helper):
+    - generic Location strings
+    - free-text snippets
+    - city/state strings like 'San Francisco, CA'
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    return COUNTRY_FIELD_CODE_NORMALIZATION.get(raw.upper(), raw)
 
 # Provinces you actively use in gates
 CAN_PROV_CHIPS = {"BC", "ON"}

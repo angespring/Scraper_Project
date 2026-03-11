@@ -1,0 +1,69 @@
+{
+  "WA": {
+    "phrases": [
+      "seattle, wa",
+      "seattle campus",
+      "harborview medical center",
+      "uw medical center",
+      "south lake union",
+      "renton, wa",
+      "tacoma, wa",
+      "bellevue, wa",
+      "kirkland, wa",
+      "redmond, wa"
+    ],
+    "tokens": [
+      "seattle",
+      "wa",
+      "washington state",
+      "bellevue",
+      "redmond",
+      "tacoma",
+      "spokane",
+      "everett",
+      "kirkland",
+      "renton"
+    ]
+  },
+  "BC": {
+    "phrases": [
+      "vancouver, bc",
+      "vancouver bc",
+      "vancouver",
+      "british columbia",
+      "bc, can",
+      "bc, canada",
+      "burnaby",
+      "richmond, bc",
+      "surrey, bc",
+      "victoria, bc",
+      "coquitlam, bc"
+    ],
+    "tokens": [
+      "vancouver",
+      "british columbia",
+      "bc"
+    ]
+  },
+  "ON": {
+    "phrases": [
+      "toronto, on",
+      "toronto on",
+      "toronto",
+      "ontario",
+      "on, can",
+      "on, canada",
+      "mississauga",
+      "ottawa",
+      "kitchener",
+      "waterloo",
+      "hamilton",
+      "london, on"
+    ],
+    "tokens": [
+      "toronto",
+      "ontario",
+      "on"
+    ]
+  }
+}

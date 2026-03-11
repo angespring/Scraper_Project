@@ -18,3 +18,12 @@ Code\ Archive/
 yc_debug.html
 .vscode/settings.json
 scripts/Run Terminal for the first time script.sh
+# Local debug config
+config/debug_flags.py
+
+# Internal documentation
+docs/SOW Build Prompter for the Scraper Project.pdf
+
+# Dev tooling
+tools/find_sow_targets.py
+

@@ -880,7 +880,7 @@ ALLOW_PM = True  # set True if you want Product Manager roles too
 BOARD_HOSTS = {
     "remotive.com", "weworkremotely.com", "nodesk.co", "workingnomads.com",
     "remoteok.com", "builtin.com", "builtinseattle.com","builtinvancouver.com",
-    "simplyhired.com","themuse.com",
+    "simplyhired.com","themuse.com", "jobright.ai",
     "ycombinator.com", "remote.co", "angel.co", "wellfound.com", "stackoverflow.com",
     "jobspresso.co", "powertofly.com", "landing.jobs", "careerjet.com",
     "jobboard.io", "authenticjobs.com", "jobbatical.com", "workew.com",
@@ -7438,16 +7438,22 @@ STARTING_PAGES = [
     "https://www.themuse.com/search/location/remote-flexible/keyword/product+manager",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=product%20manager",
     "https://www.builtin.com/jobs?search=product%20manager&remote=true",
+    "https://www.builtin.com/jobs?search=associate%20product%20manager&remote=true",
     "https://www.builtin.com/jobs?search=product%20owner&remote=true",
     "https://www.builtinseattle.com/jobs?search=product%20manager&remote=true",
+    "https://www.builtinseattle.com/jobs?search=associate%20product%20manager&remote=true",
     "https://www.builtinseattle.com/jobs?search=product%20owner&remote=true",
     "https://builtinvancouver.org/jobs?search=Product+Manager",
+    "https://builtinvancouver.org/jobs?search=associate%20product%20manager&remote=true",
     "https://builtinvancouver.org/jobs?search=Product+Owner",
     "https://www.simplyhired.com/search?q=product+manager&l=remote",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+manager",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=product+owner",
     "https://builtinvancouver.org/jobs/product-management/product-manager",
     "https://builtinvancouver.org/jobs/product-management/product-owner",
+    "https://jobright.ai/jobs/search?value=product+owner",
+    "https://jobright.ai/jobs/search?value=product+manager",
+
 
 
 
@@ -7458,7 +7464,6 @@ STARTING_PAGES = [
 
 
     # University of Washington (Workday) — focused keyword searches
-    # These are narrow enough that you won’t fetch all 565 jobs.
     "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=business%20analyst",
     "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=systems%20analyst",
     "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=business%20systems%20analyst",
@@ -7468,12 +7473,19 @@ STARTING_PAGES = [
     "https://wd5.myworkdaysite.com/recruiting/uw/UWHires?q=release%20train%20engineer",
 
 
+
+    # University of British Columbia (Workday) — focused keyword searches
+    #"https://ubc.wd10.myworkdayjobs.com/en-US/ubcstaffjobs/jobs?q=business+analyst",
+
+
     # Business Analyst / Systems Analyst
     "https://www.themuse.com/search/location/remote-flexible/keyword/business-analyst",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=business%20analyst",
     "https://www.themuse.com/jobs?categories=information-technology&location=remote&query=systems%20analyst",
     "https://www.builtin.com/jobs?search=business%20analyst&remote=true",
     "https://www.builtin.com/jobs?search=systems%20analyst&remote=true",
+    "https://www.builtin.com/jobs?search=agile&remote=true",
+    "https://www.builtinseattle.com/jobs?search=agile&remote=true",
     "https://www.builtinseattle.com/jobs?search=business%20analyst&remote=true",
     "https://www.builtinseattle.com/jobs?search=systems%20analyst&remote=true",
     "https://builtinvancouver.org/jobs?search=Business+Analyst",
@@ -7491,6 +7503,10 @@ STARTING_PAGES = [
     "https://www.builtinseattle.com/jobs?search=scrum%20master&remote=true",
     "https://builtinvancouver.org/jobs?search=Scrum+Master",
     "https://www.dice.com/jobs?filters.workplaceTypes=Remote&q=scrum+master",
+    "https://jobright.ai/jobs/search?value=agile",
+    "https://jobright.ai/jobs/search?value=scrum+master",
+    "https://jobright.ai/jobs/search?value=release+train+engineer",
+
 
 
 
@@ -7527,6 +7543,7 @@ STARTING_PAGES = [
     # YC jobs (Playwright-friendly)
     "https://www.ycombinator.com/jobs/role/product-manager",
     "https://www.workatastartup.com/companies?role=product",
+    "https://www.workatastartup.com/companies?role=agile",
 
     # Remote OK
     "https://remoteok.com/?location=CA,US,region_NA",
@@ -8313,6 +8330,7 @@ def career_board_name(url: str) -> str:
         "edtech.com": "EdTech",
         "edtechjobs.io": "EdTech Jobs",
         "gitlab.com": "GitLab",
+        "jobright.ai": "JobRight",
 
     }
     for k, v in KNOWN.items():

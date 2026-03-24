@@ -1548,12 +1548,12 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
     Convert a Workday listing URL into job detail links by querying the cxs JSON API.
     Handles both myworkdaysite and myworkdayjobs patterns.
     """
+    p = up.urlparse(listing_url)
+
     # If this is already a detail page, just return it
     if "/job/" in (p.path or ""):
         return [listing_url]
 
-
-    p = up.urlparse(listing_url)
     host = (p.netloc or "").lower()
     parts = [s for s in (p.path or "").split("/") if s]
     qs = up.parse_qs(p.query)

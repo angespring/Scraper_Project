@@ -12,6 +12,12 @@ This project grew as I learned Python and explored ways to automate repetitive w
 <br>
 <br>
 
+## AngeOS URL Intake MVP
+
+This repo now also contains an MVP Chrome Extension scaffold under [extension/README.md](/Users/ange/job-scraper/extension/README.md) for fast URL capture into Notion queues.
+
+Extension-specific setup lives in [extension/README.md](/Users/ange/job-scraper/extension/README.md).
+
 
 
 ## Table of Contents

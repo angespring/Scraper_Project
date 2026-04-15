@@ -405,6 +405,9 @@ LOCALITY_HINTS = {
             "surrey, bc",
             "victoria, bc",
             "coquitlam, bc",
+            "langley, bc",
+            "abbotsford, bc",
+            "kelowna, bc",
         ],
         "tokens": ["vancouver", "british columbia"],  # optional: add "bc" if needed
     },

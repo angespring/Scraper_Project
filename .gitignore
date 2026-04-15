@@ -10,6 +10,9 @@ job_scraper_cache.sqlite
 service_account.json
 .env
 .env.*
+node_modules/
+dist/
+coverage/
 playwright/.cache/
 **/playwright/**/chromium-*
 .DS_Store
@@ -26,4 +29,3 @@ docs/SOW Build Prompter for the Scraper Project.pdf
 
 # Dev tooling
 tools/find_sow_targets.py
-

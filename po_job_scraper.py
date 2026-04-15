@@ -1543,6 +1543,37 @@ def _apply_builtin_family_hero_lock(details: dict, host: str, soup) -> None:
         except Exception:
             pass
 
+def _normalize_workday_detail_url(candidate_url: str, listing_url: str) -> str:
+    lp = up.urlparse(listing_url)
+    cp = up.urlparse(candidate_url)
+
+    listing_parts = [s for s in (lp.path or "").split("/") if s]
+    locale = "en-US"
+    if listing_parts and re.fullmatch(r"[a-z]{2}-[a-z]{2}", listing_parts[0], re.I):
+        locale = listing_parts[0]
+        listing_parts = listing_parts[1:]
+
+    tenant = site = None
+    if listing_parts and listing_parts[0].lower() == "recruiting" and len(listing_parts) >= 3:
+        tenant, site = listing_parts[1], listing_parts[2]
+    elif len(listing_parts) >= 2:
+        tenant, site = listing_parts[0], listing_parts[1]
+
+    path = cp.path or ""
+    if tenant and site and path.startswith("/job/") and "/recruiting/" not in path.lower():
+        norm_path = f"/{locale}/recruiting/{tenant}/{site}{path}"
+        return up.urlunparse((
+            cp.scheme or lp.scheme or "https",
+            cp.netloc or lp.netloc,
+            norm_path,
+            cp.params,
+            cp.query,
+            cp.fragment,
+        ))
+
+    return candidate_url
+
+
 def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list[str]:
     """
     Convert a Workday listing URL into job detail links by querying the cxs JSON API.
@@ -1573,7 +1604,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
         out = []
         for lk in links:
             if "/job/" in lk or "/details/" in lk:
-                out.append(lk)
+                out.append(_normalize_workday_detail_url(lk, listing_url))
 
         # de-dupe preserve order
         seen, deduped = set(), []
@@ -1627,7 +1658,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
         site = tenant
 
     api_host = _workday_api_host(host)
-    jobs = _wd_jobs(api_host, tenant, site, search, limit=50, max_results=max_results)
+    jobs = _wd_jobs(api_host, tenant, site, search, listing_url, limit=20, max_results=max_results)
 
     if not jobs:
         return _html_fallback_links(listing_url)
@@ -1637,7 +1668,7 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
         ext = j.get("externalUrl") or j.get("externalPath") or j.get("url")
         if not ext:
             continue
-        out.append(up.urljoin(f"https://{host}/", ext))
+        out.append(_normalize_workday_detail_url(up.urljoin(f"https://{host}/", ext), listing_url))
 
     # De-dupe while preserving order
     seen, deduped = set(), []
@@ -1652,20 +1683,58 @@ def _workday_api_host(ui_host: str) -> str:
     Convert a Workday UI host to the likely API host.
     Examples:
       velera.wd5.myworkdayjobs.com -> wd5.myworkday.com
-      wd5.myworkdaysite.com        -> wd5.myworkday.com
+      wd5.myworkdaysite.com        -> wd5.myworkdaysite.com
       wd5.myworkday.com            -> wd5.myworkday.com
     """
     h = (ui_host or "").lower()
 
+    if h.endswith("myworkdaysite.com") or h.endswith("myworkday.com"):
+        return h
+
     m = re.search(r"(wd\d+)\.", h)
-    if m:
+    if m and h.endswith("myworkdayjobs.com"):
         return f"{m.group(1)}.myworkday.com"
 
     # last resort, keep original
     return ui_host
 
 
-def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, max_results: int = 250) -> list[dict]:
+def _workday_bootstrap_session(listing_url: str) -> tuple[requests.Session | None, str]:
+    """
+    Prime a Workday session by loading the listing page so the subsequent CXS POST
+    can reuse cookies and the Calypso CSRF token.
+    """
+    sess = requests.Session()
+    try:
+        resp = sess.get(listing_url, headers=HEADERS, timeout=30, allow_redirects=True)
+    except Exception as e:
+        log_line("WARN", f".[WORKDAY] bootstrap GET failed (url={listing_url}, error={type(e).__name__}: {e})")
+        return None, ""
+
+    html = (getattr(resp, "text", "") or "")
+    token = (
+        sess.cookies.get("CALYPSO_CSRF_TOKEN")
+        or resp.cookies.get("CALYPSO_CSRF_TOKEN")
+        or ""
+    ).strip()
+
+    if not token and html:
+        m = re.search(r'token:\s*"([^"]+)"', html, re.I)
+        if m:
+            token = (m.group(1) or "").strip()
+
+    return sess, token
+
+
+def _wd_jobs(
+    host: str,
+    tenant: str,
+    site: str,
+    search: str,
+    listing_url: str,
+    limit: int = 20,
+    max_results: int = 250,
+) -> list[dict]:
     """
     Query Workday cxs jobs endpoint and return raw job dicts.
     Correct path is: /wday/cxs/{tenant}/jobs
@@ -1674,11 +1743,20 @@ def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, ma
 
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     out, offset = [], 0
+    session, csrf_token = _workday_bootstrap_session(listing_url)
+    if session is None:
+        return []
+
+    origin = f"{up.urlparse(listing_url).scheme}://{up.urlparse(listing_url).netloc}"
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Content-Type": "application/json;charset=UTF-8",
-        "User-Agent": "Mozilla/5.0"
+        "User-Agent": USER_AGENT,
+        "Origin": origin,
+        "Referer": listing_url,
     }
+    if csrf_token:
+        headers["X-Calypso-CSRF-Token"] = csrf_token
 
     while True:
         remaining = max_results - len(out)
@@ -1686,9 +1764,14 @@ def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, ma
             break
 
         current_limit = min(limit, remaining)
-        payload = {"limit": current_limit, "offset": offset, "searchText": search}
+        payload = {
+            "appliedFacets": {},
+            "limit": current_limit,
+            "offset": offset,
+            "searchText": (search or "").strip().replace(" ", "+"),
+        }
 
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
+        r = session.post(url, headers=headers, data=json.dumps(payload), timeout=30)
 
         data = _safe_resp_json(r, context=f".[WORKDAY] cxs jobs (api={url})")
         if not data:
@@ -7291,6 +7374,7 @@ PLAYWRIGHT_DOMAINS = {
     "workingnomads.com", "www.workingnomads.com",
     # JS heavy boards that need Playwright
     "dice.com", "www.dice.com",
+    "simplyhired.com", "www.simplyhired.com",
     "myworkdayjobs.com", "wd1.myworkdayjobs.com", "myworkdaysite.com",
     "wd5.myworkdaysite.com", "ashbyhq.com", "jobs.ashbyhq.com",
 }
@@ -7422,6 +7506,9 @@ BLOCKED_URL_PREFIXES = [
     "https://edtechjobs.io/jobs/early-childhood-education",
     "https://edtechjobs.io/jobs/saas-leadership",
     "https://edtechjobs.io/jobs/stakeholder-management",
+    "https://edtechjobs.io/jobs/business-analyst",
+    "https://edtechjobs.io/jobs/product-owner",
+    "https://edtechjobs.io/jobs/product-manager",
 
 ]
 
@@ -7522,7 +7609,11 @@ STARTING_PAGES = [
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Information%20Technology",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Operations",
     "https://edtechjobs.io/jobs/product-management?location=Remote",
+    "https://edtechjobs.io/jobs/product-manager?location=Remote",
+    "https://edtechjobs.io/jobs/product-owner?location=Remote",
     "https://edtechjobs.io/jobs/business-analysis?location=Remote",
+    "https://edtechjobs.io/jobs/business-analyst?location=Remote",
+    "https://edtechjobs.io/jobs/scrum-master?location=Remote",
 
 
     # Ascensus (Workday tenant) — focused role searches
@@ -7535,6 +7626,15 @@ STARTING_PAGES = [
     # "https://ascensushr.wd1.myworkdayjobs.com/ascensuscareers/search?q=release%20train%20engineer",   # 20251227- removed to lesson the amount of jobs scraped can add back if desired
 
     "https://jobs.ashbyhq.com/zapier",
+    "https://jobs.ashbyhq.com/openai?locationId=e8062547-b090-4206-8f1e-7329e0014e98",  #Remote filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/openai?locationId=16c48b76-8036-4fe3-a18f-e9d357395713"   #Seattle filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/deel?locationId=abee6120-4179-40fa-a117-cc41e81ae1dd",    #Remote filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/deel?locationId=59fa514f-7b67-48bc-b168-c0c82c5869a2",    #Canada filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/deel?locationId=f4ff98fd-4896-470d-b7be-6588bc28580b",    #US filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/notion?locationId=b3956395-cb53-44e5-98fc-e1ffd6fed397",   #Remote filter applied in Ashby dashboard; URL is stable and shows real HTML listings
+    "https://jobs.ashbyhq.com/dave",
+
+    
 
     # The Muse works well (canonical filtered URL lives at the top of STARTING_PAGES)
     "https://www.themuse.com/jobs?categories=product&location=remote",
@@ -7565,40 +7665,41 @@ STARTING_PAGES = [
 
     # Welcome to the Jungle (JS-heavy → Playwright)
     "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true",
-    "https://app.welcometothejungle.com/companies/12Twenty#jobs-section"
-    "https://app.welcometothejungle.com/companies/Microsoft#jobs-section"
-    "https://app.welcometothejungle.com/companies/Google#jobs-section"
-    "https://app.welcometothejungle.com/companies/Adobe#jobs-section"
-    "https://app.welcometothejungle.com/companies/Asana#jobs-section"
-    "https://app.welcometothejungle.com/companies/Amazon#jobs-section"
-    "https://app.welcometothejungle.com/companies/Airtable#jobs-section"
-    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section"
-    "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section"
-    "https://app.welcometothejungle.com/companies/Clari#jobs-section"
-    "https://app.welcometothejungle.com/companies/Confluent#jobs-section"
-    "https://app.welcometothejungle.com/companies/DataDog#jobs-section"
-    "https://app.welcometothejungle.com/companies/Dataminr#jobs-section"
-    "https://app.welcometothejungle.com/companies/Expensify#jobs-section"
-    "https://app.welcometothejungle.com/companies/Figma#jobs-section"
-    "https://app.welcometothejungle.com/companies/Gong-io#jobs-section"
-    "https://app.welcometothejungle.com/companies/HashiCorp#jobs-section"
-    "https://app.welcometothejungle.com/companies/HubSpot#jobs-section"
-    "https://app.welcometothejungle.com/companies/Looker#jobs-section"
-    "https://app.welcometothejungle.com/companies/MaintainX#jobs-section"
-    "https://app.welcometothejungle.com/companies/Notion#jobs-section"
-    "https://app.welcometothejungle.com/companies/Outreach#jobs-section"
-    "https://app.welcometothejungle.com/companies/PagerDuty#jobs-section"
-    "https://app.welcometothejungle.com/companies/Segment#jobs-section"
-    "https://app.welcometothejungle.com/companies/Smartsheet#jobs-section"
-    "https://app.welcometothejungle.com/companies/Stripe#jobs-section"
-    "https://app.welcometothejungle.com/companies/Top-Hat#jobs-section"
-    "https://app.welcometothejungle.com/companies/TripActions#jobs-section"
-    "https://app.welcometothejungle.com/companies/UiPath#jobs-section"
-    "https://app.welcometothejungle.com/companies/Vetcove#jobs-section"
-    "https://app.welcometothejungle.com/companies/Zoom#jobs-section"
-    "https://app.welcometothejungle.com/companies/Metabase#jobs-section"
-    "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
-    "https://app.welcometothejungle.com/api/jobs?query=product",
+    "https://app.welcometothejungle.com/companies/12Twenty#jobs-section",
+    "https://app.welcometothejungle.com/companies/Microsoft#jobs-section",
+    "https://app.welcometothejungle.com/companies/Google#jobs-section",
+    "https://app.welcometothejungle.com/companies/Adobe#jobs-section",
+    "https://app.welcometothejungle.com/companies/Asana#jobs-section",
+    "https://app.welcometothejungle.com/companies/Amazon#jobs-section",
+    "https://app.welcometothejungle.com/companies/Airtable#jobs-section",
+    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section",
+    "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section",
+    "https://app.welcometothejungle.com/companies/Clari#jobs-section",
+    "https://app.welcometothejungle.com/companies/Confluent#jobs-section",
+    "https://app.welcometothejungle.com/companies/DataDog#jobs-section",
+    "https://app.welcometothejungle.com/companies/Dataminr#jobs-section",
+    "https://app.welcometothejungle.com/companies/Expensify#jobs-section",
+    "https://app.welcometothejungle.com/companies/Figma#jobs-section",
+    "https://app.welcometothejungle.com/companies/Gong-io#jobs-section",
+    "https://app.welcometothejungle.com/companies/HashiCorp#jobs-section",
+    "https://app.welcometothejungle.com/companies/HubSpot#jobs-section",
+    "https://app.welcometothejungle.com/companies/Looker#jobs-section",
+    "https://app.welcometothejungle.com/companies/MaintainX#jobs-section",
+    "https://app.welcometothejungle.com/companies/Notion#jobs-section",
+    "https://app.welcometothejungle.com/companies/Outreach#jobs-section",
+    "https://app.welcometothejungle.com/companies/PagerDuty#jobs-section",
+    "https://app.welcometothejungle.com/companies/Segment#jobs-section",
+    "https://app.welcometothejungle.com/companies/Smartsheet#jobs-section",
+    "https://app.welcometothejungle.com/companies/Stripe#jobs-section",
+    "https://app.welcometothejungle.com/companies/Top-Hat#jobs-section",
+    "https://app.welcometothejungle.com/companies/TripActions#jobs-section",
+    "https://app.welcometothejungle.com/companies/UiPath#jobs-section",
+    "https://app.welcometothejungle.com/companies/Vetcove#jobs-section",
+    "https://app.welcometothejungle.com/companies/Zoom#jobs-section",
+    "https://app.welcometothejungle.com/companies/Metabase#jobs-section",
+    # API endpoints return JSON, not HTML, so the generic link collector yields 0.
+    # "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
+    # "https://app.welcometothejungle.com/api/jobs?query=product",
 ]
 
 assert all(u.startswith("http") for u in STARTING_PAGES), "A STARTING_PAGES entry is missing a comma."
@@ -7835,7 +7936,7 @@ import json
 import requests
 from urllib.parse import urlparse, urljoin
 
-WORKDAY_LIMIT = 30
+WORKDAY_LIMIT = 20
 
 # ======================================
 # WORKDAY JSON API PAGINATION COLLECTOR
@@ -7845,16 +7946,18 @@ import requests
 from urllib.parse import urlparse, urljoin
 
 
-def fetch_workday_json_jobs(api_base, payload):
+def fetch_workday_json_jobs(api_base, payload, session: requests.Session | None = None, headers: dict | None = None):
     """
     Wrapper around the Workday CXS endpoint.
 
     Returns {} on any failure or non-JSON response so the caller can fall back to HTML.
     """
+    req_session = session or requests.Session()
+    req_headers = headers or HEADERS
     try:
-        resp = requests.post(
+        resp = req_session.post(
             api_base,
-            headers=HEADERS,
+            headers=req_headers,
             data=json.dumps(payload),
             timeout=30,
         )
@@ -7913,16 +8016,51 @@ def _safe_resp_json(resp, context: str = "") -> dict:
         return {}
 
 
-def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list[str]:
+def collect_workday_jobs(
+    listing_url: str,
+    max_links: int | None = None,
+    max_seconds: float | None = None,
+    max_pages: int = 25,
+) -> list[str]:
     """
     Robust JSON-based Workday collector.
     Handles pagination via limit/offset.
     """
+    if max_seconds is None:
+        max_seconds = float(globals().get("MAX_SECONDS_PER_SITE", 60))
+
     parsed = urlparse(listing_url)
     host = parsed.netloc.lower()
 
-    # Workday API lives on myworkday.com even if the UI host is myworkdaysite.com
-    api_host = host.replace("myworkdaysite.com", "myworkday.com")
+    def _page_signature_value(job: dict) -> str:
+        if not isinstance(job, dict):
+            return ""
+        return (
+            job.get("externalPath")
+            or job.get("externalUrl")
+            or job.get("title")
+            or job.get("bulletFields", [{}])[0].get("label", "")
+        )
+
+    def _page_sample_values(jobs: list[dict], limit: int = 3) -> str:
+        sample: list[str] = []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            title = str(job.get("title") or "").strip()
+            ext = str(job.get("externalPath") or job.get("externalUrl") or "").strip()
+            marker = ext or title or _page_signature_value(job)
+            if not marker:
+                continue
+            item = f"{title} [{ext}]" if title and ext else (title or marker)
+            sample.append(item[:140])
+            if len(sample) >= limit:
+                break
+        return " | ".join(sample)
+
+    # Some tenants serve the CXS jobs API from the same myworkdaysite host.
+    # Only rewrite myworkdayjobs hosts; preserve myworkdaysite/myworkday as-is.
+    api_host = _workday_api_host(host)
 
     parts = [p for p in parsed.path.split("/") if p]
     tenant = site = None
@@ -7938,6 +8076,19 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
 
 
     api_base = f"https://{api_host}/wday/cxs/{tenant}/{site}/jobs"
+    session, csrf_token = _workday_bootstrap_session(listing_url)
+    if session is None:
+        return []
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    workday_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json;charset=UTF-8",
+        "User-Agent": USER_AGENT,
+        "Origin": origin,
+        "Referer": listing_url,
+    }
+    if csrf_token:
+        workday_headers["X-Calypso-CSRF-Token"] = csrf_token
 
     # Extract `keywords=` from listing URL if present
     # Example: ...search?q=business+analyst
@@ -7954,41 +8105,96 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
 
     all_links = []
     offset = 0
+    started_at = time.time()
+    pages_fetched = 0
+    seen_page_signatures: set[tuple[str, ...]] = set()
+    seen_page_offsets: dict[tuple[str, ...], int] = {}
 
     while True:
+        if max_seconds and (time.time() - started_at) >= max_seconds:
+            log_line(
+                "WARN",
+                f".[WORKDAY] Stopping pagination after {time.time() - started_at:.1f}s "
+                f"(url={listing_url}, collected={len(all_links)})"
+            )
+            break
+        if max_pages and pages_fetched >= max_pages:
+            log_line(
+                "WARN",
+                f".[WORKDAY] Reached pagination cap ({max_pages} pages) "
+                f"(url={listing_url}, collected={len(all_links)})"
+            )
+            break
+
         payload = {
+            "appliedFacets": {},
             "limit": WORKDAY_LIMIT,
             "offset": offset,
         }
         if keywords:
             # Workday usually uses searchText in the JSON body
-            payload["searchText"] = keywords
+            payload["searchText"] = keywords.strip().replace(" ", "+")
 
-        data = fetch_workday_json_jobs(api_base, payload)
+        data = fetch_workday_json_jobs(api_base, payload, session=session, headers=workday_headers)
         if not data:
             # JSON endpoint not available; fall back to HTML parsing for this listing page
             html = get_html(listing_url)
             if html:
                 links = find_job_links(html, listing_url)
-                return links
+                return [_normalize_workday_detail_url(link, listing_url) for link in links]
             break
 
         # Different tenants sometimes use jobPostings vs jobs – be defensive
         jobs = data.get("jobPostings", []) or data.get("jobs", [])
+        pages_fetched += 1
+
+        page_signature = tuple(
+            _page_signature_value(job)
+            for job in jobs[:WORKDAY_LIMIT]
+            if isinstance(job, dict)
+        )
+        if page_signature and page_signature in seen_page_signatures:
+            prior_offset = seen_page_offsets.get(page_signature)
+            sample = _page_sample_values(jobs)
+            log_line(
+                "WARN",
+                f".[WORKDAY] Detected repeated result page at offset={offset}; "
+                f"previously seen at offset={prior_offset if prior_offset is not None else 'unknown'}; "
+                f"stopping to avoid an infinite loop (url={listing_url})"
+            )
+            if sample:
+                log_line("WARN", f".[WORKDAY] Repeated page sample: {sample}")
+            break
+        if page_signature:
+            seen_page_signatures.add(page_signature)
+            seen_page_offsets[page_signature] = offset
+
+        added_this_page = 0
 
         for job in jobs:
             ext = job.get("externalPath")
             if not ext:
                 continue
 
-            detail_url = urljoin(f"https://{host}/", ext)
+            detail_url = _normalize_workday_detail_url(urljoin(f"https://{host}/", ext), listing_url)
 
             if detail_url not in all_links:
                 all_links.append(detail_url)
+                added_this_page += 1
                 if max_links and len(all_links) >= max_links:
                     return all_links
 
         if len(jobs) < WORKDAY_LIMIT:
+            break
+        if added_this_page == 0:
+            sample = _page_sample_values(jobs)
+            log_line(
+                "WARN",
+                f".[WORKDAY] Page at offset={offset} produced no new links; "
+                f"stopping to avoid an infinite loop (url={listing_url})"
+            )
+            if sample:
+                log_line("WARN", f".[WORKDAY] No-new-links page sample: {sample}")
             break
 
         offset += WORKDAY_LIMIT
@@ -11445,23 +11651,18 @@ def get_html(url):
             if html_retry and not _is_partial_builtinseattle_job_shell(url, html_retry):
                 html = html_retry
             else:
-                # Seattle-only additive fallback: some pages are server-rendered well enough via requests.
-                try:
-                    resp = polite_get(url)
-                except Exception:
-                    resp = None
-                html_req = resp.text if resp else None
-                if html_req and not _is_partial_builtinseattle_job_shell(url, html_req):
+                # Do not fall back to raw requests for Seattle detail pages; that path
+                # is intermittently blocked with 403 and only adds noise after two bad
+                # Playwright shells. Give Playwright one final shot, then return None.
+                html_retry2 = fetch_html_with_playwright(url)
+                if html_retry2 and not _is_partial_builtinseattle_job_shell(url, html_retry2):
+                    html = html_retry2
+                else:
                     try:
-                        log_line("DEBUG", f"[BIVDBG] Seattle partial shell resolved via requests fallback: {url}")
+                        log_line("DEBUG", f"[BIVDBG] Seattle partial shell persisted after Playwright retries: {url}")
                     except Exception:
                         pass
-                    html = html_req
-                else:
-                    # One more PW try for intermittent Seattle pages (kept Seattle-only).
-                    html_retry2 = fetch_html_with_playwright(url)
-                    if html_retry2 and not _is_partial_builtinseattle_job_shell(url, html_retry2):
-                        html = html_retry2
+                    return None
         return html  # do not attempt requests() fallback for PW-only sites
     resp = polite_get(url)
     return resp.text if resp else None
@@ -12096,10 +12297,13 @@ def _host(u: str) -> str:
     except Exception:
         return u
 
-def log_info_processing(url: str):
+def log_info_processing(url: str, index: int | None = None, total: int | None = None):
     progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
-    msg = "Processing listing page: " + url
+    prefix = ""
+    if index is not None and total is not None and total > 0:
+        prefix = f"[{index}/{total}] "
+    msg = prefix + "Processing listing page: " + url
     for ln in _wrap_lines(msg, width=120):
         log_print(f"{c}{_info_box()}.{ln}{RESET}")
 
@@ -13733,30 +13937,15 @@ def main(args: argparse.Namespace | None = None) -> None:
             t0 = time.time()
             if "hubspot.com/careers/jobs" not in listing_url:
                 progress_clear_if_needed()
+            log_info_processing(listing_url, i, total_pages)
             set_source_tag(listing_url)
-            html = get_html(listing_url)
-            if not html:
-                log_print(f"{_box('WARN')} {DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
-                continue
 
             # derive host safely from the listing URL
             p = up.urlparse(listing_url if isinstance(listing_url, str) else str(listing_url))
             host = p.netloc.lower().replace("www.", "")
 
-            # HubSpot listing → handle pagination here and continue
-            if "hubspot.com" in host and "/careers/jobs" in listing_url:
-                links = collect_hubspot_links(listing_url, max_pages=25)
-                all_detail_links.extend(links)
-                elapsed = time.time() - t0
-                progress_clear_if_needed()
-                continue
-
-            if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
-                links = collect_dice_links(listing_url, max_pages=25)
-                all_detail_links.extend(links)
-                continue
-
-            # Workday listing → detail expansion
+            # Workday listing → detail expansion via JSON API first.
+            # Avoid the eager Playwright prefetch here; it is not needed unless the JSON path fails.
             if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
                 wd_detail_links = collect_workday_jobs(
                     listing_url,
@@ -13767,8 +13956,30 @@ def main(args: argparse.Namespace | None = None) -> None:
                 if wd_detail_links:
                     all_detail_links.extend(wd_detail_links)
                     elapsed = time.time() - t0
+                    log_info_found(len(wd_detail_links), listing_url, elapsed)
                     progress_clear_if_needed()
                     continue
+
+            html = get_html(listing_url)
+            if not html:
+                log_print(f"{_box('WARN')} {DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
+                continue
+
+            # HubSpot listing → handle pagination here and continue
+            if "hubspot.com" in host and "/careers/jobs" in listing_url:
+                links = collect_hubspot_links(listing_url, max_pages=25)
+                all_detail_links.extend(links)
+                elapsed = time.time() - t0
+                log_info_found(len(links), listing_url, elapsed)
+                progress_clear_if_needed()
+                continue
+
+            if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
+                links = collect_dice_links(listing_url, max_pages=25)
+                all_detail_links.extend(links)
+                elapsed = time.time() - t0
+                log_info_found(len(links), listing_url, elapsed)
+                continue
 
             else:
                 if "hubspot.com/careers/jobs" in listing_url:
@@ -13806,6 +14017,8 @@ def main(args: argparse.Namespace | None = None) -> None:
 
                 info(f".Found {len(hubspot_links)}.candidate job links on hubspot.com")
                 all_detail_links.extend(hubspot_links)
+                elapsed = time.time() - t0
+                log_info_found(len(hubspot_links), listing_url, elapsed)
                 progress_clear_if_needed()
                 continue
 
@@ -13817,6 +14030,8 @@ def main(args: argparse.Namespace | None = None) -> None:
 
             progress_clear_if_needed()
             all_detail_links.extend(links)
+            elapsed = time.time() - t0
+            log_info_found(len(links), listing_url, elapsed)
 
 
     def _norm_url(u: str) -> str:

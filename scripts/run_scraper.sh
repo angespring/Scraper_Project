@@ -23,7 +23,7 @@ for a in "$@"; do
     --no-browser)   INSTALL_BROWSER=false ;;
     --quiet)        QUIET=true ;;
     *) echo "Unknown option: $a" >&2; exit 2;;
-  case
+  esac
 done
 
 # --- Helpers ----------------------------------------------------------------
@@ -78,6 +78,8 @@ fi
 
 # --- Run scraper with timestamped logging -----------------------------------
 say "[RUN] Starting scraper… (logs: $LOG)"
+touch "$LOG"
+ln -sfn "$LOG" "$LOGDIR/latest.log"
 (
   echo "[RUN] Started at $(date '+%Y-%m-%d %H:%M:%S')"
   echo "[RUN] Python: $PY"
@@ -90,8 +92,6 @@ set +e
 "$PY" po_job_scraper.py 2>&1 | tee -a "$LOG"
 exit_code=${PIPESTATUS[0]}
 set -e
-
-ln -sfn "$LOG" "$LOGDIR/latest.log"
 
 end_ts=$(date +%s)
 elapsed=$(( end_ts - start_ts ))

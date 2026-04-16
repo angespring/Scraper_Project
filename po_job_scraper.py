@@ -7349,7 +7349,7 @@ MAX_SECONDS_PER_SITE = 60     # hard cap per listing page
 # === Google Sheets push ===
 GS_KEY_PATH = "/Users/ange/job-scraper/service_account.json"   # absolute path to your JSON key
 GS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1UloVHEsBxvMJ3WeQ8XkHvtIrL1cQ2CiyD50bsOb-Up8/edit?gid=1531552984#gid=1531552984"              # full URL to “product jobs scraper”
-GS_TAB_NAME = "Table1"  # or "Sheet1" — match the tab name shown in the bottom-left of the sheet
+GS_TAB_NAME = "Keep"  # match the keep-tab name shown in the bottom-left of the sheet
 # GitHub push control (toggle: "off" | "ask" | "auto")
 #PUSH_MODE = "ask"   # Set to "auto" for automatic pushes, or "off" to disable
 
@@ -12142,7 +12142,7 @@ def _done_box() -> str:
 # =====================================================================
 
 
-KEEP_REASON_FIELD = "Reason"           # lives only in Table1
+KEEP_REASON_FIELD = "Reason"           # lives only in Keep
 SKIP_REASON_FIELD = "Reason Skipped"   # lives only in SKIPPED tab
 
 

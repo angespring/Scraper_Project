@@ -58,7 +58,7 @@ def _log(level: str, message: str, *, prefix: str = "") -> None:
     Core logger used by the helpers below.
 
     Example output:
-    [2025-11-21 14:45:10] [INFO                  ].[GS] Pushed 2 rows to tab 'Table1'.
+    [2025-11-21 14:45:10] [INFO                  ].[GS] Pushed 2 rows to tab 'Keep'.
     """
     progress_clear_if_needed()
     ts = _timestamp()

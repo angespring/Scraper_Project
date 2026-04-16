@@ -17,6 +17,7 @@ from logging_utils import log_event  # used for structured [GS] log lines
 GS_LIBS_OK = False
 GS_LIB_ERROR = None
 HAVE_GS = False   # new: global flag used elsewhere
+DEFAULT_KEEP_TAB_NAME = "Keep"
 
 try:
     import gspread
@@ -128,7 +129,7 @@ def fetch_prior_decisions(
         creds = Credentials.from_service_account_file(str(key_file), scopes=scopes)
         client = gspread.authorize(creds)
         sh = client.open_by_url(sheet_url)
-        ws = sh.worksheet(tab_name) if tab_name else sh.sheet1
+        ws = sh.worksheet(tab_name or DEFAULT_KEEP_TAB_NAME)
 
         records = ws.get_all_records()
         prior: dict[str, tuple[str, str]] = {}
@@ -164,7 +165,7 @@ def push_results_to_sheets(
     skipped_rows: list[dict],
     keep_fields: list[str],
     skip_fields: list[str],
-    tab_name: str,
+    tab_name: str | None,
     key_path: str | None,
     progress_clear=None,
 ) -> None:
@@ -226,7 +227,7 @@ def push_rows_to_google_sheet(
     sheet_url: str,
     rows: list[dict],
     fields: list[str],
-    tab_name: str,
+    tab_name: str | None,
     key_path: str | None,
     progress_clear=None,
 ) -> None:
@@ -266,7 +267,7 @@ def push_rows_to_google_sheet(
         creds = Credentials.from_service_account_file(str(key_file), scopes=scopes)
         client = gspread.authorize(creds)
         sh = client.open_by_url(sheet_url)
-        ws = sh.worksheet(tab_name) if tab_name else sh.sheet1
+        ws = sh.worksheet(tab_name or DEFAULT_KEEP_TAB_NAME)
 
         if progress_clear:
             progress_clear()

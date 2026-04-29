@@ -8,6 +8,7 @@ warnings and the caller can fall back to CSV-only behavior.
 from __future__ import annotations
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 from logging_utils import warn, info, debug, log_line
 from logging_utils import log_event  # used for structured [GS] log lines
 
@@ -18,6 +19,7 @@ GS_LIBS_OK = False
 GS_LIB_ERROR = None
 HAVE_GS = False   # new: global flag used elsewhere
 DEFAULT_KEEP_TAB_NAME = "Keep"
+WORKDAY_HOST_MARKERS = ("myworkdayjobs.com", "myworkdaysite.com", "myworkday.com")
 
 try:
     import gspread
@@ -37,6 +39,56 @@ def _normalize_row_for_sheet(row: dict) -> dict:
     for k in ("BC Rule", "ON Rule", "Canada Rule"):
         row.setdefault(k, "")
     return row
+
+
+def _is_workday_detail_url(url: str) -> bool:
+    p = urlparse(str(url or "").strip())
+    host = (p.netloc or "").lower()
+    return any(marker in host for marker in WORKDAY_HOST_MARKERS) and "/job/" in (p.path or "").lower()
+
+
+def normalize_job_url_for_sheet(url: str) -> str:
+    """
+    Preserve the original URL casing for display while removing noisy Workday
+    search query parameters from detail-page links saved to Sheets.
+    """
+    raw_url = str(url or "").strip()
+    if not raw_url:
+        return ""
+    try:
+        p = urlparse(raw_url)
+        if not p.scheme or not p.netloc:
+            return raw_url
+        if _is_workday_detail_url(raw_url):
+            path = (p.path or "/").rstrip("/") or "/"
+            return urlunparse((p.scheme, p.netloc, path, "", "", ""))
+        return urlunparse((p.scheme, p.netloc, p.path, p.params, p.query, ""))
+    except Exception:
+        return raw_url
+
+
+def job_url_match_key(url: str) -> str:
+    """
+    Stable key for carry-forward matching.
+
+    Workday detail URLs match case-insensitively and without their query string
+    so older Sheet rows still match after we start saving cleaner display URLs.
+    """
+    display_url = normalize_job_url_for_sheet(url)
+    if not display_url:
+        return ""
+    try:
+        p = urlparse(display_url)
+        if not p.scheme or not p.netloc:
+            return display_url
+        host = (p.netloc or "").lower()
+        path = (p.path or "/").rstrip("/") or "/"
+        if _is_workday_detail_url(display_url):
+            path = path.lower()
+            return urlunparse(((p.scheme or "https").lower(), host, path, "", "", ""))
+        return display_url
+    except Exception:
+        return display_url
 
 def _gs_log(level: str, msg: str) -> None:
     """
@@ -139,7 +191,10 @@ def fetch_prior_decisions(
                 continue
             applied = r.get("Applied?", "")
             reason = r.get("Reason", "")
-            prior[url] = (applied, reason)
+            prior[str(url)] = (applied, reason)
+            match_key = job_url_match_key(str(url))
+            if match_key:
+                prior[match_key] = (applied, reason)
         return prior
     except Exception as e:
         err_line = str(e).splitlines()[0] if e else "Unknown error"
@@ -328,7 +383,7 @@ def to_keep_sheet_row(keep_row, applied="", reason=""):
         "Posted": _normalize_sheet_value(keep_row.get("Posted") or period),
         "Posting Date": _normalize_sheet_value(keep_row.get("Posting Date", "")),
         "Valid Through": _normalize_sheet_value(keep_row.get("Valid Through", "")),
-        "Job URL": _normalize_sheet_value(keep_row.get("Job URL", "")),
+        "Job URL": _normalize_sheet_value(normalize_job_url_for_sheet(keep_row.get("Job URL", ""))),
         "Apply URL": _normalize_sheet_value(keep_row.get("Apply URL", "")),
         "Apply URL Note": _normalize_sheet_value(keep_row.get("Apply URL Note", "")),
         "Description Snippet": _normalize_sheet_value(keep_row.get("Description Snippet", "")),
@@ -366,7 +421,7 @@ def to_skipped_sheet_row(skip_row, applied="", reason=""):
         "Posted": _normalize_sheet_value(skip_row.get("Posted", "")),
         "Posting Date": _normalize_sheet_value(skip_row.get("Posting Date", "")),
         "Valid Through": _normalize_sheet_value(skip_row.get("Valid Through", "")),
-        "Job URL": _normalize_sheet_value(skip_row.get("Job URL", "")),
+        "Job URL": _normalize_sheet_value(normalize_job_url_for_sheet(skip_row.get("Job URL", ""))),
         #"Apply URL": _normalize_sheet_value(skip_row.get("Apply URL", "")),
         #"Apply URL Note": _normalize_sheet_value(skip_row.get("Apply URL Note", "")),
         "Reason Skipped": _normalize_sheet_value(skip_row.get("Reason Skipped", reason)),

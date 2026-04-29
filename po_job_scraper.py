@@ -2,6 +2,9 @@
 
 import html as _html
 import html as html_lib
+import atexit
+import asyncio
+import signal
 import shutil
 import subprocess
 import textwrap
@@ -62,6 +65,7 @@ from classification_rules import ClassificationConfig, classify_keep_or_skip, cl
 from edsurge_jobs import scrape_edsurge_jobs
 from gsheets_utils import (
     init_gs_libs,
+    job_url_match_key,
     log_startup_warning_if_needed,
     log_final_reminder_if_needed,
     to_keep_sheet_row,
@@ -107,6 +111,41 @@ import threading
 import argparse
 
 DEBUG_LOCATION = False
+
+
+def _env_flag(name: str, default: str = "auto") -> str:
+    return str(os.environ.get(name, default)).strip().lower()
+
+
+def _progress_enabled() -> bool:
+    mode = _env_flag("JOB_SCRAPER_PROGRESS", "auto")
+    if mode in {"0", "false", "off", "no"}:
+        return False
+    if mode in {"1", "true", "on", "yes", "force"}:
+        return True
+    return sys.stdout.isatty() and sys.stderr.isatty()
+
+
+LIVE_PROGRESS_ENABLED = _progress_enabled()
+PW_FAST_MODE_ENABLED = _env_flag("PW_FAST_MODE", "0") in {"1", "true", "on", "yes", "force"}
+BUILTIN_MAX_PAGES_ENV = os.environ.get("BUILTIN_MAX_PAGES")
+ACTIVE_BUILTIN_MAX_PAGES = 1
+
+
+def _resolve_builtin_max_pages(quick_check: bool, cli_value: int | None = None) -> int:
+    """
+    Built In pagination policy:
+    - quick checks default to page 1 only
+    - full runs default to 3 pages per query
+    - CLI flag overrides env var; 0 means unlimited
+    """
+    raw = cli_value if cli_value is not None else BUILTIN_MAX_PAGES_ENV
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return max(0, int(str(raw).strip()))
+        except Exception:
+            return 1 if quick_check else 3
+    return 1 if quick_check else 3
 
 
 
@@ -189,7 +228,7 @@ def log(section: str, msg: str) -> None:
         progress_clear_if_needed()
     except NameError:
         pass
-    _bk_log_wrap(_paint(section), msg)
+    _bk_log_wrap(section, msg)
 
 
 
@@ -211,7 +250,11 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
         pass
     # Avoid double timestamps if msg is already prefixed (e.g., upstream logger)
     #already_ts = bool(re.match(r"\[\d{4}-\d{2}-\d{2}", str(msg).lstrip()))
-    head = f"{section:<22}"  # log_print already adds the timestamp
+    section_label = str(section)
+    m = re.search(r"\b(INFO|WARN|ERROR|KEEP|SKIP|DONE|GS)\b", section_label.upper())
+    label = m.group(1) if m else ""
+    whole_line_color = LEVEL_COLOR.get(label, RESET) if _ansi_ok() and label else None
+    head = f"[{section_label:<22}]" if whole_line_color else _paint(section_label)
 
     TS_PREFIX_WIDTH = 22  # "[YYYY-MM-DD HH:MM:SS] " (added by log_print)
     sub_indent = " " * (TS_PREFIX_WIDTH + len(head))
@@ -226,12 +269,9 @@ def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = No
     )
     line = f"{head}{body}"
 
-    # Color the entire line when ANSI is OK, using the level token inside section.
-    if _ansi_ok():
-        m = re.search(r"\b(INFO|WARN|ERROR|KEEP|SKIP|DONE|GS)\b", section.upper())
-        label = m.group(1) if m else ""
-        color = LEVEL_COLOR.get(label, RESET)
-        line = f"{color}{line}{RESET}"
+    # Color the entire line for levels where the body should inherit the same color.
+    if whole_line_color:
+        line = f"{whole_line_color}{line}{RESET}"
 
     log_print(line)
     try:
@@ -263,24 +303,23 @@ KEEP_TITLE_COLOR = GREEN
 SKIP_TITLE_COLOR = MAGENTA
 
 def _paint(label: str) -> str:
-    color = LEVEL_COLOR.get(label.upper(), RESET)
+    color = LEVEL_COLOR.get(label.upper())
     if not _ansi_ok():
+        return f"[{label:<22}]"
+    if not color or color == RESET:
         return f"[{label:<22}]"
     return f"{color}[{label:<22}]{RESET}"
 
 def log_line(label: str, msg: str, width: int | None = None) -> None:
-    _bk_log_wrap(_paint(label), msg, width=width or _LOG_WRAP_WIDTH)
+    _bk_log_wrap(label, msg, width=width or _LOG_WRAP_WIDTH)
 
 # convenient shorthands (use these everywhere)
 def env(msg: str) -> None:
-    c = LEVEL_COLOR.get("ENV", RESET)
-    log_line("ENV", f"{c}{msg}{RESET}")
+    log_line("ENV", msg)
 def info(msg: str) -> None:
-    c = LEVEL_COLOR.get("INFO", RESET)
-    log_line("INFO", f"{c}{msg}{RESET}")
+    log_line("INFO", msg)
 def warn(msg: str) -> None:
-    c = LEVEL_COLOR.get("WARN", RESET)
-    log_line("WARN", f"{c}{msg}{RESET}")
+    log_line("WARN", msg)
 def setup(msg: str) -> None:    log_line("SETUP", msg)
 _DEBUG_ROW_STACK: list[dict] = []
 
@@ -390,6 +429,7 @@ def _dispw(s: str) -> int:
     return w if w >= 0 else len(s)
 
 _SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+PROGRESS_REFRESH_INTERVAL = 0.5
 _PROGRESS_STATE = {
     "active": False,
     "current": 0,
@@ -432,7 +472,7 @@ def _progress_render(force: bool = False) -> None:
     if not state["active"]:
         return
     now = time.time()
-    if not force and (now - state["last_render"]) < 0.1:
+    if not force and (now - state["last_render"]) < PROGRESS_REFRESH_INTERVAL:
         return
     state["spinner"] = (state["spinner"] + 1) % len(_SPINNER_FRAMES)
     line = _progress_now()
@@ -463,6 +503,8 @@ def start_spinner(n: int) -> None:
 
 
 def progress_start(total: int) -> None:
+    if not LIVE_PROGRESS_ENABLED:
+        return
     state = _PROGRESS_STATE
     state.update(
         active=True,
@@ -482,6 +524,8 @@ def progress_start(total: int) -> None:
 
 
 def progress_tick(i: int | None = None, kept: int | None = None, skip: int | None = None) -> None:
+    if not LIVE_PROGRESS_ENABLED:
+        return
     state = _PROGRESS_STATE
     if not state["active"]:
         return
@@ -497,6 +541,8 @@ def progress_tick(i: int | None = None, kept: int | None = None, skip: int | Non
 
 
 def progress_clear_if_needed(permanent: bool = False) -> None:
+    if not LIVE_PROGRESS_ENABLED:
+        return
     state = _PROGRESS_STATE
     if not state["last_line"] and not state["active"]:
         return
@@ -513,6 +559,8 @@ def progress_clear_if_needed(permanent: bool = False) -> None:
 
 
 def progress_refresh_after_log(force: bool = False) -> None:
+    if not LIVE_PROGRESS_ENABLED:
+        return
     state = _PROGRESS_STATE
     if not state["active"]:
         return
@@ -521,6 +569,8 @@ def progress_refresh_after_log(force: bool = False) -> None:
 
 
 def progress_done() -> None:
+    if not LIVE_PROGRESS_ENABLED:
+        return
     if not _PROGRESS_STATE["active"]:
         return
     progress_clear_if_needed(permanent=True)
@@ -531,13 +581,15 @@ def progress_done() -> None:
 def _spinner_loop() -> None:
     while not _SPINNER_STOP.is_set():
         _progress_render()
-        time.sleep(0.1)
+        time.sleep(PROGRESS_REFRESH_INTERVAL)
     # final refresh so the last counters remain visible
     _progress_render(force=True)
 
 
 def _spinner_start() -> None:
     global _SPINNER_THREAD
+    if not LIVE_PROGRESS_ENABLED:
+        return
     if _SPINNER_THREAD and _SPINNER_THREAD.is_alive():
         return
     _SPINNER_STOP.clear()
@@ -593,6 +645,18 @@ def _parse_args():
                    help="Hard cap on listing pages visited (0 = unlimited)")
     p.add_argument("--limit-links", type=int, default=0,
                    help="Hard cap on job detail links visited (0 = unlimited)")
+    p.add_argument("--builtin-max-pages", type=int, default=None,
+                   help="Built In pagination depth per query (quick runs default 1, full runs default 3, 0 = unlimited)")
+    p.add_argument("--start-listing-index", type=int, default=1,
+                   help="1-based listing-page index to start from after the final page queue is built")
+    p.add_argument("--end-listing-index", type=int, default=0,
+                   help="Optional 1-based listing-page index to stop at after the final page queue is built (0 = through the end)")
+    p.add_argument("--start-detail-index", type=int, default=1,
+                   help="1-based detail-link index to start from after dedupe/caps are applied")
+    p.add_argument("--end-detail-index", type=int, default=0,
+                   help="Optional 1-based detail-link index to stop at after dedupe/caps are applied (0 = through the end)")
+    p.add_argument("--include-unstable-sources", action="store_true",
+                   help="Include sources excluded from unattended full runs because they have caused local hangs or crashes")
     p.add_argument("--list-links", action="store_true",
                    help="Only discover/dedupe detail links, print them, then exit.")
                     # to run, enter this into the Terminal: python3 po_job_scraper.py --smoke --list-links
@@ -774,11 +838,6 @@ def backup_all_py_to_archive(keep_last: int | None = None, max_age_days: int | N
                     log_line("WARN", f".Could not remove {old.name}: {e}")
 
 
-# --- HOW TO USE (uncomment exactly one) ---
-backup_all_py_to_archive()                  # 1) keep ALL backups
-# backup_all_py_to_archive(keep_last=10)    # 2) keep last 10 per file
-# backup_all_py_to_archive(max_age_days=30) # 3) delete backups older than 30 days
-# backup_all_py_to_archive(keep_last=10, max_age_days=60)  # combine both
 # --- End auto-backup section ---
 
 
@@ -953,6 +1012,9 @@ def normalize_url_for_key(u: str) -> str:
     path_raw = (p.path or "/").rstrip("/") or "/"
     path = path_raw if _host_is_case_sensitive(host) else path_raw.lower()
 
+    if any(marker in host for marker in ("myworkdayjobs.com", "myworkdaysite.com", "myworkday.com")) and "/job/" in path.lower():
+        return job_url_match_key(u)
+
     # filter and sort query params for stability
     drop = {"utm_source","utm_medium","utm_campaign","utm_term","utm_content",
             "ref","referrer","source","_hsmi","_hsenc","gh_src","page","p","start"}
@@ -983,6 +1045,9 @@ def _job_key(details: dict, link: str) -> str:
         # Preserve path casing, only normalize trailing slash
         path = (p.path or "/").rstrip("/") or "/"
 
+        if any(marker in host for marker in ("myworkdayjobs.com", "myworkdaysite.com", "myworkday.com")) and "/job/" in path.lower():
+            return job_url_match_key(job_url)
+
         drop = {
             "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
             "ref", "referrer", "source", "_hsmi", "_hsenc", "gh_src", "page", "p", "start",
@@ -997,11 +1062,6 @@ def _job_key(details: dict, link: str) -> str:
 
         kept.sort()
         query = urlencode(kept, doseq=True)
-
-        # Built In cross-board dedupe:
-        # Use path + normalized query only, so the key does not imply a specific host.
-        if host in {"builtin.com", "www.builtin.com", "builtinseattle.com", "www.builtinseattle.com", "builtinvancouver.org", "www.builtinvancouver.org"}:
-            return f"{path}?{query}" if query else path
 
         clean = urlunparse((scheme, host, path, "", query, ""))
         return clean or job_url
@@ -1548,12 +1608,12 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
     Convert a Workday listing URL into job detail links by querying the cxs JSON API.
     Handles both myworkdaysite and myworkdayjobs patterns.
     """
+    p = up.urlparse(listing_url)
+
     # If this is already a detail page, just return it
     if "/job/" in (p.path or ""):
         return [listing_url]
 
-
-    p = up.urlparse(listing_url)
     host = (p.netloc or "").lower()
     parts = [s for s in (p.path or "").split("/") if s]
     qs = up.parse_qs(p.query)
@@ -1563,25 +1623,6 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
     if parts and re.fullmatch(r"[a-z]{2}-[a-z]{2}", parts[0], re.I):
         parts = parts[1:]
 
-
-    def _html_fallback_links(listing_url: str) -> list[str]:
-        html = get_html(listing_url) or ""
-        if not html:
-            return []
-        links = find_job_links(html, listing_url) or []
-        # keep only likely Workday detail links
-        out = []
-        for lk in links:
-            if "/job/" in lk or "/details/" in lk:
-                out.append(lk)
-
-        # de-dupe preserve order
-        seen, deduped = set(), []
-        for u in out:
-            if u not in seen:
-                seen.add(u)
-                deduped.append(u)
-        return deduped
 
     # If host is wdN.myworkdayjobs.com, try to discover the real tenant host
     if re.fullmatch(r"wd\d+\.myworkdayjobs\.com", host, re.I):
@@ -1621,16 +1662,28 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
             f".[WORKDAY] Could not infer tenant (host={host}, parts={parts}, url={listing_url}). "
             "Falling back to HTML link extraction (page 1 only)."
         )
-        return _html_fallback_links(listing_url)
+        return _workday_html_fallback_links(listing_url, max_links=max_results)
 
     if not site:
         site = tenant
 
-    api_host = _workday_api_host(host)
-    jobs = _wd_jobs(api_host, tenant, site, search, limit=50, max_results=max_results)
+    jobs = []
+    attempts: list[tuple[str, str]] = []
+    for api_host in _workday_api_hosts(host):
+        jobs, err = _wd_jobs(api_host, tenant, site, search, limit=50, max_results=max_results)
+        if jobs:
+            break
+        if err:
+            attempts.append((api_host, err))
 
     if not jobs:
-        return _html_fallback_links(listing_url)
+        return _workday_html_fallback_links(
+            listing_url,
+            tenant=tenant,
+            site=site,
+            attempts=attempts,
+            max_links=max_results,
+        )
 
     out: list[str] = []
     for j in jobs:
@@ -1647,53 +1700,61 @@ def workday_links_from_listing(listing_url: str, max_results: int = 250) -> list
             deduped.append(u)
     return deduped
 
-def _workday_api_host(ui_host: str) -> str:
+def _workday_api_hosts(ui_host: str) -> list[str]:
     """
-    Convert a Workday UI host to the likely API host.
+    Return likely Workday API hosts in preferred order.
     Examples:
-      velera.wd5.myworkdayjobs.com -> wd5.myworkday.com
-      wd5.myworkdaysite.com        -> wd5.myworkday.com
-      wd5.myworkday.com            -> wd5.myworkday.com
+      wd5.myworkdaysite.com             -> [wd5.myworkdaysite.com, wd5.myworkday.com]
+      velera.wd5.myworkdayjobs.com      -> [velera.wd5.myworkdayjobs.com, wd5.myworkday.com]
+      wd5.myworkday.com                 -> [wd5.myworkday.com]
     """
     h = (ui_host or "").lower()
+    out: list[str] = []
+
+    def _add(candidate: str) -> None:
+        if candidate and candidate not in out:
+            out.append(candidate)
+
+    # Many tenants expose the CXS API on the same UI host.
+    _add(h)
 
     m = re.search(r"(wd\d+)\.", h)
     if m:
-        return f"{m.group(1)}.myworkday.com"
+        _add(f"{m.group(1)}.myworkday.com")
 
-    # last resort, keep original
-    return ui_host
+    return out or [h]
 
 
-def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, max_results: int = 250) -> list[dict]:
+def _wd_jobs(
+    host: str,
+    tenant: str,
+    site: str,
+    search: str,
+    limit: int = 50,
+    max_results: int | None = 250,
+) -> tuple[list[dict], str | None]:
     """
     Query Workday cxs jobs endpoint and return raw job dicts.
-    Correct path is: /wday/cxs/{tenant}/jobs
+    Path shape is: /wday/cxs/{tenant}/{site}/jobs
     """
     #log_line("DEBUG", f".[WORKDAY] _wd_jobs entered (tenant={tenant}, site={site}, host={host})")
 
     url = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
     out, offset = [], 0
-    headers = {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json;charset=UTF-8",
-        "User-Agent": "Mozilla/5.0"
-    }
 
     while True:
-        remaining = max_results - len(out)
-        if remaining <= 0:
-            break
-
-        current_limit = min(limit, remaining)
+        if max_results is not None:
+            remaining = max_results - len(out)
+            if remaining <= 0:
+                break
+            current_limit = min(limit, remaining)
+        else:
+            current_limit = limit
         payload = {"limit": current_limit, "offset": offset, "searchText": search}
 
-        r = requests.post(url, headers=headers, data=json.dumps(payload), timeout=30)
-
-        data = _safe_resp_json(r, context=f".[WORKDAY] cxs jobs (api={url})")
-        if not data:
-            # returning [] triggers your HTML fallback upstream
-            return []
+        data, err = _workday_json_request(url, payload)
+        if err:
+            return [], err
 
         total_hint = (
             data.get("total")
@@ -1712,7 +1773,7 @@ def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, ma
 
         out.extend(items)
 
-        if len(out) >= max_results:
+        if max_results is not None and len(out) >= max_results:
             break
         if total_hint is not None and len(out) >= int(total_hint):
             break
@@ -1721,7 +1782,7 @@ def _wd_jobs(host: str, tenant: str, site: str, search: str, limit: int = 50, ma
 
         offset += len(items)
 
-    return out
+    return out, None
 
 
 
@@ -1832,6 +1893,141 @@ def collect_dice_links(listing_url: str, max_pages: int = 25) -> list[str]:
 
     return out
 
+
+def _builtin_max_page_from_html(listing_html: str) -> int:
+    """Return the highest Built In page number visible in the listing HTML."""
+    raw = html_lib.unescape(str(listing_html or ""))
+    nums = [int(x) for x in re.findall(r"(?:[?&]|&amp;)page=(\d+)", raw, flags=re.I)]
+    return max(nums) if nums else 1
+
+
+def collect_builtin_links(listing_url: str, max_pages: int | None = None) -> list[str]:
+    """Walk Built In /jobs pagination and dedupe detail links across pages."""
+    seen, out = set(), []
+    if max_pages is None:
+        max_pages = ACTIVE_BUILTIN_MAX_PAGES
+
+    try:
+        start_page = int((up.parse_qs(up.urlparse(listing_url).query).get("page") or ["1"])[0])
+    except Exception:
+        start_page = 1
+
+    page = start_page
+    last_page = start_page
+    base_path = (up.urlparse(listing_url).path or "").lower()
+
+    while True:
+        if max_pages and max_pages > 0 and page > max_pages:
+            break
+        if page > last_page and page > start_page:
+            break
+
+        if page == start_page and "page=" not in listing_url:
+            url = listing_url
+        else:
+            url = _set_qp(listing_url, page=page)
+
+        set_source_tag(url)
+        html = get_html(url)
+        if not html:
+            break
+
+        last_page = max(last_page, _builtin_max_page_from_html(html))
+        links = find_job_links(html, url)
+
+        added = 0
+        for lk in links:
+            if lk not in seen:
+                seen.add(lk)
+                out.append(lk)
+                added += 1
+
+        if added == 0:
+            break
+
+        if "/jobs" not in base_path:
+            break
+
+        random_delay()
+        page += 1
+
+    return out
+
+
+def _edtech_list_url(listing_url: str, page: int) -> str:
+    """Map an EdTech category/listing URL to its lightweight HTML list endpoint."""
+    parsed = up.urlparse(str(listing_url or ""))
+    path = (parsed.path or "").rstrip("/")
+    query_pairs = up.parse_qsl(parsed.query or "", keep_blank_values=True)
+    query_pairs = [(k, v) for k, v in query_pairs if k.lower() != "page"]
+    query_pairs.append(("page", str(page)))
+
+    if not path.endswith("/list"):
+        path = f"{path}/list"
+
+    return up.urlunparse((
+        parsed.scheme or "https",
+        parsed.netloc or "www.edtech.com",
+        path,
+        "",
+        up.urlencode(query_pairs, doseq=True),
+        "",
+    ))
+
+
+def collect_edtech_links(listing_url: str, max_pages: int | None = None) -> list[str]:
+    """
+    Collect EdTech job links via the lightweight /list endpoint.
+
+    Do not use Playwright here. The full rendered EdTech listing pages have
+    repeatedly driven local Chromium into extreme memory/swap pressure.
+    """
+    max_pages = max_pages or EDTECH_MAX_PAGES
+    seen: set[str] = set()
+    out: list[str] = []
+
+    for page_num in range(1, max_pages + 1):
+        page_url = _edtech_list_url(listing_url, page_num)
+        try:
+            headers = dict(HEADERS)
+            headers["X-Requested-With"] = "XMLHttpRequest"
+            resp = requests.get(page_url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            resp.raise_for_status()
+            html = resp.text or ""
+        except Exception as e:
+            if page_num == 1:
+                warn(f"{DOT3}{DOTW} EdTech list endpoint failed: {page_url} ({e})")
+            break
+
+        soup = BeautifulSoup(html, "html.parser")
+        anchors = soup.select('a#listing[href], a[href*="/jobs/"][href]')
+        added = 0
+        for a in anchors:
+            href = str(a.get("href") or "").strip()
+            if not href:
+                continue
+            full = up.urljoin("https://www.edtech.com", href)
+            p = up.urlparse(full)
+            host = (p.netloc or "").lower()
+            path = (p.path or "").lower()
+            if host not in {"edtech.com", "www.edtech.com"}:
+                continue
+            if not path.startswith("/jobs/"):
+                continue
+            if path.endswith("-jobs") or path.endswith("/list"):
+                continue
+            if full in seen:
+                continue
+            seen.add(full)
+            out.append(full)
+            added += 1
+
+        if added == 0:
+            break
+
+        random_delay()
+
+    return out
 
 
 def parse_dice(soup, job_url):
@@ -2056,6 +2252,28 @@ def write_rows_csv(path: str, rows: list[dict], header_fields: list[str]):
             writer.writeheader()
         for r in rows:
             writer.writerow(r)
+
+
+def write_rows_csv_snapshot(path: str, rows: list[dict], header_fields: list[str]) -> None:
+    """Rewrite the full CSV atomically so checkpoint saves never duplicate rows."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=header_fields, extrasaction="ignore")
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+    os.replace(tmp_path, target)
+
+
+def load_rows_csv_snapshot(path: str) -> list[dict]:
+    """Load a prior checkpoint snapshot if it exists."""
+    target = Path(path)
+    if not target.exists():
+        return []
+    with open(target, newline="", encoding="utf-8") as f:
+        return [dict(row) for row in csv.DictReader(f)]
 
 ROLE_RX = re.compile(
     r"(?i)\b("
@@ -7279,7 +7497,6 @@ def _derive_company_and_title(d: dict, html: str | None = None) -> dict:
 
 
 PLAYWRIGHT_DOMAINS = {
-    "edtech.com", "www.edtech.com",
     "edtechjobs.io/", "www.edtechjobs.io",
     "builtin.com", "www.builtin.com",
     "builtinseattle.com", "www.builtinseattle.com",
@@ -7326,12 +7543,14 @@ KNOWN = {
 
 import os
 
-RUN_TS = datetime.now().strftime("%Y%m%d_%H%M%S")  # local time
+RUN_TS = (os.getenv("RUN_TS_OVERRIDE", "").strip() or datetime.now().strftime("%Y%m%d_%H%M%S"))  # local time
 OUTPUT_DIR = "output"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, f"product_owner_jobs_{RUN_TS}.csv")
 SKIPPED_CSV = os.path.join(OUTPUT_DIR, f"skipped_jobs_{RUN_TS}.csv")
+CHECKPOINT_EVERY_DETAILS = max(0, int(os.getenv("CSV_CHECKPOINT_EVERY_DETAILS", "50") or "50"))
+EDTECH_MAX_PAGES = max(1, int(os.getenv("EDTECH_MAX_PAGES", "2") or "2"))
 
 
 # ---- Config ----
@@ -7381,6 +7600,18 @@ SKIPPED_KEYS = [
 
 def is_blocked_url(url: str) -> bool:
     return any(url.startswith(prefix) for prefix in BLOCKED_URL_PREFIXES)
+
+
+UNSTABLE_LISTING_PATTERNS = {
+}
+
+
+def _unstable_listing_reason(url: str) -> str | None:
+    lowered = str(url or "").lower()
+    for pattern, reason in UNSTABLE_LISTING_PATTERNS.items():
+        if pattern in lowered:
+            return reason
+    return None
 
 
 # URLs that should never be crawled or processed
@@ -7518,8 +7749,8 @@ STARTING_PAGES = [
     "https://www.workingnomads.com/jobs?tag=product",
     "https://www.workingnomads.com/remote-product-jobs",
     "https://www.simplyhired.com/search?q=product+owner&l=remote",
-    "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Product%20Development",
-    "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Information%20Technology",
+    "https://www.edtech.com/jobs/product-development-jobs",
+    "https://www.edtech.com/jobs/information-technology-jobs",
     "https://www.edtech.com/jobs/fully-remote-jobs?Cat=Operations",
     "https://edtechjobs.io/jobs/product-management?location=Remote",
     "https://edtechjobs.io/jobs/business-analysis?location=Remote",
@@ -7565,38 +7796,38 @@ STARTING_PAGES = [
 
     # Welcome to the Jungle (JS-heavy → Playwright)
     "https://www.welcometothejungle.com/en/jobs?query=product%20manager&remote=true",
-    "https://app.welcometothejungle.com/companies/12Twenty#jobs-section"
-    "https://app.welcometothejungle.com/companies/Microsoft#jobs-section"
-    "https://app.welcometothejungle.com/companies/Google#jobs-section"
-    "https://app.welcometothejungle.com/companies/Adobe#jobs-section"
-    "https://app.welcometothejungle.com/companies/Asana#jobs-section"
-    "https://app.welcometothejungle.com/companies/Amazon#jobs-section"
-    "https://app.welcometothejungle.com/companies/Airtable#jobs-section"
-    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section"
-    "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section"
-    "https://app.welcometothejungle.com/companies/Clari#jobs-section"
-    "https://app.welcometothejungle.com/companies/Confluent#jobs-section"
-    "https://app.welcometothejungle.com/companies/DataDog#jobs-section"
-    "https://app.welcometothejungle.com/companies/Dataminr#jobs-section"
-    "https://app.welcometothejungle.com/companies/Expensify#jobs-section"
-    "https://app.welcometothejungle.com/companies/Figma#jobs-section"
-    "https://app.welcometothejungle.com/companies/Gong-io#jobs-section"
-    "https://app.welcometothejungle.com/companies/HashiCorp#jobs-section"
-    "https://app.welcometothejungle.com/companies/HubSpot#jobs-section"
-    "https://app.welcometothejungle.com/companies/Looker#jobs-section"
-    "https://app.welcometothejungle.com/companies/MaintainX#jobs-section"
-    "https://app.welcometothejungle.com/companies/Notion#jobs-section"
-    "https://app.welcometothejungle.com/companies/Outreach#jobs-section"
-    "https://app.welcometothejungle.com/companies/PagerDuty#jobs-section"
-    "https://app.welcometothejungle.com/companies/Segment#jobs-section"
-    "https://app.welcometothejungle.com/companies/Smartsheet#jobs-section"
-    "https://app.welcometothejungle.com/companies/Stripe#jobs-section"
-    "https://app.welcometothejungle.com/companies/Top-Hat#jobs-section"
-    "https://app.welcometothejungle.com/companies/TripActions#jobs-section"
-    "https://app.welcometothejungle.com/companies/UiPath#jobs-section"
-    "https://app.welcometothejungle.com/companies/Vetcove#jobs-section"
-    "https://app.welcometothejungle.com/companies/Zoom#jobs-section"
-    "https://app.welcometothejungle.com/companies/Metabase#jobs-section"
+    "https://app.welcometothejungle.com/companies/12Twenty#jobs-section",
+    "https://app.welcometothejungle.com/companies/Microsoft#jobs-section",
+    "https://app.welcometothejungle.com/companies/Google#jobs-section",
+    "https://app.welcometothejungle.com/companies/Adobe#jobs-section",
+    "https://app.welcometothejungle.com/companies/Asana#jobs-section",
+    "https://app.welcometothejungle.com/companies/Amazon#jobs-section",
+    "https://app.welcometothejungle.com/companies/Airtable#jobs-section",
+    "https://app.welcometothejungle.com/companies/Beam-Benefits#jobs-section",
+    "https://app.welcometothejungle.com/companies/Chime-Bank#jobs-section",
+    "https://app.welcometothejungle.com/companies/Clari#jobs-section",
+    "https://app.welcometothejungle.com/companies/Confluent#jobs-section",
+    "https://app.welcometothejungle.com/companies/DataDog#jobs-section",
+    "https://app.welcometothejungle.com/companies/Dataminr#jobs-section",
+    "https://app.welcometothejungle.com/companies/Expensify#jobs-section",
+    "https://app.welcometothejungle.com/companies/Figma#jobs-section",
+    "https://app.welcometothejungle.com/companies/Gong-io#jobs-section",
+    "https://app.welcometothejungle.com/companies/HashiCorp#jobs-section",
+    "https://app.welcometothejungle.com/companies/HubSpot#jobs-section",
+    "https://app.welcometothejungle.com/companies/Looker#jobs-section",
+    "https://app.welcometothejungle.com/companies/MaintainX#jobs-section",
+    "https://app.welcometothejungle.com/companies/Notion#jobs-section",
+    "https://app.welcometothejungle.com/companies/Outreach#jobs-section",
+    "https://app.welcometothejungle.com/companies/PagerDuty#jobs-section",
+    "https://app.welcometothejungle.com/companies/Segment#jobs-section",
+    "https://app.welcometothejungle.com/companies/Smartsheet#jobs-section",
+    "https://app.welcometothejungle.com/companies/Stripe#jobs-section",
+    "https://app.welcometothejungle.com/companies/Top-Hat#jobs-section",
+    "https://app.welcometothejungle.com/companies/TripActions#jobs-section",
+    "https://app.welcometothejungle.com/companies/UiPath#jobs-section",
+    "https://app.welcometothejungle.com/companies/Vetcove#jobs-section",
+    "https://app.welcometothejungle.com/companies/Zoom#jobs-section",
+    "https://app.welcometothejungle.com/companies/Metabase#jobs-section",
     "https://app.welcometothejungle.com/api/jobs?query=product%20owner&locations=remote",
     "https://app.welcometothejungle.com/api/jobs?query=product",
 ]
@@ -7865,6 +8096,313 @@ def fetch_workday_json_jobs(api_base, payload):
     return _safe_resp_json(resp, context=f".[WORKDAY] api json (api={api_base})") or {}
 
 
+def _workday_json_request(api_base: str, payload: dict) -> tuple[dict, str | None]:
+    """Return parsed JSON plus a short failure reason for fallback logging."""
+    try:
+        resp = requests.post(
+            api_base,
+            headers=HEADERS,
+            data=json.dumps(payload),
+            timeout=30,
+        )
+    except Exception as e:
+        return {}, f"request failed ({type(e).__name__})"
+
+    if resp is None:
+        return {}, "no response"
+
+    body = (getattr(resp, "text", "") or "")
+    ctype = (resp.headers.get("content-type") or "").lower()
+    looks_like_json = body.lstrip().startswith(("{", "["))
+
+    try:
+        resp.raise_for_status()
+    except Exception:
+        return {}, f"HTTP {getattr(resp, 'status_code', 'n/a')}"
+
+    if ("json" not in ctype) and (not looks_like_json):
+        return {}, f"non-JSON response ({ctype or 'unknown content-type'})"
+
+    try:
+        return resp.json() or {}, None
+    except Exception as e:
+        return {}, f"invalid JSON ({type(e).__name__})"
+
+
+def _log_workday_html_fallback(listing_url: str, tenant: str, site: str, attempts: list[tuple[str, str]]) -> None:
+    """Explain Workday API failures once, then note the HTML fallback."""
+    if not attempts:
+        return
+    tried = "; ".join(f"{host} -> {reason}" for host, reason in attempts)
+    log_line(
+        "WARN",
+        f".[WORKDAY] JSON API unavailable for {tenant}/{site}. Tried {tried}. "
+        f"Falling back to HTML link extraction (url={listing_url})."
+    )
+
+
+def _log_workday_fallback_result(
+    listing_url: str,
+    tenant: str | None,
+    site: str | None,
+    attempts: list[tuple[str, str]],
+    recovered_count: int,
+    pages_scanned: int | None = None,
+) -> None:
+    """Log Workday fallback outcome with the recovered count on its own line."""
+    if not attempts:
+        return
+
+    tried = "; ".join(f"{host} -> {reason}" for host, reason in attempts)
+    board = f"{tenant}/{site}" if tenant and site else "workday"
+    page_note = f" across {pages_scanned} page(s)" if pages_scanned and pages_scanned > 1 else ""
+
+    if recovered_count > 0:
+        log_line(
+            "INFO",
+            f".[WORKDAY] JSON API unavailable for {board}. Tried {tried}. "
+            f"Recovered via HTML fallback{page_note} (url={listing_url})."
+        )
+        c = LEVEL_COLOR.get("INFO", RESET)
+        log_print(
+            f"{c}{_info_box()}.HTML fallback recovered {recovered_count} query-local detail "
+            f"link{'s' if recovered_count != 1 else ''} on {board}{RESET}"
+        )
+    else:
+        log_line(
+            "WARN",
+            f".[WORKDAY] JSON API unavailable for {board}. Tried {tried}. "
+            f"HTML fallback returned no detail links{page_note} (url={listing_url})."
+        )
+        c = LEVEL_COLOR.get("WARN", RESET)
+        log_print(f"{c}{_no_links_box(recovered_count)}.HTML fallback detail links on {board}{RESET}")
+
+
+def _extract_workday_job_links_from_page(page, base_url: str) -> list[str]:
+    """Collect visible Workday detail links from the current rendered page."""
+    selectors = "a[data-automation-id='jobTitle'], a[href*='/job/']"
+    out: list[str] = []
+    seen: set[str] = set()
+    for anchor in page.query_selector_all(selectors):
+        try:
+            href = (anchor.get_attribute("href") or "").strip()
+        except Exception:
+            href = ""
+        if not href:
+            continue
+        full_url = up.urljoin(base_url, href)
+        path = (up.urlparse(full_url).path or "").lower()
+        if "/job/" not in path or is_blocked_url(full_url):
+            continue
+        if full_url not in seen:
+            seen.add(full_url)
+            out.append(full_url)
+    return out
+
+
+def _workday_page_signature(page, base_url: str) -> str:
+    """Build a short signature for the currently visible Workday results page."""
+    selectors = "a[data-automation-id='jobTitle'], a[href*='/job/']"
+    hrefs: list[str] = []
+    seen: set[str] = set()
+    for anchor in page.query_selector_all(selectors):
+        try:
+            href = (anchor.get_attribute("href") or "").strip()
+        except Exception:
+            href = ""
+        if not href or href in seen:
+            continue
+        seen.add(href)
+        hrefs.append(href)
+    if not hrefs:
+        return ""
+    return "|".join(hrefs[:5])
+
+
+def _click_workday_next_page(page, next_page_num: int) -> bool:
+    """Advance the Workday search results pager if another page is available."""
+    candidates = [
+        page.locator(f"button[aria-label='page {next_page_num}']").first,
+        page.locator("button[aria-label='next']").first,
+    ]
+    for btn in candidates:
+        try:
+            if btn.count() == 0:
+                continue
+            aria_disabled = (btn.get_attribute("aria-disabled") or "").lower()
+            disabled_attr = btn.get_attribute("disabled")
+            if aria_disabled == "true" or disabled_attr is not None:
+                continue
+            btn.scroll_into_view_if_needed(timeout=2000)
+            btn.click(timeout=5000)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def collect_workday_links_with_playwright(
+    listing_url: str,
+    max_links: int | None = None,
+    max_pages: int | None = None,
+) -> tuple[list[str], int]:
+    """Walk rendered Workday pagination in the browser when the JSON API is unavailable."""
+    if sync_playwright is None:
+        return [], 0
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        log_line(
+            "WARN",
+            f".[WORKDAY] Skipping Playwright pagination fallback because an asyncio event loop is already running (url={listing_url}).",
+        )
+        return [], 0
+
+    page_cap = max_pages or (max(2, (max_links // 20) + 2) if max_links else 10)
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            context = browser.new_context(user_agent=USER_AGENT)
+            page = context.new_page()
+            try:
+                page.goto(
+                    listing_url,
+                    timeout=PW_GOTO_TIMEOUT,
+                    wait_until="domcontentloaded",
+                )
+                page.wait_for_selector(
+                    "a[data-automation-id='jobTitle'], [data-automation-id='jobResults']",
+                    timeout=PW_WAIT_TIMEOUT * 2,
+                )
+                page.wait_for_timeout(1200)
+
+                out: list[str] = []
+                seen: set[str] = set()
+                page_num = 1
+                pages_scanned = 0
+
+                while page_num <= page_cap:
+                    pages_scanned = max(pages_scanned, page_num)
+                    current_links = _extract_workday_job_links_from_page(page, listing_url)
+                    for link in current_links:
+                        if link not in seen:
+                            seen.add(link)
+                            out.append(link)
+                            if max_links and len(out) >= max_links:
+                                return out, pages_scanned
+
+                    prev_sig = _workday_page_signature(page, listing_url)
+                    if not prev_sig:
+                        break
+
+                    next_page_num = page_num + 1
+                    if not _click_workday_next_page(page, next_page_num):
+                        break
+
+                    try:
+                        page.wait_for_function(
+                            """prev => {
+                                const hrefs = [...document.querySelectorAll("a[data-automation-id='jobTitle'], a[href*='/job/']")]
+                                  .map(a => a.getAttribute("href") || "")
+                                  .filter(Boolean)
+                                  .map(h => h.trim())
+                                  .slice(0, 5)
+                                  .join("|");
+                                return hrefs && hrefs !== prev;
+                            }""",
+                            arg=prev_sig,
+                            timeout=8000,
+                        )
+                    except Exception:
+                        page.wait_for_timeout(1500)
+
+                    new_sig = _workday_page_signature(page, listing_url)
+                    if not new_sig or new_sig == prev_sig:
+                        break
+
+                    page_num += 1
+
+                return out, pages_scanned
+            finally:
+                try:
+                    context.close()
+                except Exception:
+                    pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
+    except Exception as e:
+        log_line(
+            "WARN",
+            f".[WORKDAY] Playwright pagination fallback failed ({type(e).__name__}: {e}, url={listing_url})."
+        )
+        return [], 0
+
+
+def _workday_html_fallback_links(
+    listing_url: str,
+    tenant: str | None = None,
+    site: str | None = None,
+    attempts: list[tuple[str, str]] | None = None,
+    max_links: int | None = None,
+) -> list[str]:
+    """Extract Workday detail links from listing HTML and log whether fallback recovered."""
+    deduped, pages_scanned = collect_workday_links_with_playwright(listing_url, max_links=max_links)
+    if deduped:
+        if attempts:
+            _log_workday_fallback_result(
+                listing_url,
+                tenant=tenant,
+                site=site,
+                attempts=attempts,
+                recovered_count=len(deduped),
+                pages_scanned=pages_scanned,
+            )
+        return deduped
+
+    html = get_html(listing_url) or ""
+    if not html:
+        if attempts:
+            tried = "; ".join(f"{host} -> {reason}" for host, reason in attempts)
+            log_line(
+                "WARN",
+                f".[WORKDAY] JSON API unavailable for {tenant}/{site}. Tried {tried}. "
+                f"HTML fallback could not fetch the listing page (url={listing_url})."
+            )
+        return []
+
+    links = find_job_links(html, listing_url) or []
+    out: list[str] = []
+    for lk in links:
+        if "/job/" in lk or "/details/" in lk:
+            out.append(lk)
+
+    seen, deduped = set(), []
+    for u in out:
+        if u not in seen:
+            seen.add(u)
+            deduped.append(u)
+
+    if attempts:
+        _log_workday_fallback_result(
+            listing_url,
+            tenant=tenant,
+            site=site,
+            attempts=attempts,
+            recovered_count=len(deduped),
+            pages_scanned=pages_scanned,
+        )
+
+    if max_links:
+        return deduped[:max_links]
+    return deduped
+
+
 
 
 def _safe_resp_json(resp, context: str = "") -> dict:
@@ -7921,9 +8459,6 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
     parsed = urlparse(listing_url)
     host = parsed.netloc.lower()
 
-    # Workday API lives on myworkday.com even if the UI host is myworkdaysite.com
-    api_host = host.replace("myworkdaysite.com", "myworkday.com")
-
     parts = [p for p in parsed.path.split("/") if p]
     tenant = site = None
     if parts and parts[0].lower() == "recruiting" and len(parts) >= 3:
@@ -7934,10 +8469,6 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
     if not (tenant and site):
         log_line("WARN", f".[WORKDAY] Could not infer tenant/site from {listing_url}; skipping JSON API.")
         return []
-
-
-
-    api_base = f"https://{api_host}/wday/cxs/{tenant}/{site}/jobs"
 
     # Extract `keywords=` from listing URL if present
     # Example: ...search?q=business+analyst
@@ -7952,30 +8483,22 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
         except Exception:
             pass
 
-    all_links = []
-    offset = 0
+    attempts: list[tuple[str, str]] = []
+    search_text = keywords or ""
+    for api_host in _workday_api_hosts(host):
+        jobs, err = _wd_jobs(
+            api_host,
+            tenant,
+            site,
+            search_text,
+            limit=WORKDAY_LIMIT,
+            max_results=max_links,
+        )
+        if err:
+            attempts.append((api_host, err))
+            continue
 
-    while True:
-        payload = {
-            "limit": WORKDAY_LIMIT,
-            "offset": offset,
-        }
-        if keywords:
-            # Workday usually uses searchText in the JSON body
-            payload["searchText"] = keywords
-
-        data = fetch_workday_json_jobs(api_base, payload)
-        if not data:
-            # JSON endpoint not available; fall back to HTML parsing for this listing page
-            html = get_html(listing_url)
-            if html:
-                links = find_job_links(html, listing_url)
-                return links
-            break
-
-        # Different tenants sometimes use jobPostings vs jobs – be defensive
-        jobs = data.get("jobPostings", []) or data.get("jobs", [])
-
+        all_links = []
         for job in jobs:
             ext = job.get("externalPath")
             if not ext:
@@ -7988,12 +8511,16 @@ def collect_workday_jobs(listing_url: str, max_links: int | None = None) -> list
                 if max_links and len(all_links) >= max_links:
                     return all_links
 
-        if len(jobs) < WORKDAY_LIMIT:
-            break
+        return all_links
 
-        offset += WORKDAY_LIMIT
-
-    return all_links
+    # JSON endpoint not available; fall back to HTML parsing for this listing page
+    return _workday_html_fallback_links(
+        listing_url,
+        tenant=tenant,
+        site=site,
+        attempts=attempts,
+        max_links=max_links,
+    )
 
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -8242,7 +8769,7 @@ def can_fetch(url):
     return float(delay) if delay is not None else None
 
 
-def polite_get(url, retries=2):
+def polite_get(url, retries=2, quiet: bool = False):
     backoff = 1.5
     req_host = up.urlparse(url).netloc.lower()
 
@@ -8285,8 +8812,9 @@ def polite_get(url, retries=2):
                         pass
 
             if attempt == retries:
-                for ln in f"{DOT3}{DOTW} Warning: Failed to GET listing page: {url}\n{e}".splitlines():
-                    log_print(f"{_box('WARN ')}{DOT3}{ln} {RESET}")
+                if not quiet:
+                    for ln in f"{DOT3}{DOTW} Warning: Failed to GET listing page: {url}\n{e}".splitlines():
+                        warn(f"{DOT3}{ln}")
 
                 return None
             time.sleep(backoff * (attempt + 1))
@@ -11008,6 +11536,267 @@ TRANSIENT_NET_MARKERS = (
 PW_SUCCESS = 0
 PW_FAIL = 0
 REQ_FALLBACK = 0
+SEA_PARTIAL_SHELL_RETRIES = 0
+SEA_PARTIAL_SHELL_UNRECOVERED = 0
+BUILTIN_PARTIAL_SHELL_OBSERVED = 0
+BUILTINVANCOUVER_PARTIAL_SHELL_OBSERVED = 0
+BUILTIN_DETAIL_REQUESTS_FASTPATH = 0
+BUILTIN_DETAIL_REQUESTS_FALLBACK = 0
+YC_DETAIL_REQUESTS_FASTPATH = 0
+YC_DETAIL_REQUESTS_FALLBACK = 0
+_PW_DRIVER = None
+_PW_BROWSER = None
+_PW_CONTEXT = None
+_PW_SESSION_KEY = None
+_PW_SESSION_FETCHES = 0
+_PW_SESSION_STARTED_AT = 0.0
+PW_BLOCKED_RESOURCE_TYPES = {"image", "media", "font"}
+
+try:
+    PW_MAX_FETCHES_PER_SESSION = max(1, int(str(os.environ.get("PW_MAX_FETCHES_PER_SESSION", "12")).strip()))
+except Exception:
+    PW_MAX_FETCHES_PER_SESSION = 12
+
+try:
+    PW_SESSION_MAX_AGE_SECONDS = max(60, int(str(os.environ.get("PW_SESSION_MAX_AGE_SECONDS", "480")).strip()))
+except Exception:
+    PW_SESSION_MAX_AGE_SECONDS = 480
+
+try:
+    PW_HARD_TIMEOUT_SECONDS = max(30, int(str(os.environ.get("PW_HARD_TIMEOUT_SECONDS", "90")).strip()))
+except Exception:
+    PW_HARD_TIMEOUT_SECONDS = 90
+
+try:
+    LISTING_HARD_TIMEOUT_SECONDS = max(60, int(str(os.environ.get("LISTING_HARD_TIMEOUT_SECONDS", "240")).strip()))
+except Exception:
+    LISTING_HARD_TIMEOUT_SECONDS = 240
+
+try:
+    DETAIL_HARD_TIMEOUT_SECONDS = max(60, int(str(os.environ.get("DETAIL_HARD_TIMEOUT_SECONDS", "180")).strip()))
+except Exception:
+    DETAIL_HARD_TIMEOUT_SECONDS = 180
+
+
+class PlaywrightHardTimeout(TimeoutError):
+    """Raised when a Playwright fetch exceeds the outer watchdog limit."""
+
+
+class ListingHardTimeout(TimeoutError):
+    """Raised when listing-page discovery exceeds the outer watchdog limit."""
+
+
+class DetailHardTimeout(TimeoutError):
+    """Raised when processing a single detail link exceeds the outer watchdog limit."""
+
+
+class _WallClockTimeout:
+    def __init__(self, timeout_seconds: int, exc_type: type[TimeoutError], message: str) -> None:
+        self.timeout_seconds = int(timeout_seconds)
+        self.exc_type = exc_type
+        self.message = str(message or "")
+        self._enabled = False
+        self._previous_handler = None
+        self._previous_timer = (0.0, 0.0)
+
+    def _handle_timeout(self, signum, frame) -> None:
+        raise self.exc_type(self.message)
+
+    def __enter__(self):
+        if (
+            self.timeout_seconds <= 0
+            or threading.current_thread() is not threading.main_thread()
+            or not hasattr(signal, "setitimer")
+        ):
+            return self
+
+        self._enabled = True
+        self._previous_handler = signal.getsignal(signal.SIGALRM)
+        self._previous_timer = signal.setitimer(signal.ITIMER_REAL, self.timeout_seconds)
+        signal.signal(signal.SIGALRM, self._handle_timeout)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if not self._enabled:
+            return False
+
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        except Exception:
+            pass
+
+        try:
+            signal.signal(signal.SIGALRM, self._previous_handler)
+        except Exception:
+            pass
+
+        try:
+            delay, interval = self._previous_timer
+            if delay or interval:
+                signal.setitimer(signal.ITIMER_REAL, delay, interval)
+        except Exception:
+            pass
+
+        return False
+
+
+class _PlaywrightWallClockTimeout:
+    def __init__(self, timeout_seconds: int, url: str) -> None:
+        self._inner = _WallClockTimeout(
+            timeout_seconds,
+            PlaywrightHardTimeout,
+            f"Playwright hard timeout after {int(timeout_seconds)}s for {str(url or '')}",
+        )
+
+    def __enter__(self):
+        self._inner.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return self._inner.__exit__(exc_type, exc, tb)
+
+
+class _ListingWallClockTimeout:
+    def __init__(self, timeout_seconds: int, url: str) -> None:
+        self._inner = _WallClockTimeout(
+            timeout_seconds,
+            ListingHardTimeout,
+            f"Listing hard timeout after {int(timeout_seconds)}s for {str(url or '')}",
+        )
+
+    def __enter__(self):
+        self._inner.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return self._inner.__exit__(exc_type, exc, tb)
+
+
+class _DetailWallClockTimeout:
+    def __init__(self, timeout_seconds: int, url: str) -> None:
+        self._inner = _WallClockTimeout(
+            timeout_seconds,
+            DetailHardTimeout,
+            f"Detail hard timeout after {int(timeout_seconds)}s for {str(url or '')}",
+        )
+
+    def __enter__(self):
+        self._inner.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return self._inner.__exit__(exc_type, exc, tb)
+
+
+def _install_playwright_request_policy(context) -> None:
+    """Abort non-essential assets so each scraper page is lighter on CPU and RAM."""
+    if context is None:
+        return
+
+    def _route_handler(route) -> None:
+        try:
+            resource_type = (route.request.resource_type or "").lower()
+        except Exception:
+            resource_type = ""
+
+        if resource_type in PW_BLOCKED_RESOURCE_TYPES:
+            route.abort()
+            return
+
+        route.continue_()
+
+    context.route("**/*", _route_handler)
+
+
+def _reset_playwright_session() -> None:
+    global _PW_DRIVER, _PW_BROWSER, _PW_CONTEXT, _PW_SESSION_KEY
+    global _PW_SESSION_FETCHES, _PW_SESSION_STARTED_AT
+
+    try:
+        if _PW_CONTEXT is not None:
+            _PW_CONTEXT.close()
+    except Exception:
+        pass
+    try:
+        if _PW_BROWSER is not None:
+            _PW_BROWSER.close()
+    except Exception:
+        pass
+    try:
+        if _PW_DRIVER is not None:
+            _PW_DRIVER.stop()
+    except Exception:
+        pass
+
+    _PW_CONTEXT = None
+    _PW_BROWSER = None
+    _PW_DRIVER = None
+    _PW_SESSION_KEY = None
+    _PW_SESSION_FETCHES = 0
+    _PW_SESSION_STARTED_AT = 0.0
+
+
+def _playwright_session_recycle_reason(session_key) -> str | None:
+    if _PW_CONTEXT is None:
+        return None
+    if _PW_SESSION_KEY != session_key:
+        return "session key changed"
+    if _PW_SESSION_FETCHES >= PW_MAX_FETCHES_PER_SESSION:
+        return f"fetch cap reached ({_PW_SESSION_FETCHES})"
+    started_at = float(_PW_SESSION_STARTED_AT or 0.0)
+    if started_at:
+        age_seconds = time.time() - started_at
+        if age_seconds >= PW_SESSION_MAX_AGE_SECONDS:
+            return f"session age exceeded ({int(age_seconds)}s)"
+    return None
+
+
+def _mark_playwright_session_use() -> None:
+    global _PW_SESSION_FETCHES
+    _PW_SESSION_FETCHES += 1
+
+
+def _get_playwright_context(user_agent=USER_AGENT, engine="chromium"):
+    global _PW_DRIVER, _PW_BROWSER, _PW_CONTEXT, _PW_SESSION_KEY, _PW_SESSION_STARTED_AT
+
+    if sync_playwright is None:
+        return None
+
+    session_key = (engine, user_agent)
+    recycle_reason = _playwright_session_recycle_reason(session_key)
+    if recycle_reason:
+        try:
+            log_line("INFO", f".Recycling Playwright browser session: {recycle_reason}.")
+        except Exception:
+            pass
+        _reset_playwright_session()
+
+    if _PW_CONTEXT is not None and _PW_SESSION_KEY == session_key:
+        return _PW_CONTEXT
+
+    try:
+        _PW_DRIVER = sync_playwright().start()
+        browser_type = getattr(_PW_DRIVER, engine)
+        _PW_BROWSER = browser_type.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--mute-audio",
+            ],
+        )
+        _PW_CONTEXT = _PW_BROWSER.new_context(user_agent=user_agent)
+        _install_playwright_request_policy(_PW_CONTEXT)
+        _PW_SESSION_KEY = session_key
+        _PW_SESSION_STARTED_AT = time.time()
+        return _PW_CONTEXT
+    except Exception:
+        _reset_playwright_session()
+        raise
+
+
+atexit.register(_reset_playwright_session)
 
 
 def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
@@ -11020,7 +11809,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
     if sync_playwright is None:
         return None
 
-    # network errors we treat as transient and worth retrying
     TRANSIENT_NET_MARKERS = (
         "ERR_INTERNET_DISCONNECTED",
         "ERR_CONNECTION_RESET",
@@ -11029,38 +11817,25 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
     )
 
     try:
-        with sync_playwright() as p:
-            browser_type = getattr(p, engine)  # "chromium" | "firefox" | "webkit"
-            browser = browser_type.launch(headless=True, args=["--no-sandbox"])
-            context = browser.new_context(user_agent=user_agent)
-            page = context.new_page()
+        context = _get_playwright_context(user_agent=user_agent, engine=engine)
+        if context is None:
+            return None
+        page = context.new_page()
+        _mark_playwright_session_use()
+        skip_page_close = False
 
-            try:
-                # ---------------------------
-                # 1. Robust page.goto with retry
-                # ---------------------------
+        try:
+            with _PlaywrightWallClockTimeout(PW_HARD_TIMEOUT_SECONDS, url):
                 last_exc = None
-                for attempt in range(1, 4):  # up to 3 attempts
+                for attempt in range(1, 4):
                     try:
-                        resp = page.goto(
+                        page.goto(
                             url,
                             timeout=PW_GOTO_TIMEOUT,
                             wait_until="domcontentloaded",
                         )
-
-                        """ removed 20261215 - this was just for debugging YC routing and block detection, but it was too noisy in the logs
-                        # DEBUG: YC routing and block detection (runs only when goto succeeded)
-                        if "ycombinator.com" in (up.urlparse(url).netloc or "").lower():
-                            status = resp.status if resp else None
-                            log_event("DEBUG", f"YC goto status={status} requested={url} final={page.url}")
-                            try:
-                                log_event("DEBUG", f"YC page title: {page.title()}")
-                            except Exception:
-                                pass
-
                         last_exc = None
                         break
-                        """
 
                     except Exception as e:
                         last_exc = e
@@ -11077,58 +11852,37 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             time.sleep(3 * attempt)
                             continue
 
-                        # non transient or last attempt
                         raise
 
-                # if all attempts failed, re raise last exception
                 if last_exc is not None:
                     raise last_exc
 
-                # ---------------------------
-                # 2. Host and path info
-                # ---------------------------
                 try:
                     parsed = up.urlparse(url)
                     host = parsed.netloc.lower()
                     path = parsed.path or "/"
-                    #log_event("DEBUG", f"Playwright host={host} path={path} url={url}")    ignored 20251215
                 except Exception:
                     host = ""
                     path = "/"
 
-                """ removed 20260108 - this was just for debugging YC routing and block detection, but it was too noisy in the logs
-                if "ycombinator.com" in host:
-                    log_event("DEBUG", f"PW YC fetch active: {url}")
-                 """
-
-
-                # ---------------------------
-                # 3. Host specific behavior
-                # ---------------------------
                 try:
                     if host.endswith("jobs.ashbyhq.com"):
-                        # Wait until job cards or links render
                         page.wait_for_selector(
                             "a[href*='/jobs/']:not([href$='/jobs'])",
                             timeout=PW_WAIT_TIMEOUT * 2,
                         )
-                        # Gentle scroll to trigger lazy loads
                         page.mouse.wheel(0, 2500)
                         page.wait_for_timeout(800)
 
                     elif host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
-                        # Workday often needs a bit of extra time
                         page.wait_for_timeout(1200)
 
                     elif host.endswith("ycombinator.com") or host.endswith("www.ycombinator.com"):
-                        # YC is React. We need to wait for the rendered job header.
                         page.wait_for_selector(
                             "h1.ycdc-section-title",
                             timeout=PW_WAIT_TIMEOUT * 2,
                         )
-                        # Optional: small pause to let adjacent fields render consistently
                         page.wait_for_timeout(300)
-
 
                     elif host.endswith("wellfound.com"):
                         page.wait_for_selector(
@@ -11139,7 +11893,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                         page.wait_for_timeout(800)
 
                     elif host.endswith("dice.com") or host.endswith("www.dice.com"):
-                        # Wait for job cards rendered by JS
                         page.wait_for_selector(
                             "a[href*='/job-detail/']",
                             timeout=PW_WAIT_TIMEOUT * 2,
@@ -11147,16 +11900,45 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                         page.mouse.wheel(0, 4000)
                         page.wait_for_timeout(800)
 
+                    elif (
+                        host.endswith("builtin.com")
+                        or host.endswith("builtinseattle.com")
+                        or host.endswith("builtinvancouver.org")
+                    ) and "/jobs" in path and "/job/" not in path:
+                        page.wait_for_selector(
+                            "a[href^='/job/']",
+                            timeout=PW_WAIT_TIMEOUT * 2,
+                        )
+
+                        try:
+                            for _ in range(12):
+                                btn = page.query_selector(
+                                    "button:has-text('Load More'), "
+                                    "button:has-text('Show More'), "
+                                    "a:has-text('Load More'), "
+                                    "a:has-text('Show More')"
+                                )
+                                if not btn:
+                                    break
+                                btn.scroll_into_view_if_needed(timeout=2000)
+                                btn.click()
+                                page.wait_for_timeout(900)
+                        except Exception:
+                            pass
+
+                        _autoscroll_listing(
+                            page,
+                            link_css="a[href^='/job/']",
+                            max_loops=40,
+                            idle_ms=1200,
+                        )
+
                     elif host.endswith("welcometothejungle.com"):
-                        # Wait for the main content
                         page.wait_for_selector(
                             "main, [data-testid='job-offer']",
                             timeout=PW_WAIT_TIMEOUT * 2,
                         )
-
-                        # Click visible "View more" expanders so hidden sections load
                         try:
-                            # Role-based locator first
                             buttons = page.get_by_role(
                                 "button",
                                 name=re.compile(r"view more", re.I),
@@ -11170,7 +11952,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                                     except Exception:
                                         pass
 
-                            # Fallback to common WTTJ expanders
                             for sel in [
                                 "button:has-text('View more')",
                                 "[role='button']:has-text('View more')",
@@ -11185,19 +11966,12 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                                             page.wait_for_timeout(300)
                                         except Exception:
                                             pass
-
-                            # Let the DOM settle
                             page.wait_for_timeout(500)
                         except Exception:
                             pass
-
                 except Exception:
-                    # do not fail the run on host specific tweaks
                     pass
 
-                # ---------------------------
-                # 4. EdTech listing autoscroll
-                # ---------------------------
                 try:
                     needs_autoscroll = (
                         host in {"edtech.com", "www.edtech.com"}
@@ -11206,7 +11980,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                     )
 
                     if needs_autoscroll:
-                        # click "More" buttons first if present
                         try:
                             for _ in range(50):
                                 btn = page.query_selector(
@@ -11222,7 +11995,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                         except Exception:
                             pass
 
-                        # then deep autoscroll until stable
                         _autoscroll_listing(
                             page,
                             link_css='a[href^="/jobs/"]:not([href$="-jobs"])',
@@ -11230,12 +12002,8 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             idle_ms=2000,
                         )
                 except Exception:
-                    # do not fail run if autoscroll logic hiccups
                     pass
 
-                # ---------------------------
-                # 5. Generic waits for common job structures
-                # ---------------------------
                 try:
                     page.wait_for_selector(
                         "a[href^='/job/'], "
@@ -11249,7 +12017,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 except Exception:
                     pass
 
-                # wait for common embedded boards if present
                 try:
                     page.wait_for_selector(
                         "script[src*='greenhouse.io/embed/job_board'], "
@@ -11259,70 +12026,73 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                         timeout=PW_WAIT_TIMEOUT,
                     )
                 except Exception:
-                    # fine to fall back to whatever is loaded
                     pass
 
-                # Built In is JS heavy. In bulk runs we can capture the pre hydration shell.
-                # Wait briefly for any post hydration signal before reading page.content().
                 try:
                     cur_url = page.url or ""
                 except Exception:
                     cur_url = ""
 
-                if ("builtin.com/job/" in cur_url) or ("builtinseattle.com/job/" in cur_url) or ("builtinvancouver.org/job/" in cur_url) or ("builtin.com" in (cur_url or "")) or ("builtinseattle.com" in (cur_url or "")) or ("builtinvancouver.org" in (cur_url or "")):
+                if (
+                    ("builtin.com/job/" in cur_url)
+                    or ("builtinseattle.com/job/" in cur_url)
+                    or ("builtinvancouver.org/job/" in cur_url)
+                    or ("builtin.com" in cur_url)
+                    or ("builtinseattle.com" in cur_url)
+                    or ("builtinvancouver.org" in cur_url)
+                ):
                     try:
-                        page.wait_for_function(
-                            """() => {
-                                const html = document.documentElement && document.documentElement.innerHTML ? document.documentElement.innerHTML : "";
-                                if (html.includes("Builtin.jobPostInit")) return true;
-                                if (html.includes('type="application/ld+json"')) return true;
-                                if (document.querySelector("span[data-bs-toggle='tooltip']")) return true;
-                                return false;
-                            }""",
-                            timeout=15000,
-                        )
-                    except Exception:
-                        pass
-                    # Seattle pages sometimes hydrate later but expose stable DOM markers first.
-                    if "builtinseattle.com/job/" in (cur_url or ""):
                         try:
-                            page.wait_for_selector(
-                                "[data-id='company-title'], div[data-id='job-card'] h1",
+                            page.wait_for_function(
+                                """() => {
+                                    const html = document.documentElement && document.documentElement.innerHTML ? document.documentElement.innerHTML : "";
+                                    if (html.includes("Builtin.jobPostInit")) return true;
+                                    if (html.includes('type="application/ld+json"')) return true;
+                                    if (document.querySelector("span[data-bs-toggle='tooltip']")) return true;
+                                    return false;
+                                }""",
                                 timeout=15000,
                             )
                         except Exception:
                             pass
+                        # Seattle pages sometimes hydrate later but expose stable DOM markers first.
+                        if "builtinseattle.com/job/" in (cur_url or ""):
+                            try:
+                                page.wait_for_selector(
+                                    "[data-id='company-title'], div[data-id='job-card'] h1",
+                                    timeout=15000,
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
 
-                # ---------------------------
-                # 6. Capture HTML and bump counters
-                # ---------------------------
                 html = page.content()
 
-                # Built In Seattle can intermittently return a partial shell first
-                # (title present, but no JSON-LD / jobPostInit / company node yet).
-                if "builtinseattle.com/job/" in (cur_url or ""):
-                    def _sea_has_strong_job_signals(h: str) -> bool:
-                        h_low = (h or "").lower()
-                        return (
-                            ("Builtin.jobPostInit" in (h or ""))
-                            or ("hiringOrganization" in (h or ""))
-                            or ('data-id="company-title"' in (h or ""))
-                            or ("job-post-body-" in h_low)
-                            or ('<meta name="description"' in h_low)
-                        )
+                def _sea_has_strong_job_signals(h: str) -> bool:
+                    h_low = (h or "").lower()
+                    return (
+                        ("Builtin.jobPostInit" in (h or ""))
+                        or ("hiringOrganization" in (h or ""))
+                        or ('data-id="company-title"' in (h or ""))
+                        or ("job-post-body-" in h_low)
+                        or ('<meta name="description"' in h_low)
+                    )
 
-                    if not _sea_has_strong_job_signals(html):
-                        for _ in range(3):  # additive wait budget ~9s
-                            try:
-                                page.wait_for_timeout(3000)
-                            except Exception:
-                                break
-                            html = page.content()
-                            if _sea_has_strong_job_signals(html):
-                                break
+                if "builtinseattle.com/job/" in cur_url and not _sea_has_strong_job_signals(html):
+                    for _ in range(3):
+                        try:
+                            page.wait_for_timeout(3000)
+                        except Exception:
+                            break
+                        html = page.content()
+                        if _sea_has_strong_job_signals(html):
+                            break
 
-                # If we still got a tiny shell, try one reload once.
-                if (("builtin.com/job/" in cur_url) or ("builtinseattle.com/job/" in cur_url)) and (not html or len(html) < 50000):
+                if (
+                    (("builtin.com/job/" in cur_url) or ("builtinseattle.com/job/" in cur_url))
+                    and (not html or len(html) < 50000)
+                ):
                     try:
                         page.reload(wait_until="domcontentloaded")
                         try:
@@ -11338,7 +12108,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             )
                         except Exception:
                             pass
-                        if "builtinseattle.com/job/" in (cur_url or ""):
+                        if "builtinseattle.com/job/" in cur_url:
                             try:
                                 page.wait_for_selector(
                                     "[data-id='company-title'], div[data-id='job-card'] h1",
@@ -11347,8 +12117,7 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                             except Exception:
                                 pass
                         html = page.content()
-                        if "builtinseattle.com/job/" in (cur_url or ""):
-                            # One more short poll after reload for slower Seattle hydration.
+                        if "builtinseattle.com/job/" in cur_url:
                             for _ in range(2):
                                 html_low = (html or "").lower()
                                 if (
@@ -11367,8 +12136,6 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                     except Exception:
                         pass
 
-
-                # optional counters if you define them globally
                 try:
                     g = globals()
                     if "PW_SUCCESS" in g:
@@ -11376,21 +12143,23 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
                 except Exception:
                     pass
 
-                #log_event("DEBUG", f"Playwright returned HTML for {url}")       ignored 20251215
                 return html
 
-            finally:
-                # always clean up Playwright resources
-                try:
-                    context.close()
-                except Exception:
-                    pass
-                try:
-                    browser.close()
-                except Exception:
-                    pass
+        finally:
+            try:
+                if skip_page_close:
+                    _reset_playwright_session()
+                else:
+                    page.close()
+            except Exception:
+                pass
 
     except Exception as e:
+        if isinstance(e, PlaywrightHardTimeout):
+            skip_page_close = True
+            _reset_playwright_session()
+        if "has been closed" in str(e).lower():
+            _reset_playwright_session()
         # optional failure / fallback counters
         try:
             g = globals()
@@ -11411,14 +12180,23 @@ def fetch_html_with_playwright(url, user_agent=USER_AGENT, engine="chromium"):
         return None
 
 
-def _is_partial_builtinseattle_job_shell(url: str, html: str | None) -> bool:
+def _partial_builtin_job_shell_kind(url: str, html: str | None) -> str | None:
     try:
         u = str(url or "")
         h = str(html or "")
-        if "builtinseattle.com/job/" not in u.lower():
-            return False
+        u_low = u.lower()
+        if "/job/" not in u_low:
+            return None
+        if "builtinseattle.com/job/" in u_low:
+            kind = "seattle"
+        elif "builtin.com/job/" in u_low:
+            kind = "builtin"
+        elif "builtinvancouver.org/job/" in u_low:
+            kind = "vancouver"
+        else:
+            return None
         if not h:
-            return False
+            return None
         h_low = h.lower()
         has_title = "<title" in h_low
         has_jobpostinit = "Builtin.jobPostInit" in h
@@ -11427,7 +12205,81 @@ def _is_partial_builtinseattle_job_shell(url: str, html: str | None) -> bool:
         has_meta_desc = '<meta name="description"' in h_low
         has_job_body = "job-post-body-" in h_low
         # The problematic shell consistently has title but lacks real job signals.
-        return has_title and not any([has_jobpostinit, has_jsonld, has_company_node, has_meta_desc, has_job_body])
+        if has_title and not any([has_jobpostinit, has_jsonld, has_company_node, has_meta_desc, has_job_body]):
+            return kind
+        return None
+    except Exception:
+        return None
+
+
+def _is_partial_builtinseattle_job_shell(url: str, html: str | None) -> bool:
+    try:
+        return _partial_builtin_job_shell_kind(url, html) == "seattle"
+    except Exception:
+        return False
+
+
+def _is_builtin_detail_url(url: str) -> bool:
+    try:
+        parsed = up.urlparse(str(url or ""))
+        host = (parsed.netloc or "").lower()
+        path = (parsed.path or "").lower()
+        return (
+            ("builtin.com" in host or "builtinseattle.com" in host or "builtinvancouver.org" in host)
+            and path.startswith("/job/")
+        )
+    except Exception:
+        return False
+
+
+def _builtin_detail_html_is_usable(url: str, html: str | None) -> bool:
+    try:
+        if not html:
+            return False
+        if _partial_builtin_job_shell_kind(url, html):
+            return False
+        h = str(html or "")
+        h_low = h.lower()
+        return any(
+            [
+                "Builtin.jobPostInit" in h,
+                "hiringOrganization" in h,
+                'type="application/ld+json"' in h,
+                'data-id="company-title"' in h,
+                "job-post-body-" in h_low,
+                '<meta name="description"' in h_low,
+            ]
+        )
+    except Exception:
+        return False
+
+
+def _is_yc_detail_url(url: str) -> bool:
+    try:
+        parsed = up.urlparse(str(url or ""))
+        host = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        return "ycombinator.com" in host and path.startswith("/companies/") and "/jobs/" in path
+    except Exception:
+        return False
+
+
+def _yc_detail_html_is_usable(url: str, html: str | None) -> bool:
+    try:
+        if not html:
+            return False
+        h = str(html or "")
+        h_low = h.lower()
+        return any(
+            [
+                "ycdc-section-title" in h,
+                '"@type":"JobPosting"' in h.replace(" ", ""),
+                '"@type": "JobPosting"' in h,
+                'href="/companies/' in h_low,
+                "application/ld+json" in h_low,
+                "_jobPost" in h,
+            ]
+        )
     except Exception:
         return False
 
@@ -11435,8 +12287,72 @@ def _is_partial_builtinseattle_job_shell(url: str, html: str | None) -> bool:
 def get_html(url):
     domain = up.urlparse(url).netloc.lower()
     if domain in PLAYWRIGHT_DOMAINS:
+        if _is_builtin_detail_url(url):
+            try:
+                resp = polite_get(url, quiet=True)
+            except Exception:
+                resp = None
+            html_req = resp.text if resp else None
+            if _builtin_detail_html_is_usable(url, html_req):
+                try:
+                    g = globals()
+                    if "BUILTIN_DETAIL_REQUESTS_FASTPATH" in g:
+                        g["BUILTIN_DETAIL_REQUESTS_FASTPATH"] += 1
+                except Exception:
+                    pass
+                return html_req
+            try:
+                g = globals()
+                if "BUILTIN_DETAIL_REQUESTS_FALLBACK" in g:
+                    g["BUILTIN_DETAIL_REQUESTS_FALLBACK"] += 1
+            except Exception:
+                pass
+
+        if _is_yc_detail_url(url):
+            try:
+                resp = polite_get(url, quiet=True)
+            except Exception:
+                resp = None
+            html_req = resp.text if resp else None
+            if _yc_detail_html_is_usable(url, html_req):
+                try:
+                    g = globals()
+                    if "YC_DETAIL_REQUESTS_FASTPATH" in g:
+                        g["YC_DETAIL_REQUESTS_FASTPATH"] += 1
+                except Exception:
+                    pass
+                return html_req
+            try:
+                g = globals()
+                if "YC_DETAIL_REQUESTS_FALLBACK" in g:
+                    g["YC_DETAIL_REQUESTS_FALLBACK"] += 1
+            except Exception:
+                pass
+
         html = fetch_html_with_playwright(url)
-        if _is_partial_builtinseattle_job_shell(url, html):
+        shell_kind = _partial_builtin_job_shell_kind(url, html)
+        if shell_kind == "builtin":
+            try:
+                g = globals()
+                if "BUILTIN_PARTIAL_SHELL_OBSERVED" in g:
+                    g["BUILTIN_PARTIAL_SHELL_OBSERVED"] += 1
+            except Exception:
+                pass
+        elif shell_kind == "vancouver":
+            try:
+                g = globals()
+                if "BUILTINVANCOUVER_PARTIAL_SHELL_OBSERVED" in g:
+                    g["BUILTINVANCOUVER_PARTIAL_SHELL_OBSERVED"] += 1
+            except Exception:
+                pass
+
+        if shell_kind == "seattle":
+            try:
+                g = globals()
+                if "SEA_PARTIAL_SHELL_RETRIES" in g:
+                    g["SEA_PARTIAL_SHELL_RETRIES"] += 1
+            except Exception:
+                pass
             try:
                 log_line("DEBUG", f"[BIVDBG] Seattle partial shell detected, retrying Playwright once: {url}")
             except Exception:
@@ -11462,6 +12378,17 @@ def get_html(url):
                     html_retry2 = fetch_html_with_playwright(url)
                     if html_retry2 and not _is_partial_builtinseattle_job_shell(url, html_retry2):
                         html = html_retry2
+            if _is_partial_builtinseattle_job_shell(url, html):
+                try:
+                    g = globals()
+                    if "SEA_PARTIAL_SHELL_UNRECOVERED" in g:
+                        g["SEA_PARTIAL_SHELL_UNRECOVERED"] += 1
+                except Exception:
+                    pass
+                try:
+                    log_line("WARN", f"[BIVDBG] Seattle partial shell unrecovered after retries: {url}")
+                except Exception:
+                    pass
         return html  # do not attempt requests() fallback for PW-only sites
     resp = polite_get(url)
     return resp.text if resp else None
@@ -11484,10 +12411,13 @@ def _find_ats_boards(html: str) -> list[str]:
     # De-dupe
     return sorted(set(boards))
 
-def expand_career_sources():
+def expand_career_sources(only_keys: list[str] | None = None):
     """Return a list of ATS job board URLs discovered on company careers pages."""
     pages = []
+    only_keys = [k.strip().lower() for k in (only_keys or []) if str(k).strip()]
     for url in CAREER_PAGES:
+        if only_keys and not any(k in url.lower() for k in only_keys):
+            continue
         progress_clear_if_needed()
         _bk_log_wrap("[CAREERS", f" ]{DOT3}Probing {url}")
         html = get_html(url)
@@ -12096,10 +13026,11 @@ def _host(u: str) -> str:
     except Exception:
         return u
 
-def log_info_processing(url: str):
+def log_info_processing(url: str, prefix: str = ""):
     progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
-    msg = "Processing listing page: " + url
+    lead = f"{prefix} " if prefix else ""
+    msg = f"{lead}Processing listing page: {url}"
     for ln in _wrap_lines(msg, width=120):
         log_print(f"{c}{_info_box()}.{ln}{RESET}")
 
@@ -12130,6 +13061,10 @@ def _info_box() -> str:
 def _found_box(n: int) -> str:
     # right-align the count to 3 spaces: 0..999
     return _box(f"🔎 FOUND {n:>3}")
+
+def _no_links_box(n: int = 0) -> str:
+    # right-align the count to 3 spaces: 0..999
+    return _box(f"🚫 NO LINKS {n:>3}")
 
 def _done_box() -> str:
     return _box("✔ DONE")
@@ -12724,6 +13659,8 @@ def _apply_prior_decisions(row: dict, prior: dict[str, tuple[str, str]] | None) 
     if not url:
         return
     applied_prev, reason_prev = prior.get(url, ("", ""))
+    if not applied_prev and not reason_prev:
+        applied_prev, reason_prev = prior.get(job_url_match_key(url), ("", ""))
     if applied_prev and not row.get("Applied?"):
         row["Applied?"] = applied_prev
     if reason_prev:
@@ -13526,9 +14463,11 @@ def _record_skip(
 
     url = (row.get("Job URL") or row.get("job_url") or "").strip()
     job_key = (row.get("Job Key") or url).strip()
+    reason_text = (row.get("Reason Skipped") or reason or "").strip().lower()
+    allow_duplicate_skip = "duplicate in current run" in reason_text
 
     # Hard de-dupe: if we have already recorded this job once, stop here
-    if job_key:
+    if job_key and not allow_duplicate_skip:
         if job_key in _seen_job_keys:
             # We have already recorded a KEEP or SKIP for this job
             return
@@ -13589,6 +14528,38 @@ skipped_rows = []    # the “skip” rows in internal-key form
 
 #start_ts = None  # define at module level
 
+def _restore_rows_from_checkpoints() -> tuple[int, int]:
+    if _env_flag("SCRAPER_RESUME_FROM_CHECKPOINTS", "0") not in {"1", "true", "on", "yes", "force"}:
+        return 0, 0
+
+    loaded_keep = load_rows_csv_snapshot(OUTPUT_CSV)
+    loaded_skip = load_rows_csv_snapshot(SKIPPED_CSV)
+
+    if loaded_keep:
+        kept_rows.extend(loaded_keep)
+        for row in loaded_keep:
+            url = (row.get("Job URL") or row.get("job_url") or "").strip()
+            if url:
+                _seen_kept_urls.add(url)
+
+    if loaded_skip:
+        skipped_rows.extend(loaded_skip)
+        for row in loaded_skip:
+            url = (row.get("Job URL") or row.get("job_url") or "").strip()
+            job_key = (row.get("Job Key") or url).strip()
+            if url:
+                _seen_skip_urls.add(url)
+            if job_key:
+                _seen_job_keys.add(job_key)
+
+    if loaded_keep or loaded_skip:
+        info(
+            f".Restored checkpoint rows for RUN_TS={RUN_TS}: "
+            f"keep={len(loaded_keep)}, skip={len(loaded_skip)}."
+        )
+
+    return len(loaded_keep), len(loaded_skip)
+
 def log_env_sanity_check(log_line):
     import os
     import sys
@@ -13632,12 +14603,100 @@ def require_optional_package(pkg_name: str, log_line, extra_hint: str = "") -> b
             log_line("WARN", extra_hint)
         return False
 
+
+STARTUP_CHECK_PACKAGES = [
+    ("requests", "requests", True, ""),
+    ("requests-cache", "requests_cache", True, ""),
+    ("beautifulsoup4", "bs4", True, ""),
+    ("python-dateutil", "dateutil", True, ""),
+    ("playwright", "playwright", True, ""),
+    ("wcwidth", "wcwidth", True, ""),
+    ("gspread", "gspread", False, "Google Sheets carry-forward/push will be disabled if this is missing."),
+    ("google-auth", "google.auth", False, "Google Sheets carry-forward/push will be disabled if this is missing."),
+]
+
+
+def log_startup_package_checks(log_line) -> None:
+    """Log package availability and versions for full runs."""
+    import importlib
+    try:
+        from importlib import metadata as importlib_metadata
+    except Exception:
+        import importlib_metadata  # type: ignore
+
+    for dist_name, import_name, required, extra_hint in STARTUP_CHECK_PACKAGES:
+        if not require_optional_package(import_name, log_line, extra_hint=extra_hint if not required else ""):
+            continue
+        try:
+            version = importlib_metadata.version(dist_name)
+        except Exception:
+            version = "unknown"
+        level = "ENV" if required else "INFO"
+        log_line(level, f"{dist_name}: {version}")
+
+
+def run_full_startup_checks(log_line) -> None:
+    """Verbose diagnostics intended for full runs only."""
+    log_line("INFO", ".Full run: startup checks enabled.")
+    log_env_sanity_check(log_line)
+    log_startup_package_checks(log_line)
+
+
+def _is_quick_check(args: argparse.Namespace) -> bool:
+    """Heuristic for runs where startup housekeeping should stay minimal."""
+    return any(
+        [
+            PW_FAST_MODE_ENABLED,
+            bool(getattr(args, "smoke", False)),
+            bool(getattr(args, "list_links", False)),
+            bool((getattr(args, "test_url", "") or "").strip()),
+            bool((getattr(args, "only_url", "") or "").strip()),
+            bool((getattr(args, "only", "") or "").strip()),
+            bool(getattr(args, "limit_pages", 0)),
+            bool(getattr(args, "limit_links", 0)),
+        ]
+    )
+
+
+def _quick_run_sheet_prompt_label(args: argparse.Namespace) -> str | None:
+    """Return a prompt label for quick runs that should confirm Sheets writes."""
+    if getattr(args, "smoke", False):
+        return None
+    if getattr(args, "list_links", False):
+        return None
+    if (getattr(args, "test_url", "") or "").strip():
+        return None
+    if (getattr(args, "only_url", "") or "").strip():
+        return "--only-url run"
+    if (getattr(args, "only", "") or "").strip():
+        return "--only run"
+    if getattr(args, "limit_pages", 0) or getattr(args, "limit_links", 0):
+        return "limited run"
+    return None
+
 def main(args: argparse.Namespace | None = None) -> None:
 #   #global raw_print
 #   global kept_count, skip_count, _seen_job_keys        #, start_ts  # add start_ts to globals
 #   start_ts = datetime.now()
     if args is None:
         args = _parse_args()
+
+    global ACTIVE_BUILTIN_MAX_PAGES
+    quick_check = _is_quick_check(args)
+    ACTIVE_BUILTIN_MAX_PAGES = _resolve_builtin_max_pages(
+        quick_check,
+        getattr(args, "builtin_max_pages", None),
+    )
+    if quick_check:
+        info(".Quick check mode: skipping code archive backup.")
+    else:
+        backup_all_py_to_archive()                  # keep all backups for full runs
+        run_full_startup_checks(log_line)
+
+    if ACTIVE_BUILTIN_MAX_PAGES == 0:
+        info(".Built In pagination: full sweep (all advertised pages).")
+    else:
+        info(f".Built In pagination: first {ACTIVE_BUILTIN_MAX_PAGES} page(s) per query.")
 
     skip_row = None
 
@@ -13654,6 +14713,13 @@ def main(args: argparse.Namespace | None = None) -> None:
     LINK_CAP = args.limit_links or (30 if SMOKE else 0)      # SMOKE: visit ≤ 20 job links
     LIST_LINKS = bool(getattr(args, "list_links", False))
     ONLY_KEYS = [s.strip().lower() for s in args.only.split(",") if s.strip()]
+    include_unstable_sources = (
+        bool(getattr(args, "include_unstable_sources", False))
+        or os.getenv("INCLUDE_UNSTABLE_SOURCES", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
+
+    if PW_FAST_MODE_ENABLED:
+        info(".PW_FAST_MODE enabled: preserving full source coverage while using quick-run safeguards.")
 
     SALARY_FLOOR = args.floor
     SOFT_SALARY_FLOOR = args.soft_floor or 0
@@ -13674,16 +14740,19 @@ def main(args: argparse.Namespace | None = None) -> None:
     prior_decisions: dict[str, tuple[str, str]] = {}
 
     prior_decisions = {}
-    try:
-        prior_decisions = fetch_prior_decisions(
-            GS_SHEET_URL,
-            key_path=GS_KEY_PATH,
-            tab_name=GS_TAB_NAME,
-        )
-        info(f".Loaded {len(prior_decisions)} prior decisions for carry-forward.")
-    except Exception as e:
-        warn(f"[GS] No prior decisions loaded ({e}). Continuing without carry-forward.")
-        prior_decisions = {}
+    if LIST_LINKS:
+        info(".Skipping prior decision fetch in list-links mode.")
+    else:
+        try:
+            prior_decisions = fetch_prior_decisions(
+                GS_SHEET_URL,
+                key_path=GS_KEY_PATH,
+                tab_name=GS_TAB_NAME,
+            )
+            info(f".Loaded {len(prior_decisions)} prior decisions for carry-forward.")
+        except Exception as e:
+            warn(f"[GS] No prior decisions loaded ({e}). Continuing without carry-forward.")
+            prior_decisions = {}
 
     PRIOR_DECISIONS_CACHE = prior_decisions
     CLASSIFIER_CONFIG = ClassificationConfig(
@@ -13695,6 +14764,7 @@ def main(args: argparse.Namespace | None = None) -> None:
     )
 
     seen_keys_this_run: set[str] = set()
+    seen_detail_keys_this_run: set[str] = set()
 
     from urllib.parse import urlparse
 
@@ -13710,17 +14780,106 @@ def main(args: argparse.Namespace | None = None) -> None:
     all_detail_links: list[str] = []
     listing_ctx_by_url: dict[str, dict] = {}
 
+    def _listing_progress_label(listing_url: str) -> str:
+        """Short human-readable label for listing discovery logs."""
+        try:
+            p = up.urlparse(str(listing_url or ""))
+            host = (p.netloc or "").lower().replace("www.", "")
+            qs = up.parse_qs(p.query or "")
+            query = (
+                " ".join(qs.get("search", [])).strip()
+                or " ".join(qs.get("q", [])).strip()
+                or " ".join(qs.get("value", [])).strip()
+                or ""
+            )
+            path = (p.path or "/").rstrip("/") or "/"
+            tail = path.split("/")[-1] if path not in {"", "/"} else "listing"
+            if query:
+                return f"{host} [{query}]"
+            return f"{host} [{tail}]"
+        except Exception:
+            return str(listing_url or "")
+
+    def _dedupe_preserve_order(urls: list[str]) -> list[str]:
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for raw in urls:
+            url = str(raw or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            deduped.append(url)
+        return deduped
+
+    def _log_listing_discovery_result(
+        listing_url: str,
+        links_found: int,
+        running_total: int,
+        elapsed_seconds: float,
+        page_index: int,
+        total_listing_pages: int,
+    ) -> None:
+        log_info_found(links_found, listing_url, elapsed_seconds)
+
     if only_url:
         all_detail_links = [only_url]
         log_line("INFO", f".Using only-url override (1 link): {only_url}")
 
     else:
-        # Full run behavior stays the same
-        if not (SMOKE and not args.limit_pages):
-            pages += expand_career_sources()
-
         if ONLY_KEYS:
             pages = [u for u in pages if any(k in u.lower() for k in ONLY_KEYS)]
+
+        need_more_pages = (not PAGE_CAP) or (len(pages) < PAGE_CAP)
+        if need_more_pages and not (SMOKE and not args.limit_pages):
+            extra_pages = expand_career_sources(only_keys=ONLY_KEYS)
+            if ONLY_KEYS:
+                extra_pages = [u for u in extra_pages if any(k in u.lower() for k in ONLY_KEYS)]
+            pages += extra_pages
+
+        pages = _dedupe_preserve_order(pages)
+
+        if not include_unstable_sources and not ONLY_KEYS:
+            stable_pages: list[str] = []
+            skipped_unstable: list[tuple[str, str]] = []
+            for page in pages:
+                reason = _unstable_listing_reason(page)
+                if reason:
+                    skipped_unstable.append((page, reason))
+                    continue
+                stable_pages.append(page)
+            pages = stable_pages
+            if skipped_unstable:
+                reason_summary = "; ".join(sorted({reason for _, reason in skipped_unstable}))
+                warn(
+                    f".Skipping {len(skipped_unstable)} unstable listing source(s) for unattended local stability: "
+                    f"{reason_summary}. Use --include-unstable-sources or INCLUDE_UNSTABLE_SOURCES=1 to include them."
+                )
+
+        original_total_pages = len(pages)
+        start_listing_index = max(1, int(getattr(args, "start_listing_index", 1) or 1))
+        end_listing_index = int(getattr(args, "end_listing_index", 0) or 0)
+
+        if end_listing_index and end_listing_index < start_listing_index:
+            log_line(
+                "WARN",
+                f".Ignoring --end-listing-index {end_listing_index} because it is less than start index {start_listing_index}.",
+            )
+            end_listing_index = 0
+
+        if start_listing_index > 1 or end_listing_index:
+            end_bound = min(original_total_pages, end_listing_index) if end_listing_index else original_total_pages
+            start_offset = min(original_total_pages, start_listing_index - 1)
+            pages = pages[start_offset:end_bound]
+            if pages:
+                log_line(
+                    "INFO",
+                    f".Listing resume window: {start_offset + 1}-{end_bound} of {original_total_pages}.",
+                )
+            else:
+                log_line(
+                    "WARN",
+                    f".Listing resume window is empty (requested {start_listing_index}-{end_listing_index or original_total_pages} of {original_total_pages}).",
+                )
 
         if PAGE_CAP:
             pages = pages[:PAGE_CAP]
@@ -13731,92 +14890,174 @@ def main(args: argparse.Namespace | None = None) -> None:
     if not only_url:
         for i, listing_url in enumerate(pages, start=1):
             t0 = time.time()
-            if "hubspot.com/careers/jobs" not in listing_url:
-                progress_clear_if_needed()
-            set_source_tag(listing_url)
-            html = get_html(listing_url)
-            if not html:
-                log_print(f"{_box('WARN')} {DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
-                continue
-
-            # derive host safely from the listing URL
-            p = up.urlparse(listing_url if isinstance(listing_url, str) else str(listing_url))
-            host = p.netloc.lower().replace("www.", "")
-
-            # HubSpot listing → handle pagination here and continue
-            if "hubspot.com" in host and "/careers/jobs" in listing_url:
-                links = collect_hubspot_links(listing_url, max_pages=25)
-                all_detail_links.extend(links)
-                elapsed = time.time() - t0
-                progress_clear_if_needed()
-                continue
-
-            if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
-                links = collect_dice_links(listing_url, max_pages=25)
-                all_detail_links.extend(links)
-                continue
-
-            # Workday listing → detail expansion
-            if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
-                wd_detail_links = collect_workday_jobs(
-                    listing_url,
-                    max_links=(LINK_CAP or None),
-                )
-                if not wd_detail_links:
-                    wd_detail_links = workday_links_from_listing(listing_url, max_results=250)
-                if wd_detail_links:
-                    all_detail_links.extend(wd_detail_links)
-                    elapsed = time.time() - t0
-                    progress_clear_if_needed()
-                    continue
-
-            else:
-                if "hubspot.com/careers/jobs" in listing_url:
-                    links = collect_hubspot_links(listing_url, max_pages=25)
-                elif "simplyhired.com/search" in listing_url:
-                    links = collect_simplyhired_links(listing_url)
-                else:
-                    links = find_job_links(html, listing_url)
-
-                if "dice.com/jobs" in listing_url:
-                    links = collect_dice_links(listing_url, max_pages=25)
-                elif "hubspot.com/careers/jobs" in listing_url:
-                    links = collect_hubspot_links(listing_url, max_pages=25)
-
-            # HubSpot pagination
-            if "hubspot.com" in host and "/careers/jobs" in listing_url:
-                page_num = 1
-                hubspot_links = []
-                while True:
-                    page_url = (
-                        re.sub(r"page=\d+", f"page={page_num}", listing_url)
-                        if "page=" in listing_url
-                        else (listing_url + ("&" if "?" in listing_url else "?") + f"page={page_num}")
-                    )
-                    progress_clear_if_needed()
+            try:
+                with _ListingWallClockTimeout(LISTING_HARD_TIMEOUT_SECONDS, listing_url):
+                    log_info_processing(listing_url, prefix=f"[{i}/{total_pages}]")
+                    if "hubspot.com/careers/jobs" not in listing_url:
+                        progress_clear_if_needed()
                     set_source_tag(listing_url)
-                    html = get_html(page_url)
-                    links = parse_hubspot_list_page(html or "", base="https://www.hubspot.com")
-                    if not links:
-                        break
-                    hubspot_links.extend(links)
-                    page_num += 1
-                    if page_num > 20:
-                        break
 
-                info(f".Found {len(hubspot_links)}.candidate job links on hubspot.com")
-                all_detail_links.extend(hubspot_links)
+                    p = up.urlparse(listing_url if isinstance(listing_url, str) else str(listing_url))
+                    host = p.netloc.lower().replace("www.", "")
+                    path = p.path or ""
+
+                    if host == "edtech.com" and "/jobs/" in path:
+                        links = collect_edtech_links(listing_url, max_pages=EDTECH_MAX_PAGES)
+                        all_detail_links.extend(links)
+                        _log_listing_discovery_result(
+                            listing_url,
+                            len(links),
+                            len(all_detail_links),
+                            time.time() - t0,
+                            i,
+                            total_pages,
+                        )
+                        continue
+
+                    html = get_html(listing_url)
+                    if not html:
+                        warn(f"{DOT3}{DOTW} Failed to fetch listing page: {listing_url}")
+                        continue
+
+                    # derive host safely from the listing URL
+                    p = up.urlparse(listing_url if isinstance(listing_url, str) else str(listing_url))
+                    host = p.netloc.lower().replace("www.", "")
+
+                    # HubSpot listing → handle pagination here and continue
+                    if "hubspot.com" in host and "/careers/jobs" in listing_url:
+                        links = collect_hubspot_links(listing_url, max_pages=25)
+                        all_detail_links.extend(links)
+                        elapsed = time.time() - t0
+                        _log_listing_discovery_result(
+                            listing_url,
+                            len(links),
+                            len(all_detail_links),
+                            elapsed,
+                            i,
+                            total_pages,
+                        )
+                        progress_clear_if_needed()
+                        continue
+
+                    if "dice.com" in host and "/jobs" in up.urlparse(listing_url).path:
+                        links = collect_dice_links(listing_url, max_pages=25)
+                        all_detail_links.extend(links)
+                        _log_listing_discovery_result(
+                            listing_url,
+                            len(links),
+                            len(all_detail_links),
+                            time.time() - t0,
+                            i,
+                            total_pages,
+                        )
+                        continue
+
+                    if host in {"builtin.com", "builtinseattle.com", "builtinvancouver.org"} and "/jobs" in up.urlparse(listing_url).path:
+                        links = collect_builtin_links(listing_url, max_pages=ACTIVE_BUILTIN_MAX_PAGES)
+                        all_detail_links.extend(links)
+                        _log_listing_discovery_result(
+                            listing_url,
+                            len(links),
+                            len(all_detail_links),
+                            time.time() - t0,
+                            i,
+                            total_pages,
+                        )
+                        continue
+
+                    # Workday listing → detail expansion
+                    if host.endswith("myworkdayjobs.com") or host.endswith("myworkdaysite.com"):
+                        wd_detail_links = collect_workday_jobs(
+                            listing_url,
+                            max_links=(LINK_CAP or None),
+                        )
+                        if not wd_detail_links:
+                            wd_detail_links = workday_links_from_listing(listing_url, max_results=250)
+                        if wd_detail_links:
+                            all_detail_links.extend(wd_detail_links)
+                            elapsed = time.time() - t0
+                            _log_listing_discovery_result(
+                                listing_url,
+                                len(wd_detail_links),
+                                len(all_detail_links),
+                                elapsed,
+                                i,
+                                total_pages,
+                            )
+                            progress_clear_if_needed()
+                            continue
+
+                    else:
+                        if "hubspot.com/careers/jobs" in listing_url:
+                            links = collect_hubspot_links(listing_url, max_pages=25)
+                        elif "simplyhired.com/search" in listing_url:
+                            links = collect_simplyhired_links(listing_url)
+                        else:
+                            links = find_job_links(html, listing_url)
+
+                        if "dice.com/jobs" in listing_url:
+                            links = collect_dice_links(listing_url, max_pages=25)
+                        elif "hubspot.com/careers/jobs" in listing_url:
+                            links = collect_hubspot_links(listing_url, max_pages=25)
+
+                    # HubSpot pagination
+                    if "hubspot.com" in host and "/careers/jobs" in listing_url:
+                        page_num = 1
+                        hubspot_links = []
+                        while True:
+                            page_url = (
+                                re.sub(r"page=\d+", f"page={page_num}", listing_url)
+                                if "page=" in listing_url
+                                else (listing_url + ("&" if "?" in listing_url else "?") + f"page={page_num}")
+                            )
+                            progress_clear_if_needed()
+                            set_source_tag(listing_url)
+                            html = get_html(page_url)
+                            links = parse_hubspot_list_page(html or "", base="https://www.hubspot.com")
+                            if not links:
+                                break
+                            hubspot_links.extend(links)
+                            page_num += 1
+                            if page_num > 20:
+                                break
+
+                        info(f".Found {len(hubspot_links)}.candidate job links on hubspot.com")
+                        all_detail_links.extend(hubspot_links)
+                        _log_listing_discovery_result(
+                            listing_url,
+                            len(hubspot_links),
+                            len(all_detail_links),
+                            time.time() - t0,
+                            i,
+                            total_pages,
+                        )
+                        progress_clear_if_needed()
+                        continue
+
+                    # Generic collector
+                    if "simplyhired.com/search" in listing_url:
+                        links = collect_simplyhired_links(listing_url)
+                    else:
+                        links = find_job_links(html, listing_url)
+
+                    progress_clear_if_needed()
+                    all_detail_links.extend(links)
+                    _log_listing_discovery_result(
+                        listing_url,
+                        len(links),
+                        len(all_detail_links),
+                        time.time() - t0,
+                        i,
+                        total_pages,
+                    )
+            except ListingHardTimeout as e:
+                warn(f"{DOT3}{e}. Skipping listing page.")
+                try:
+                    _reset_playwright_session()
+                except Exception:
+                    pass
                 progress_clear_if_needed()
                 continue
-
-            # Generic collector
-            if "simplyhired.com/search" in listing_url:
-                links = collect_simplyhired_links(listing_url)
-            else:
-                links = find_job_links(html, listing_url)
-
-            progress_clear_if_needed()
-            all_detail_links.extend(links)
 
 
     def _norm_url(u: str) -> str:
@@ -13841,17 +15082,19 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     from urllib.parse import urlparse, parse_qsl, urlencode  # (at top of file if not already imported)
 
-    # De-duplicate by normalized link key
-    _seen = set()
-    deduped_links = []
-    for u in all_detail_links:
-        k = link_key(u)
-        if not k or k in _seen:
-            continue
-        _seen.add(k)
-        deduped_links.append(u)
+    # Preserve duplicates during normal runs so later occurrences can be
+    # recorded to the Skipped tab with an explicit duplicate reason.
+    if LIST_LINKS:
+        _seen = set()
+        deduped_links = []
+        for u in all_detail_links:
+            k = link_key(u)
+            if not k or k in _seen:
+                continue
+            _seen.add(k)
+            deduped_links.append(u)
 
-    all_detail_links = deduped_links
+        all_detail_links = deduped_links
     #processed_keys: set[str] = set()
 
     # Optional caps (leave both; LINK_CAP takes precedence if you set it)
@@ -13879,6 +15122,9 @@ def main(args: argparse.Namespace | None = None) -> None:
 
         path_raw = (p.path or "/").rstrip("/") or "/"
         path = path_raw if "ycombinator.com" in host else path_raw.lower()
+
+        if any(marker in host for marker in ("myworkdayjobs.com", "myworkdaysite.com", "myworkday.com")) and "/job/" in path.lower():
+            return job_url_match_key(u)
 
         drop = {
             "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -13926,15 +15172,20 @@ def main(args: argparse.Namespace | None = None) -> None:
     deduped = []
     _seen = set()
 
-    # normalize each individual link, then de-dupe
+    # Keep duplicate detail links during normal runs. For list-links mode,
+    # still collapse them for a cleaner discovery-only view.
     for raw_link in all_detail_links:
         link = _normalize_link(raw_link)
-
-        if link in _seen:
+        display_link = str(raw_link or "").strip().replace(" ", "")
+        if not display_link:
             continue
 
-        _seen.add(link)
-        deduped.append(link)
+        if LIST_LINKS:
+            if link in _seen:
+                continue
+            _seen.add(link)
+
+        deduped.append(display_link)
 
     after_unique = len(deduped)
     #log_line("DE-DUPE", f"{DOT3}{DOTR} Reduced {before_total} → {after_unique} unique URLs")   ignored 20251215
@@ -13965,141 +15216,241 @@ def main(args: argparse.Namespace | None = None) -> None:
                 f".SMOKE run: limiting to {smoke_cap} job detail link{'s' if smoke_cap != 1 else ''}."
             )
 
+    total_detail_links_before_window = len(all_detail_links)
+    start_detail_index = max(1, int(getattr(args, "start_detail_index", 1) or 1))
+    end_detail_index = int(getattr(args, "end_detail_index", 0) or 0)
+    effective_end_detail_index = total_detail_links_before_window
+    if total_detail_links_before_window:
+        if start_detail_index > total_detail_links_before_window:
+            raise SystemExit(
+                f"--start-detail-index {start_detail_index} is beyond the available detail link count "
+                f"({total_detail_links_before_window})."
+            )
+        if end_detail_index and end_detail_index < start_detail_index:
+            raise SystemExit("--end-detail-index must be >= --start-detail-index.")
+        effective_end_detail_index = (
+            min(end_detail_index, total_detail_links_before_window)
+            if end_detail_index
+            else total_detail_links_before_window
+        )
+        if start_detail_index != 1 or end_detail_index:
+            info(
+                f".Detail resume window: {start_detail_index}-{effective_end_detail_index} "
+                f"of {total_detail_links_before_window}"
+            )
+            all_detail_links = all_detail_links[start_detail_index - 1:effective_end_detail_index]
+    elif start_detail_index != 1 or end_detail_index:
+        raise SystemExit("No detail links were discovered, so detail resume flags cannot be applied.")
+
     if LIST_LINKS:
         info(f".LIST links: {len(all_detail_links)} after dedupe/cap (showing below)")
-        for idx, url in enumerate(all_detail_links, start=1):
+        for idx, url in enumerate(all_detail_links, start=start_detail_index):
             log_print(f"{_box('LIST')} {idx:02d}. {url}")
         return
 
-    total = len(all_detail_links)
-    info(f".Processing {total} detail link{'s' if total != 1 else ''} after dedupe/cap.")
+    detail_index_base = start_detail_index - 1
+    total = effective_end_detail_index if total_detail_links_before_window else len(all_detail_links)
+    remaining_details = len(all_detail_links)
+    info(
+        f".Processing {remaining_details} detail link{'s' if remaining_details != 1 else ''} "
+        f"after cap (duplicates preserved)."
+    )
 
     # progress setup
     kept_count = 0
     skip_count = 0
-    progress_start(len(all_detail_links))
+    restored_keep_count, restored_skip_count = _restore_rows_from_checkpoints()
+    kept_count = restored_keep_count
+    skip_count = restored_skip_count
+    progress_start(total)
+    if kept_count or skip_count:
+        progress_tick(i=kept_count + skip_count, kept=kept_count, skip=skip_count)
+    checkpoint_every_details = 0 if SMOKE else CHECKPOINT_EVERY_DETAILS
+    if checkpoint_every_details:
+        info(
+            f".Local CSV checkpoints enabled every {checkpoint_every_details} processed detail "
+            f"link{'s' if checkpoint_every_details != 1 else ''}."
+        )
+    info(f".Detail hard timeout: {DETAIL_HARD_TIMEOUT_SECONDS}s per detail link.")
+
+    last_checkpoint_detail_index = 0
+
+    def _write_local_checkpoint(processed_detail_index: int, force: bool = False) -> None:
+        nonlocal last_checkpoint_detail_index
+        if processed_detail_index <= 0:
+            return
+        if not checkpoint_every_details and not force:
+            return
+        if not force:
+            if processed_detail_index % checkpoint_every_details != 0:
+                return
+            if processed_detail_index == last_checkpoint_detail_index:
+                return
+        try:
+            write_rows_csv_snapshot(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
+            write_rows_csv_snapshot(SKIPPED_CSV, skipped_rows, SKIP_FIELDS)
+            info(
+                f".Checkpoint saved at detail {processed_detail_index}/{total}: "
+                f"keep={len(kept_rows)}, skip={len(skipped_rows)}."
+            )
+            last_checkpoint_detail_index = processed_detail_index
+        except Exception as e:
+            warn(
+                f".Checkpoint write failed at detail {processed_detail_index}/{total}: "
+                f"{e.__class__.__name__}: {e}"
+            )
 
     try:
-        for j, link in enumerate(all_detail_links, start=1):
+        for offset, link in enumerate(all_detail_links, start=1):
+            j = detail_index_base + offset
             # ensure details is always defined, even if extract_job_details blows up
             details: dict = {}
             try:
-                source_url = link
+                with _DetailWallClockTimeout(DETAIL_HARD_TIMEOUT_SECONDS, link):
+                    detail_key = normalize_url_for_key(link) or link_key(link) or link
+                    if detail_key in seen_detail_keys_this_run:
+                        ctx = listing_ctx_by_url.get(link, {}) if isinstance(listing_ctx_by_url, dict) else {}
+                        duplicate_reason = "Duplicate in current run"
+                        board = (
+                            ctx.get("Career Board")
+                            or ctx.get("career_board")
+                            or career_board_name(link)
+                            or "Missing Board"
+                        )
+                        title_hint = (
+                            ctx.get("Title")
+                            or ctx.get("title")
+                            or SIMPLYHIRED_TITLES.get(link, "")
+                            or _title_for_log({}, link)
+                        )
+                        duplicate_row = _normalize_skip_defaults({
+                            "Job URL": link,
+                            "Title": title_hint,
+                            "Job Key": detail_key,
+                            "Company": ctx.get("Company") or ctx.get("company") or board,
+                            "Career Board": board,
+                            "Reason Skipped": duplicate_reason,
+                        })
+                        _log_and_record_skip(link, duplicate_reason, duplicate_row)
+                        continue
+                    seen_detail_keys_this_run.add(detail_key)
 
-                # If you track listing context per detail URL, prefer it when present
-                ctx = listing_ctx_by_url.get(link) if isinstance(listing_ctx_by_url, dict) else None
-                if ctx:
-                    source_url = ctx.get("listing_url") or ctx.get("source_url") or link
+                    source_url = link
 
-                set_source_tag(source_url)
+                    # If you track listing context per detail URL, prefer it when present
+                    ctx = listing_ctx_by_url.get(link) if isinstance(listing_ctx_by_url, dict) else None
+                    if ctx:
+                        source_url = ctx.get("listing_url") or ctx.get("source_url") or link
 
-                html = get_html(link)
+                    set_source_tag(source_url)
 
-                # A) Could not fetch detail page → record a minimal SKIP and continue
-                if not html:
-                    default_reason = "Failed to fetch job detail page"
-                    board = career_board_name(link)
+                    html = get_html(link)
 
-                    # If this is a SimplyHired job we saw on the listing page,
-                    # reuse the captured title; otherwise fall back to URL-based guess.
-                    meta_title = SIMPLYHIRED_TITLES.get(link, "")
-                    title_for_log = _title_for_log({"Title": meta_title}, link)
+                    # A) Could not fetch detail page → record a minimal SKIP and continue
+                    if not html:
+                        default_reason = "Failed to fetch job detail page"
+                        board = career_board_name(link)
 
-                    skip_row = _normalize_skip_defaults({
-                        "Job URL": link,
-                        "Title": title_for_log,
-                        "Company": board or "Missing Company",
-                        "Career Board": board or "Missing Board",
-                        "Reason Skipped": default_reason,
-                        "WA Rule": "",
-                        "BC Rule": "",
-                        "ON Rule": "",
-                        "Remote Rule": "",
-                        "US Rule": "",
-                        "Canada Rule": "",
-                        "Salary Max Detected": "",
-                        "Salary Rule": "",
-                        "Location Chips": "",
-                        "Applicant Regions": "",
-                        "Applicant Regions Source": "",
-                    })
+                        # If this is a SimplyHired job we saw on the listing page,
+                        # reuse the captured title; otherwise fall back to URL-based guess.
+                        meta_title = SIMPLYHIRED_TITLES.get(link, "")
+                        title_for_log = _title_for_log({"Title": meta_title}, link)
 
-                    _log_and_record_skip(link, default_reason, skip_row or {"Job URL": link})
-                    continue
+                        skip_row = _normalize_skip_defaults({
+                            "Job URL": link,
+                            "Title": title_for_log,
+                            "Company": board or "Missing Company",
+                            "Career Board": board or "Missing Board",
+                            "Reason Skipped": default_reason,
+                            "WA Rule": "",
+                            "BC Rule": "",
+                            "ON Rule": "",
+                            "Remote Rule": "",
+                            "US Rule": "",
+                            "Canada Rule": "",
+                            "Salary Max Detected": "",
+                            "Salary Rule": "",
+                            "Location Chips": "",
+                            "Applicant Regions": "",
+                            "Applicant Regions Source": "",
+                        })
 
-                if "ycombinator.com" in link:
-                    html_now = html or ""
-                    has_h1 = "ycdc-section-title" in html_now
-                    #log_event("YC HTML", f"len={len(html_now)} | has_ycdc_h1={has_h1}")        #removed 20260108- activate if you want to log the length of the HTML and whether it contains the expected H1 element for YC job pages.
+                        _log_and_record_skip(link, default_reason, skip_row or {"Job URL": link})
+                        continue
 
-                    # One time dump to inspect the returned HTML
+                    if "ycombinator.com" in link:
+                        html_now = html or ""
+                        has_h1 = "ycdc-section-title" in html_now
+                        #log_event("YC HTML", f"len={len(html_now)} | has_ycdc_h1={has_h1}")        #removed 20260108- activate if you want to log the length of the HTML and whether it contains the expected H1 element for YC job pages.
+
+                        # One time dump to inspect the returned HTML
+                        try:
+                            with open("yc_debug.html", "w", encoding="utf-8") as f:
+                                f.write(html_now)
+                        except Exception:
+                            pass
+
+                    # B) we have HTML -> parse details and enrich salary
+                    details = extract_job_details(html, link)
+
+                    # DEBUG one-off: YC location correctness
                     try:
-                        with open("yc_debug.html", "w", encoding="utf-8") as f:
-                            f.write(html_now)
+                        if "ycombinator.com" in (up.urlparse(link).netloc or "").lower() and "companies/gromo/jobs" in link:
+                            host_dbg = (up.urlparse(link).netloc or "").lower()
+                            log_line(
+                                "YC CHECK",
+                                f"Location={details.get('Location')!r} | Location Raw={details.get('Location Raw')!r} | "
+                                f"Location Chips={details.get('Location Chips')!r} | Applicant Regions={details.get('Applicant Regions')!r} | "
+                                f"Country Chips={details.get('Country Chips')!r} | host={host_dbg} | url={link}"
+                            )
                     except Exception:
                         pass
 
-                # B) we have HTML -> parse details and enrich salary
-                details = extract_job_details(html, link)
+                    if "ycombinator.com" in link:
+                        log_line("YC TAP", f"Company={details.get('Company')!r} | Title={details.get('Title')!r} | job_url={details.get('job_url')!r}")        #removed 20260108- activate if you want to log the company, title, and job URL for each YC job page.
 
-                # DEBUG one-off: YC location correctness
-                try:
-                    if "ycombinator.com" in (up.urlparse(link).netloc or "").lower() and "companies/gromo/jobs" in link:
-                        host_dbg = (up.urlparse(link).netloc or "").lower()
-                        log_line(
-                            "YC CHECK",
-                            f"Location={details.get('Location')!r} | Location Raw={details.get('Location Raw')!r} | "
-                            f"Location Chips={details.get('Location Chips')!r} | Applicant Regions={details.get('Applicant Regions')!r} | "
-                            f"Country Chips={details.get('Country Chips')!r} | host={host_dbg} | url={link}"
-                        )
-                except Exception:
-                    pass
+                    listing = listing_ctx_by_url.get(link, {})
+                    details = _prefer_listing_location(details, listing)
 
-                if "ycombinator.com" in link:
-                    log_line("YC TAP", f"Company={details.get('Company')!r} | Title={details.get('Title')!r} | job_url={details.get('job_url')!r}")        #removed 20260108- activate if you want to log the company, title, and job URL for each YC job page.
-
-                listing = listing_ctx_by_url.get(link, {})
-                details = _prefer_listing_location(details, listing)
-
-                if DEBUG_LOCATION and "builtinvancouver.org" in link:
-                    host = (urlparse(link).netloc or "").lower()
-                    #log_line("BIV DEBUG", f"{DOTL}..prefer_listing: detail_loc={details.get('Location')!r} listing_loc={listing.get('Location')!r}")
+                    if DEBUG_LOCATION and "builtinvancouver.org" in link:
+                        host = (urlparse(link).netloc or "").lower()
+                        #log_line("BIV DEBUG", f"{DOTL}..prefer_listing: detail_loc={details.get('Location')!r} listing_loc={listing.get('Location')!r}")
 
 
 
-                # 1) Try to pull structured JobPosting data (datePosted, validThrough, etc.)
-                schema_bits = parse_jobposting_ldjson(html)
-                if schema_bits:
-                    # Only copy fields we care about; avoid overwriting with None
-                    for key in ("Title", "Company", "posting_date", "valid_through", "posted"):
-                        val = schema_bits.get(key)
-                        if val:
-                            details[key] = val
+                    # 1) Try to pull structured JobPosting data (datePosted, validThrough, etc.)
+                    schema_bits = parse_jobposting_ldjson(html)
+                    if schema_bits:
+                        # Only copy fields we care about; avoid overwriting with None
+                        for key in ("Title", "Company", "posting_date", "valid_through", "posted"):
+                            val = schema_bits.get(key)
+                            if val:
+                                details[key] = val
 
-                # 2) Fallback: regex-based extraction from raw HTML (Muse, Remotive, etc.)
-                html_dates = _extract_dates_from_html(html)
-                if html_dates:
-                    for k, v in html_dates.items():
-                        if v:
-                            details[k] = v
+                    # 2) Fallback: regex-based extraction from raw HTML (Muse, Remotive, etc.)
+                    html_dates = _extract_dates_from_html(html)
+                    if html_dates:
+                        for k, v in html_dates.items():
+                            if v:
+                                details[k] = v
 
-                # 3) Enrich salary and board
-                # ... keep ALL your existing logic here unchanged ...
-                # through keep_row construction, filters, salary gate, etc.
+                    # 3) Enrich salary and board
+                    # ... keep ALL your existing logic here unchanged ...
+                    # through keep_row construction, filters, salary gate, etc.
 
-                with capture_debug_rows(details):
-                    if "themuse.com" in link:
-                        msg = (
-                            "👀 DEBUG Muse dates "
-                            f"Posting Date='{details.get('Posting Date', '')}' "
-                            f"| Valid Through='{details.get('Valid Through', '')}' "
-                            f"| Posted='{details.get('Posted', '')}'"
-                        )
-                        _append_debug_row(details, msg)
+                    with capture_debug_rows(details):
+                        if "themuse.com" in link:
+                            msg = (
+                                "👀 DEBUG Muse dates "
+                                f"Posting Date='{details.get('Posting Date', '')}' "
+                                f"| Valid Through='{details.get('Valid Through', '')}' "
+                                f"| Posted='{details.get('Posted', '')}'"
+                            )
+                            _append_debug_row(details, msg)
 
-                    # Assign Job Key (URL dedupe already happened upstream)
-                    jk = _job_key(details, link)
-                    details["Job Key"] = jk
+                        # Assign Job Key (URL dedupe already happened upstream)
+                        jk = _job_key(details, link)
+                        details["Job Key"] = jk
 
                                     # compute derived fields once
                 details["WA Rule"] = details.get("WA Rule", "default")
@@ -14346,6 +15697,41 @@ def main(args: argparse.Namespace | None = None) -> None:
                     job = keep_row
 
 
+            except DetailHardTimeout as e:
+                _reset_playwright_session()
+                timeout_reason = str(e)
+                warn(f".{timeout_reason}")
+                board = career_board_name(link)
+                title_hint = details.get("Title") or SIMPLYHIRED_TITLES.get(link, "") or _title_for_log(details, link)
+                skip_row = _normalize_skip_defaults({
+                    "Job URL": link,
+                    "Title": title_hint,
+                    "Job Key": details.get("Job Key") or (normalize_url_for_key(link) or link_key(link) or link),
+                    "Company": details.get("Company") or board or "Missing Company",
+                    "Career Board": details.get("Career Board") or board or "Missing Board",
+                    "Location": details.get("Location", ""),
+                    "Posted": details.get("Posted", ""),
+                    "Posting Date": details.get("Posting Date", ""),
+                    "Valid Through": details.get("Valid Through", ""),
+                    "Reason Skipped": timeout_reason,
+                    "WA Rule": details.get("WA Rule", ""),
+                    "BC Rule": details.get("BC Rule", ""),
+                    "ON Rule": details.get("ON Rule", ""),
+                    "Remote Rule": details.get("Remote Rule", ""),
+                    "US Rule": details.get("US Rule", ""),
+                    "Canada Rule": details.get("Canada Rule", ""),
+                    "Salary Max Detected": details.get("Salary Max Detected", ""),
+                    "Salary Rule": details.get("Salary Rule", ""),
+                    "Salary Status": details.get("Salary Status", ""),
+                    "Salary Note": details.get("Salary Note", ""),
+                    "Salary Near Min": details.get("Salary Near Min", ""),
+                    "Location Chips": details.get("Location Chips", ""),
+                    "Applicant Regions": details.get("Applicant Regions", ""),
+                    "Applicant Regions Source": details.get("Applicant Regions Source", ""),
+                })
+                _inherit_debug_rows(skip_row, details)
+                _log_and_record_skip(link, timeout_reason, skip_row or {"Job URL": link})
+                continue
             except Exception as e:
                 # Catch ANY unexpected error for this job and record it
                 tb_str = traceback.format_exc()
@@ -14390,8 +15776,10 @@ def main(args: argparse.Namespace | None = None) -> None:
                 # NEW: print the debug rows immediately for error rows
                 _print_debug_rows_for(error_row)
 
-                log_print(f"ERROR", "err_msg", error_row)
+                _log_and_record_skip(link, err_msg, error_row)
                 continue
+            finally:
+                _write_local_checkpoint(j)
 
 
     finally:
@@ -14399,12 +15787,38 @@ def main(args: argparse.Namespace | None = None) -> None:
 
     log_final_reminder_if_needed(GS_SHEET_URL)
 
+    # 3) Write CSVs once per run
+    if "details" in locals() and isinstance(details, dict):
+        trace_chips(details, "FINAL_BEFORE_OUTPUT")
+        log_line("DEBUG", f"[FIELDS] Location={details.get('Location')} | Location Chips={details.get('Location Chips')} | Applicant Regions={details.get('Applicant Regions')} | ApplicantRegions={details.get('ApplicantRegions')}")
+
+    kept_count = len(kept_rows)
+    skip_count = len(skipped_rows)
+    elapsed_seconds = (datetime.now() - start_ts).seconds
+
+    info(
+        f".Playwright success {PW_SUCCESS}, failures {PW_FAIL}, fallbacks {REQ_FALLBACK}",
+    )
+    info(
+        f".Seattle partial shells: retries {SEA_PARTIAL_SHELL_RETRIES}, unrecovered {SEA_PARTIAL_SHELL_UNRECOVERED}",
+    )
+    info(
+        f".Built In family shell-like pages observed: builtin.com {BUILTIN_PARTIAL_SHELL_OBSERVED}, builtinvancouver.org {BUILTINVANCOUVER_PARTIAL_SHELL_OBSERVED}",
+    )
+    info(
+        f".Built In detail requests fast path: served {BUILTIN_DETAIL_REQUESTS_FASTPATH}, Playwright fallback {BUILTIN_DETAIL_REQUESTS_FALLBACK}",
+    )
+    info(
+        f".Y Combinator detail requests fast path: served {YC_DETAIL_REQUESTS_FASTPATH}, Playwright fallback {YC_DETAIL_REQUESTS_FALLBACK}",
+    )
+    done_log(f".Kept {kept_count}, Skipped {skip_count} in {elapsed_seconds}s")
+
     # --- SMOKE safeguard: ask before writing anything -----------------
     # args is still in scope here inside main()
     if getattr(args, "smoke", False):
         try:
             reply = input(
-                "\nSMOKE run complete. Save results to CSV/Sheets? [y/N]: "
+                "\nSummary complete. Save SMOKE results to CSV/Sheets? [y/N]: "
             ).strip().lower()
         except EOFError:
             # Non-interactive (CI/automation) fallback: default to "no"
@@ -14417,40 +15831,45 @@ def main(args: argparse.Namespace | None = None) -> None:
             return
     # ------------------------------------------------------------------
 
-    # 3) Write CSVs once per run
-    if "details" in locals() and isinstance(details, dict):
-        trace_chips(details, "FINAL_BEFORE_OUTPUT")
-        log_line("DEBUG", f"[FIELDS] Location={details.get('Location')} | Location Chips={details.get('Location Chips')} | Applicant Regions={details.get('Applicant Regions')} | ApplicantRegions={details.get('ApplicantRegions')}")
-    write_rows_csv(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
-    write_rows_csv(SKIPPED_CSV, skipped_rows, SKIP_FIELDS)
-
-    # 3b) Push to Google Sheets
-    push_results_to_sheets(
-        GS_SHEET_URL,
-        kept_rows,
-        skipped_rows,
-        KEEP_FIELDS,
-        SKIP_FIELDS,
-        tab_name=GS_TAB_NAME,
-        key_path=GS_KEY_PATH,
-        progress_clear=progress_clear_if_needed,
-    )
-
-    kept_count = len(kept_rows)
-    skip_count = len(skipped_rows)
-
-
-    info(
-        f".Playwright success {PW_SUCCESS}, failures {PW_FAIL}, fallbacks {REQ_FALLBACK}",
-    )
-    done_log(f".Kept {kept_count}, Skipped {skip_count} "
-          f"in {(datetime.now() - start_ts).seconds}s")
+    write_rows_csv_snapshot(OUTPUT_CSV, kept_rows, KEEP_FIELDS)
+    write_rows_csv_snapshot(SKIPPED_CSV, skipped_rows, SKIP_FIELDS)
     done_log(f".CSV: {OUTPUT_CSV}")
     done_log(f".CSV: {SKIPPED_CSV}")
 
+    # 3b) Push to Google Sheets
+    prompt_label = _quick_run_sheet_prompt_label(args)
+    should_push_to_sheets = True
+    if (
+        prompt_label
+        and GS_SHEET_URL
+        and (kept_rows or skipped_rows)
+        and _is_interactive()
+    ):
+        try:
+            reply = input(
+                "\nSummary complete. Push results to Google Sheets? [y/N]: "
+            ).strip().lower()
+        except EOFError:
+            reply = "n"
+
+        should_push_to_sheets = reply in ("y", "yes")
+        if not should_push_to_sheets:
+            info(f"{prompt_label}: user chose not to push results to Google Sheets.")
+
+    if should_push_to_sheets:
+        push_results_to_sheets(
+            GS_SHEET_URL,
+            kept_rows,
+            skipped_rows,
+            KEEP_FIELDS,
+            SKIP_FIELDS,
+            tab_name=GS_TAB_NAME,
+            key_path=GS_KEY_PATH,
+            progress_clear=progress_clear_if_needed,
+        )
+
     kept_rows.clear()
     skipped_rows.clear()
-
 
     # ---- Optional Git push (controlled by GIT_PUSH_MODE) ----
     commit_msg = f"scraper: {RUN_TS} kept={kept_count} skipped={skip_count}"

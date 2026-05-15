@@ -123,7 +123,7 @@ def _progress_enabled() -> bool:
         return False
     if mode in {"1", "true", "on", "yes", "force"}:
         return True
-    return sys.stdout.isatty() and sys.stderr.isatty()
+    return sys.stderr.isatty()
 
 
 LIVE_PROGRESS_ENABLED = _progress_enabled()
@@ -240,44 +240,67 @@ def _bkts() -> str:
 
 # width used by wrapped logger
 _LOG_WRAP_WIDTH = 120  # or detect terminal width if you prefer  (hard wrap)
+_LOG_WRAP_RIGHT_MARGIN = 2
+
+def _wrap_render_rows(msg: str, body_width: int, *, collapse_whitespace: bool = False) -> list[str]:
+    rows: list[str] = []
+    source = str(msg or "")
+    if collapse_whitespace:
+        source = " ".join(source.split())
+    for raw_line in source.splitlines() or [""]:
+        parts = textwrap.wrap(
+            raw_line or "",
+            width=max(20, body_width),
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=False,
+            drop_whitespace=False,
+        )
+        rows.extend(parts or [""])
+    return rows
+
+
+def _render_prefixed_block(
+    head: str,
+    body: str,
+    *,
+    color: str | None = None,
+    width: int | None = None,
+    collapse_whitespace: bool = False,
+) -> None:
+    plain_head = re.sub(r"\x1b\[[0-9;]*m", "", str(head or ""))
+    ts = _bkts()
+    first_prefix_plain = f"{ts} {plain_head}"
+    first_prefix_display = f"{ts} {head}"
+    continuation_prefix = " " * len(first_prefix_plain)
+    total_width = width or shutil.get_terminal_size(fallback=(120, 22)).columns
+    body_width = max(20, total_width - len(first_prefix_plain) - _LOG_WRAP_RIGHT_MARGIN)
+
+    rendered: list[str] = []
+    for idx, row in enumerate(_wrap_render_rows(body, body_width, collapse_whitespace=collapse_whitespace)):
+        prefix = first_prefix_display if idx == 0 else continuation_prefix
+        rendered.append(f"{prefix}{row}")
+
+    log_print("\n".join(rendered), color=color, color_prefix=bool(color))
+
 
 def _bk_log_wrap(section: str, msg: str, indent: int = 1, width: int | None = None) -> None:
     """Timestamped, wrapped logger that plays nice with progress lines."""
-    import shutil, textwrap, builtins, datetime as _dt, re
-    try:
-        progress_clear_if_needed()
-    except NameError:
-        pass
-    # Avoid double timestamps if msg is already prefixed (e.g., upstream logger)
-    #already_ts = bool(re.match(r"\[\d{4}-\d{2}-\d{2}", str(msg).lstrip()))
+    import builtins, datetime as _dt
     section_label = str(section)
     m = re.search(r"\b(INFO|WARN|ERROR|KEEP|SKIP|DONE|GS)\b", section_label.upper())
     label = m.group(1) if m else ""
     whole_line_color = LEVEL_COLOR.get(label, RESET) if _ansi_ok() and label else None
-    head = f"[{section_label:<22}]" if whole_line_color else _paint(section_label)
 
-    TS_PREFIX_WIDTH = 22  # "[YYYY-MM-DD HH:MM:SS] " (added by log_print)
-    sub_indent = " " * (TS_PREFIX_WIDTH + len(head))
-
-    width = width or shutil.get_terminal_size(fallback=(120, 22)).columns
-    body = textwrap.fill(
+    plain_head = f"[{section_label:<22}]"
+    display_head = plain_head if whole_line_color else _paint(section_label)
+    _render_prefixed_block(
+        display_head,
         str(msg),
+        color=whole_line_color,
         width=width,
-        subsequent_indent=sub_indent,
-        break_long_words=False,
-        break_on_hyphens=False,
+        collapse_whitespace=False,
     )
-    line = f"{head}{body}"
-
-    # Color the entire line for levels where the body should inherit the same color.
-    if whole_line_color:
-        line = f"{whole_line_color}{line}{RESET}"
-
-    log_print(line)
-    try:
-        progress_refresh_after_log()
-    except NameError:
-        pass
 
 # colors + painter
 RESET="\033[0m"; BOLD="\033[1m"; DIM="\033[2m"; RED="\033[31m"; YELLOW="\033[33m"; GREEN="\033[32m"; CYAN="\033[36m"; BLUE="\033[34m"; MAGENTA="\033[35m"
@@ -285,7 +308,7 @@ BRIGHT_GREEN = "\033[92m"
 
 def _ansi_ok() -> bool:
     import sys, os
-    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    return sys.stderr.isatty() and os.environ.get("NO_COLOR") is None
 
 def FG256(n: int) -> str:
     return f"\033[38;5;{n}m"
@@ -295,12 +318,12 @@ def FG256(n: int) -> str:
 
 LEVEL_COLOR = {
     "ERROR": RED, "WARN": YELLOW, "INFO": CYAN,
-    "KEEP": DIM + GREEN, "SKIP": DIM + MAGENTA, "SETUP": RESET,
-    "ENV": RESET, "BACKUP": RESET, "DONE": RESET, "GS": CYAN,
+    "KEEP": GREEN, "SKIP": RED, "SETUP": RESET,
+    "ENV": RESET, "BACKUP": RESET, "DONE": GREEN, "GS": CYAN,
 }
 # Accent colors to make KEEP/SKIP title lines pop
 KEEP_TITLE_COLOR = GREEN
-SKIP_TITLE_COLOR = MAGENTA
+SKIP_TITLE_COLOR = RED
 
 def _paint(label: str) -> str:
     color = LEVEL_COLOR.get(label.upper())
@@ -311,7 +334,21 @@ def _paint(label: str) -> str:
     return f"{color}[{label:<22}]{RESET}"
 
 def log_line(label: str, msg: str, width: int | None = None) -> None:
-    _bk_log_wrap(label, msg, width=width or _LOG_WRAP_WIDTH)
+    _bk_log_wrap(label, msg, width=width)
+
+
+def trace_chips(details: dict, label: str) -> None:
+    """Route chip trace lines through the main wrapped logger."""
+    try:
+        log_line(
+            "DEBUG",
+            f"[CHIPS TRACE] {label} | "
+            f"Location={details.get('Location')!r} | "
+            f"Location Chips={details.get('Location Chips')!r} | "
+            f"Source={details.get('Location Chips Source')!r}",
+        )
+    except Exception:
+        pass
 
 # convenient shorthands (use these everywhere)
 def env(msg: str) -> None:
@@ -322,13 +359,40 @@ def warn(msg: str) -> None:
     log_line("WARN", msg)
 def setup(msg: str) -> None:    log_line("SETUP", msg)
 _DEBUG_ROW_STACK: list[dict] = []
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_TRANSIENT_PROGRESS_DEBUG_RE = re.compile(
+    r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+\[[^\]]*\bPROGRESS\b[^\]]*\]\s+\d+/\d+\s+Kept\s+\d+\s+Skip\s+\d+$"
+)
+
+
+def _is_transient_progress_debug_line(msg: str) -> bool:
+    """Return True when a captured DEBUG row is just the live progress telemetry."""
+    cleaned = _ANSI_RE.sub("", str(msg or "")).replace("\r", "").strip()
+    if not cleaned:
+        return False
+    return bool(_TRANSIENT_PROGRESS_DEBUG_RE.match(cleaned))
+
+
+def _iter_persistable_debug_rows(msg: str) -> list[str]:
+    """Split captured DEBUG text and drop any transient progress-only lines."""
+    rows: list[str] = []
+    for raw_line in str(msg or "").replace("\r", "\n").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _is_transient_progress_debug_line(line):
+            continue
+        rows.append(line)
+    return rows
 
 def debug(msg: str) -> None:
     """Route DEBUG lines into the active job context when available."""
     if _DEBUG_ROW_STACK:
         target = _DEBUG_ROW_STACK[-1]
         if isinstance(target, dict):
-            target.setdefault("__debug_rows", []).append(str(msg))
+            rows = _iter_persistable_debug_rows(msg)
+            if rows:
+                target.setdefault("__debug_rows", []).extend(rows)
             return
 def backup(msg: str) -> None:   log_line("BACKUP", msg)
 def keep_log(msg: str) -> None: log_line("KEEP", msg)
@@ -343,7 +407,9 @@ def _append_debug_row(target: dict | None, msg: str) -> None:
     if not isinstance(target, dict):
         debug(msg)
         return
-    target.setdefault("__debug_rows", []).append(str(msg))
+    rows = _iter_persistable_debug_rows(msg)
+    if rows:
+        target.setdefault("__debug_rows", []).extend(rows)
 
 
 def _inherit_debug_rows(target: dict | None, *sources: dict | None) -> None:
@@ -355,7 +421,13 @@ def _inherit_debug_rows(target: dict | None, *sources: dict | None) -> None:
             continue
         rows = src.get("__debug_rows")
         if rows:
-            target.setdefault("__debug_rows", []).extend(rows)
+            persisted = [
+                row
+                for raw in rows
+                for row in _iter_persistable_debug_rows(raw)
+            ]
+            if persisted:
+                target.setdefault("__debug_rows", []).extend(persisted)
 
 
 def _print_debug_rows_for(data: dict | None, *, color: str | None = None) -> None:
@@ -368,6 +440,8 @@ def _print_debug_rows_for(data: dict | None, *, color: str | None = None) -> Non
 
     # Reuse the main wrapped logger so DEBUG rows word-wrap like other lines.
     for row in rows:
+        if _is_transient_progress_debug_line(row):
+            continue
         # DOTL prefix keeps the visual style you already use in other messages.
         log_line("DEBUG", f"{DOTL}{row}")
 
@@ -418,8 +492,8 @@ if 'log' not in globals() or isinstance(globals()['log'], logging.Logger):
 # --- live progress state + helpers (single place, top-level) ---
 import shutil
 from wcwidth import wcswidth
-from threading import Event, Thread, Lock
-_IO_LOCK = Lock()
+from threading import Event, Thread, RLock
+_IO_LOCK = RLock()
 
 
 
@@ -430,6 +504,7 @@ def _dispw(s: str) -> int:
 
 _SPINNER_FRAMES = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 PROGRESS_REFRESH_INTERVAL = 0.5
+PROGRESS_REDRAW_AFTER_LOG_DELAY = 0.2
 _PROGRESS_STATE = {
     "active": False,
     "current": 0,
@@ -441,6 +516,7 @@ _PROGRESS_STATE = {
     "last_line": "",
     "last_width": 0,
     "last_render": 0.0,
+    "last_log_at": 0.0,
     "needs_redraw": False,
 }
 _SPINNER_THREAD: Thread | None = None
@@ -468,34 +544,45 @@ def _progress_now() -> str:
 
 
 def _progress_render(force: bool = False) -> None:
-    state = _PROGRESS_STATE
-    if not state["active"]:
-        return
-    now = time.time()
-    if not force and (now - state["last_render"]) < PROGRESS_REFRESH_INTERVAL:
-        return
-    state["spinner"] = (state["spinner"] + 1) % len(_SPINNER_FRAMES)
-    line = _progress_now()
+    with _IO_LOCK:
+        state = _PROGRESS_STATE
+        if not state["active"]:
+            return
+        if (
+            not force
+            and state["current"] <= 0
+            and state["kept"] <= 0
+            and state["skip"] <= 0
+        ):
+            return
+        now = time.time()
+        if not force and (now - state["last_render"]) < PROGRESS_REFRESH_INTERVAL:
+            return
+        if not force and (now - state.get("last_log_at", 0.0)) < PROGRESS_REDRAW_AFTER_LOG_DELAY:
+            return
+        state["spinner"] = (state["spinner"] + 1) % len(_SPINNER_FRAMES)
+        line = _progress_now()
 
-    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
-    pad_to = max(cols - 1, 1)  # leave a little breathing room
+        cols = shutil.get_terminal_size(fallback=(120, 20)).columns
+        pad_to = max(cols - 1, 1)  # leave a little breathing room
 
-    visible = _dispw(line)
-    if visible < pad_to:
-        out = line + (" " * (pad_to - visible))
-    else:
-        out = line
+        visible = _dispw(line)
+        if visible < pad_to:
+            out = line + (" " * (pad_to - visible))
+        else:
+            out = line
 
-    sys.stdout.write("\r" + out)
-    sys.stdout.flush()
-    state["last_line"] = line
-    state["last_width"] = pad_to
-    state["last_render"] = now
-    state["needs_redraw"] = False
+        sys.stderr.write("\r" + out)
+        sys.stderr.flush()
+        state["last_line"] = line
+        state["last_width"] = pad_to
+        state["last_render"] = now
+        state["needs_redraw"] = False
 
 
 def progress_set_total(n: int) -> None:
-    _PROGRESS_STATE["total"] = max(0, int(n or 0))
+    with _IO_LOCK:
+        _PROGRESS_STATE["total"] = max(0, int(n or 0))
 
 
 def start_spinner(n: int) -> None:
@@ -505,67 +592,72 @@ def start_spinner(n: int) -> None:
 def progress_start(total: int) -> None:
     if not LIVE_PROGRESS_ENABLED:
         return
-    state = _PROGRESS_STATE
-    state.update(
-        active=True,
-        current=0,
-        kept=0,
-        skip=0,
-        total=max(0, int(total or 0)),
-        start=time.time(),
-        spinner=-1,
-        last_line="",
-        last_width=0,
-        last_render=0.0,
-        needs_redraw=False,
-    )
-    _progress_render(force=True)
+    with _IO_LOCK:
+        state = _PROGRESS_STATE
+        state.update(
+            active=True,
+            current=0,
+            kept=0,
+            skip=0,
+            total=max(0, int(total or 0)),
+            start=time.time(),
+            spinner=-1,
+            last_line="",
+            last_width=0,
+            last_render=0.0,
+            last_log_at=0.0,
+            needs_redraw=False,
+        )
     _spinner_start()
 
 
 def progress_tick(i: int | None = None, kept: int | None = None, skip: int | None = None) -> None:
     if not LIVE_PROGRESS_ENABLED:
         return
-    state = _PROGRESS_STATE
-    if not state["active"]:
-        return
-    if i is None:
-        state["current"] += 1
-    else:
-        state["current"] = max(0, int(i))
-    if kept is not None:
-        state["kept"] = max(0, int(kept))
-    if skip is not None:
-        state["skip"] = max(0, int(skip))
+    with _IO_LOCK:
+        state = _PROGRESS_STATE
+        if not state["active"]:
+            return
+        if i is None:
+            state["current"] += 1
+        else:
+            state["current"] = max(0, int(i))
+        if kept is not None:
+            state["kept"] = max(0, int(kept))
+        if skip is not None:
+            state["skip"] = max(0, int(skip))
     _progress_render()
 
 
 def progress_clear_if_needed(permanent: bool = False) -> None:
     if not LIVE_PROGRESS_ENABLED:
         return
-    state = _PROGRESS_STATE
-    if not state["last_line"] and not state["active"]:
-        return
-    cols = shutil.get_terminal_size(fallback=(120, 20)).columns
-    pad_to = max(cols - 1, 1)
+    with _IO_LOCK:
+        state = _PROGRESS_STATE
+        if not state["last_line"] and not state["active"]:
+            return
+        cols = shutil.get_terminal_size(fallback=(120, 20)).columns
+        pad_to = max(cols - 1, 1)
 
-    sys.stdout.write("\r" + (" " * pad_to) + "\r")
-    sys.stdout.flush()
-    state["needs_redraw"] = not permanent
-    if permanent:
-        state["active"] = False
-        state["last_line"] = ""
-        state["last_width"] = 0
+        sys.stderr.write("\r" + (" " * pad_to) + "\r")
+        sys.stderr.flush()
+        state["needs_redraw"] = not permanent
+        if permanent:
+            state["active"] = False
+            state["last_line"] = ""
+            state["last_width"] = 0
+            state["last_log_at"] = 0.0
 
 
 def progress_refresh_after_log(force: bool = False) -> None:
     if not LIVE_PROGRESS_ENABLED:
         return
-    state = _PROGRESS_STATE
-    if not state["active"]:
-        return
-    if force or state["needs_redraw"]:
-        _progress_render(force=True)
+    with _IO_LOCK:
+        state = _PROGRESS_STATE
+        if not state["active"]:
+            return
+        if force or state["needs_redraw"]:
+            _progress_render(force=True)
 
 
 def progress_done() -> None:
@@ -611,23 +703,26 @@ _builtin_print = print
 
 
 def log_print(msg: str, color: str | None = None, color_prefix: bool = False) -> None:
-    # Avoid double timestamps if msg already contains one
-    has_ts = bool(re.match(r"^\s*\[\d{4}-\d{2}-\d{2}", str(msg)))
-    prefix = "" if has_ts else _bkts()
-    progress_clear_if_needed()
-    lead = f"{prefix + ' ' if prefix else ''}"
-    body = f"{msg}"
-    if color and _ansi_ok():
-        if color_prefix:
-            line = f"{color}{lead}{body}{RESET}"
+    with _IO_LOCK:
+        # Avoid double timestamps if msg already contains one
+        plain_msg = re.sub(r"\x1b\[[0-9;]*m", "", str(msg))
+        has_ts = bool(re.match(r"^\s*\[\d{4}-\d{2}-\d{2}", plain_msg))
+        prefix = "" if has_ts else _bkts()
+        progress_clear_if_needed()
+        if LIVE_PROGRESS_ENABLED and _PROGRESS_STATE.get("active"):
+            _PROGRESS_STATE["last_log_at"] = time.time()
+        lead = f"{prefix + ' ' if prefix else ''}"
+        body = f"{msg}"
+        if color and _ansi_ok():
+            if color_prefix:
+                line = f"{color}{lead}{body}{RESET}"
+            else:
+                line = f"{lead}{color}{body}{RESET}"
         else:
-            line = f"{lead}{color}{body}{RESET}"
-    else:
-        line = f"{lead}{body}"
+            line = f"{lead}{body}"
 
-    # IMPORTANT: send logs to stderr so stdout is reserved for the spinner line
-    print(line, file=sys.stderr)
-    progress_refresh_after_log()
+        # IMPORTANT: send logs to stderr so stdout is reserved for the spinner line
+        print(line, file=sys.stderr, flush=True)
 
 
 
@@ -7686,7 +7781,8 @@ STARTING_PAGES = [
     "https://jobright.ai/jobs/search?value=product+manager",
 
 
-
+    #Costco
+    "https://phf.tbe.taleo.net/phf02/ats/careers/v2/searchResults?org=COSTCO&cws=41",
 
     # HubSpot (server-rendered listings; crawl like a board)
     #"https://www.hubspot.com/careers/jobs?q=product&;page=1",
@@ -13031,17 +13127,26 @@ def log_info_processing(url: str, prefix: str = ""):
     c = LEVEL_COLOR.get("INFO", RESET)
     lead = f"{prefix} " if prefix else ""
     msg = f"{lead}Processing listing page: {url}"
-    for ln in _wrap_lines(msg, width=120):
-        log_print(f"{c}{_info_box()}.{ln}{RESET}")
+    _render_prefixed_block(
+        _info_box(),
+        f".{msg}",
+        color=c,
+        collapse_whitespace=True,
+    )
 
 
 
 def log_info_found(n: int, url: str, elapsed_s: float):
     progress_clear_if_needed()
-    c = LEVEL_COLOR.get("INFO", RESET)
+    c = BLUE
     host = _host(url)
     # Example: [🔎 FOUND 60           ].candidate job links on edtech.com in 71.7s
-    log_print(f"{c}{_found_box(n)}.candidate job links on {host} in {elapsed_s:.1f}s{RESET}")
+    _render_prefixed_block(
+        _found_box(n),
+        f".candidate job links on {host} in {elapsed_s:.1f}s",
+        color=c,
+        collapse_whitespace=True,
+    )
     # repaint the progress line if one is active
     #refresh_progress()
 
@@ -13050,7 +13155,7 @@ def log_info_done():
     progress_clear_if_needed()
     c = LEVEL_COLOR.get("INFO", RESET)
     # Example: [✔ DONE                ].
-    log_print(f"{c}{_done_box()}" + f"{RESET}")
+    _render_prefixed_block(_done_box(), "", color=c)
     # repaint the progress line if one is active
     #refresh_progress()
 
@@ -13707,8 +13812,8 @@ def _center_fit(label: str, width: int) -> str:
 
 def _progress_print(msg: str) -> None:
     """Draw/overwrite the single progress line in-place."""
-    sys.stdout.write("\r\033[2K" + msg)
-    sys.stdout.flush()
+    sys.stderr.write("\r\033[2K" + msg)
+    sys.stderr.flush()
 
 import atexit
 
@@ -14052,13 +14157,6 @@ import re  # make sure this is available at top-of-file
 import textwrap
 
 
-def _wrap_lines(s: str, width: int = 100) -> list[str]:
-    s = " ".join((s or "").split())
-    if not s:
-        return [""]
-    return [s[i:i+width] for i in range(0, len(s), width)]
-
-
 def _salary_payload_22(d: dict) -> str:
     """
     Terminal payload text, padded or trimmed to exactly 22 visible cells.
@@ -14122,7 +14220,7 @@ def log_event(level: str,
               left: str = "",
               right=None,
               *, job=None, url: str | None = None,
-              width: int = 120,
+              width: int | None = None,
               reason: str | None = None,
               **_):
 
@@ -14158,8 +14256,13 @@ def log_event(level: str,
 
     # Helper to wrap and print one block
     def _emit(txt: str):
-        for ln in _wrap_lines(str(txt), width=width):
-            log_print(f"{color}{tag}.{ln}{RESET}")
+        _render_prefixed_block(
+            tag,
+            f".{txt}",
+            color=color,
+            width=width,
+            collapse_whitespace=True,
+        )
 
     # Build left text once
     left_txt = " ".join((left or "").split())
@@ -14175,9 +14278,7 @@ def log_event(level: str,
         if left_txt:
             _emit(left_txt)
         if url:
-            for ln in _wrap_lines(url, width=width):
-                log_print(f"{color}{tag}{DOT4}{ln}{RESET}")
-        #refresh_progress()
+            _render_prefixed_block(tag, f"{DOT4}{url}", color=color, width=width)
         return
 
     # Detailed KEEP / SKIP layout
@@ -14186,20 +14287,17 @@ def log_event(level: str,
     if lvl == "KEEP":
         progress_clear_if_needed()
         keep_tag = _box("KEEP ")
-        keep_body_color = None  # no body highlighting requested
 
         # --- Title (first line) ---
         title_txt = (job_dict.get("Title") or "").strip()
         if title_txt:
-            for ln in _wrap_lines(title_txt, width=width):
-                log_print(f"{keep_tag}.{ln}", color=KEEP_TITLE_COLOR, color_prefix=True)
-
-    #        wrapped = _wrap_lines(title_txt, width=width)
-    #        for i, ln in enumerate(wrapped):
-    #            if i == 0:
-    #                log_print(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
-    #            else:
-    #                log_print_plain(f"{_box('KEEP ')}.{ln}", color=KEEP_TITLE_COLOR)
+            _render_prefixed_block(
+                keep_tag,
+                f".{title_txt}",
+                color=KEEP_TITLE_COLOR,
+                width=width,
+                collapse_whitespace=True,
+            )
 
         company = (job_dict.get("Company") or "").strip() or "Missing Company"
         board   = ((job_dict.get("Career Board") or job_dict.get("career_board") or "").strip()
@@ -14209,14 +14307,18 @@ def log_event(level: str,
         #company = (job_dict.get("Company") or "Missing Company").strip()
         #board   = (job_dict.get("Career Board") or "Missing Board").strip()
         progress_clear_if_needed()
-        for ln in _wrap_lines(f"{color}{board}{DOT6}{company}{RESET}", width=width):
-            log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+        _render_prefixed_block(
+            keep_tag,
+            f"{DOT3}{board}{DOT6}{company}",
+            color=color,
+            width=width,
+            collapse_whitespace=True,
+        )
 
         # --- URL line ---
         if url:
-            for ln in _wrap_lines(url, width=width):
-                progress_clear_if_needed()
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+            progress_clear_if_needed()
+            _render_prefixed_block(keep_tag, f"{DOT3}{url}", color=color, width=width)
         loc = (job_dict.get("Location") or "").strip()
         if loc:
             remote_term = (
@@ -14226,46 +14328,60 @@ def log_event(level: str,
                 or job_dict.get("remote_flag")
                 or "Remote"
             )
-            loc_line = f"{color}{remote_term} Location: {loc}."
-            for ln in _wrap_lines(loc_line, width=width):
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+            loc_line = f"{DOT3}{remote_term} Location: {loc}."
+            _render_prefixed_block(
+                keep_tag,
+                loc_line,
+                color=color,
+                width=width,
+                collapse_whitespace=True,
+            )
         apply_note = job_dict.get("Apply URL Note", "")
         if apply_note:
-            for ln in _wrap_lines(f"Apply note: {apply_note}", width=width):
-                log_print(f"{color}{keep_tag}{DOT3}{ln}", color=keep_body_color)
+            _render_prefixed_block(
+                keep_tag,
+                f"{DOT3}Apply note: {apply_note}",
+                color=color,
+                width=width,
+                collapse_whitespace=True,
+            )
 
         # --- Always show Salary line with fixed 22-cell width ---
-        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
-        log_print(f"{color}{_box('SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
-        #log_line("SALARY", {DOT3}_vis_fit(salary_str or "Missing or Unknown", 22))
+        _render_prefixed_block(
+            _box("SALARY "),
+            f"{DOT3}{_salary_payload_22(job_dict)}",
+            color=color,
+            width=width,
+        )
 
-
-
-        #if vis or score or mark:
-        #    log_print(f"{color}{_conf_box(vis, score, mark)}.{RESET}")
-
-        _print_debug_rows_for(job_dict, color=keep_body_color)
-        log_print(f"{color}{_box('DONE ')}.✅ {RESET}")
+        _print_debug_rows_for(job_dict, color=color)
+        _render_prefixed_block(_box("DONE "), ".✅", color=color, width=width, collapse_whitespace=True)
         return
 
     if lvl == "SKIP":
         progress_clear_if_needed()
         if title:
-            wrapped = _wrap_lines(title, width=width)
-            for i, ln in enumerate(wrapped):
-                if i == 0:
-                    log_print(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR, color_prefix=True)
-                else:
-                    log_print(f"{_box('SKIP ')}.{ln}", color=SKIP_TITLE_COLOR)
+            _render_prefixed_block(
+                _box("SKIP "),
+                f".{title}",
+                color=SKIP_TITLE_COLOR,
+                width=width,
+                collapse_whitespace=True,
+            )
 
         if career_board or company:
             progress_clear_if_needed()
-            log_print(f"{color}{_box('SKIP ')}{DOT3}{career_board}{DOT6}{company}{RESET}")
+            _render_prefixed_block(
+                _box("SKIP "),
+                f"{DOT3}{career_board}{DOT6}{company}",
+                color=color,
+                width=width,
+                collapse_whitespace=True,
+            )
 
         if url:
-            for ln in _wrap_lines(url, width=width):
-                progress_clear_if_needed()
-                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+            progress_clear_if_needed()
+            _render_prefixed_block(_box("SKIP "), f"{DOT3}{url}", color=color, width=width)
         loc = (job_dict.get("Location") or "").strip()
         if loc:
             remote_term = (
@@ -14275,30 +14391,39 @@ def log_event(level: str,
                 or job_dict.get("remote_flag")
                 or "Remote"
             )
-            loc_line = f"{remote_term} Location: {loc}."
-            for ln in _wrap_lines(loc_line, width=width):
-                log_print(f"{color}{_box('SKIP ')}{DOT3}{ln}{RESET}")
+            loc_line = f"{DOT3}{remote_term} Location: {loc}."
+            _render_prefixed_block(
+                _box("SKIP "),
+                loc_line,
+                color=color,
+                width=width,
+                collapse_whitespace=True,
+            )
 
         # --- Always show Salary line with fixed 22-cell width ---
-        salary_str = _fmt_salary_line(job_dict) if isinstance(job_dict, dict) else ""
-        log_print(f"{color}{_box('SALARY ')}{DOT3}{_salary_payload_22(job_dict)}{RESET}")
-        #log_line("SALARY", {DOT3} _vis_fit(salary_str or "Missing or Unknown", 22))
-
-
+        _render_prefixed_block(
+            _box("SALARY "),
+            f"{DOT3}{_salary_payload_22(job_dict)}",
+            color=color,
+            width=width,
+        )
 
         # use the explicit reason parameter if provided, otherwise the dict
         # prefer explicit reason argument, fall back to dict field
         reason_text = (reason or "").strip() or job_dict.get("Reason Skipped") or ""
         if reason_text:
-            for ln in _wrap_lines(reason_text, width=width):
-                progress_clear_if_needed()
-                log_print(f"{color}{_box('SKIP ')}...{ln}{RESET}")
+            progress_clear_if_needed()
+            _render_prefixed_block(
+                _box("SKIP "),
+                f"...{reason_text}",
+                color=color,
+                width=width,
+                collapse_whitespace=True,
+            )
 
-        #if vis or score or mark:
-        #    log_print(f"{color}{_conf_box(vis, score, mark)}{RESET}")
         progress_clear_if_needed()
         _print_debug_rows_for(job_dict, color=color)
-        log_print(f"{color}{_box('DONE ')}.🚫{RESET}")
+        _render_prefixed_block(_box("DONE "), ".🚫", color=color, width=width, collapse_whitespace=True)
         return
 
 
@@ -15262,9 +15387,6 @@ def main(args: argparse.Namespace | None = None) -> None:
     restored_keep_count, restored_skip_count = _restore_rows_from_checkpoints()
     kept_count = restored_keep_count
     skip_count = restored_skip_count
-    progress_start(total)
-    if kept_count or skip_count:
-        progress_tick(i=kept_count + skip_count, kept=kept_count, skip=skip_count)
     checkpoint_every_details = 0 if SMOKE else CHECKPOINT_EVERY_DETAILS
     if checkpoint_every_details:
         info(
@@ -15272,6 +15394,9 @@ def main(args: argparse.Namespace | None = None) -> None:
             f"link{'s' if checkpoint_every_details != 1 else ''}."
         )
     info(f".Detail hard timeout: {DETAIL_HARD_TIMEOUT_SECONDS}s per detail link.")
+    progress_start(total)
+    if kept_count or skip_count:
+        progress_tick(i=kept_count + skip_count, kept=kept_count, skip=skip_count)
 
     last_checkpoint_detail_index = 0
 

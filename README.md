@@ -3,7 +3,7 @@
 </p>
 <br>
 
-# Job Intelligence & Workflow Automation
+# Jesse | Job Intelligence & Workflow Automation
 
 
 A personal project that helps me track job opportunities with structure, clarity, and consistent rules. It collects job links from several career boards, enriches them with logic I designed, and writes everything to CSV files that I can review quickly.
@@ -15,24 +15,49 @@ This project grew as I learned Python and explored ways to automate repetitive w
 
 
 ## Table of Contents
-- [What the Scraper Does](#what-the-scraper-does)
+- [Why This Exists](#why-this-exists)
+- [What Jesse Does/Core Capabilities](#what-the-jesse-doescore-capabilities)
 - [Project Goals](#project-goals)
 - [Current Features](#current-features)
+- [Example Classification Logic](#example-classification-logic)
+- [Workflow Ecosystem](#workflow-ecosystem)
+- [Architecture Philosophy](#architecture-philosophy)
+- [Operational Visibility](#operational-visibility)
+- [Product Thinking in Practice](#product-thinking-in-practice)
+- [Design Principles](#design-principles)
+- [Project Status](#project-status)
 - [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
 - [How to Run It](#how-to-run-it)
 - [Future Improvements](#future-improvements)
+- [Current Challenges & Learnings](#current-challenges--learnings)
 - [Why I Built This](#why-i-built-this)
 <br>
+
+
+
+
+## Why This Exists
+Most job searches create noise:
+duplicate postings, inconsistent salary information, scattered tracking systems, and endless manual review.
+
+This project was designed to reduce that noise.
+
+Jesse acts as a lightweight job intelligence system that gathers opportunities, applies structured decision logic, and creates cleaner inputs for downstream workflows like resume tailoring, application tracking, and reporting.
+
+The long-term goal is not just automation.
+It is better decision-making through structured information.
 <br>
 
 
 
-## What The Scraper Does
-- Collects job links from supported boards
+
+## What Jesse Does/Core Capabilities
+- Aggregates opportunities from multiple job platforms
 - Extracts attributes such as title, company, salary text, location, and posting dates
 - Applies rules to classify each job as a keep or skip
 - Logs progress and decisions in the terminal
-- Writes final results to CSV files for easy sorting
+- Produces structured outputs for downstream review and analysis
 <br>
 
 
@@ -56,6 +81,109 @@ This project grew as I learned Python and explored ways to automate repetitive w
 - CSV output with clear data fields
 - Salary extraction and rule evaluation
 - Validation for date and location fields
+<br>
+
+
+
+
+## Example Classification Logic
+Jesse evaluates opportunities using rule-based filters such as:
+
+- Salary thresholds
+- Remote eligibility
+- Duplicate detection
+- Location normalization
+- Title matching
+- Platform-specific parsing rules
+
+Example:
+- Remote + salary range + product-related title → Keep
+- Duplicate posting across multiple boards → Skip
+<br>
+
+
+
+
+## Workflow Ecosystem
+Jesse is part of a broader personal workflow system:
+
+- **Jesse**  
+  Job intelligence and classification engine
+- **Juno**  
+  Structured job application workflow manager
+- **Notie**  
+  Notion-based tracking and operational workspace
+- **Looker Studio**  
+  Reporting and trend analysis
+
+Together, these systems help transform a noisy job search into a more structured and repeatable workflow.
+<br>
+
+
+
+
+## Architecture Philosophy
+This project is intentionally iterative.
+
+Rather than attempting to build a perfect platform upfront, the system evolves through small experiments, workflow observation, and continuous refinement.
+
+Key principles:
+- Local-first processing where possible
+- Rule-based transparency over black-box automation
+- Human review remains part of the workflow
+- Structured outputs over raw scraping
+- Modular design for future expansion
+- Product thinking applied to personal workflows
+<br>
+
+
+
+
+## Operational Visibility
+Jesse emphasizes readable runtime output and operational transparency.
+
+Structured logging, color hierarchy, progress tracking, warning recovery, and classification summaries make large processing runs easier to interpret during active development and testing.
+
+Rather than hiding internal behavior, the system exposes decision-making and recovery steps in real time to support debugging, experimentation, and workflow trust.
+<br>
+
+
+
+
+## Product Thinking in Practice
+This project is not only about scraping jobs.
+
+It is also an exercise in:
+- workflow analysis
+- operational design
+- information architecture
+- automation strategy
+- iterative delivery
+- system observability
+- decision support tooling
+
+The same thinking used in enterprise product work can also improve personal systems.
+<br>
+
+
+
+
+## Design Principles
+
+- Prefer transparency over hidden automation
+- Keep humans in the decision loop
+- Build iteratively
+- Optimize for signal over volume
+- Treat workflows as products
+<br>
+
+
+
+
+## Project Status
+Active and evolving.
+
+This project is under continuous refinement as new workflows, classification logic, and operational patterns emerge.
 <br>
 
 
@@ -90,8 +218,8 @@ Scraper_Project/
 
 
 ## How To Run It
-This scraper is designed for my own workflow, so it is not a packaged application.
-The structure, logic, and outputs are open for anyone to explore.
+This is a personal learning and workflow project.
+The architecture prioritizes experimentation, transparency, and iterative improvement over production-scale deployment.
 
 To run it locally:
 ```bash
@@ -109,12 +237,30 @@ python po_job_scraper.py
 
 
 ## Future Improvements
-- Cleaner separation of modules
-- Additional job boards
-- More robust salary parsing
-- Expanded error handling
-- Improved progress indicators
-- Additional test coverage
+- Expanded rule-based scoring and confidence signals
+- Better duplicate resolution across platforms
+- Historical trend tracking
+- Structured analytics dashboards
+- Configurable workflow modes (test vs production)
+- Improved modular architecture
+- Lightweight API integrations
+- Better orchestration between Jesse, Juno, and Notie
+<br>
+
+
+
+
+## Current Challenges & Learnings
+This project has evolved through experimentation and iteration.
+
+Some of the ongoing areas of exploration include:
+- Managing duplicate detection across multiple boards
+- Balancing scraping performance with rate limiting
+- Designing scalable data structures for long-term tracking
+- Separating operational logic from board-specific parsing
+- Determining when spreadsheets stop being the right storage layer
+
+The project intentionally embraces iterative improvement over premature perfection.
 <br>
 
 
@@ -125,8 +271,6 @@ This project began as a way to reduce friction in the job search process.
 It became a space for experimentation, learning, and deeper technical thinking.
 It reflects the same principles I bring to product work: reduce complexity, understand the workflow, and build tools that support better decisions.
 <br>
-<br>
-
 
 
 

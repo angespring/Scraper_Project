@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="image-1.png" width="100%" alt="vanspring Title Banner Image"/>
+  <img src="docs/images/image-1.png" width="100%" alt="vanspring Title Banner Image"/>
 </p>
 <br>
 
@@ -58,6 +58,14 @@ It is better decision-making through structured information.
 - Applies rules to classify each job as a keep or skip
 - Logs progress and decisions in the terminal
 - Produces structured outputs for downstream review and analysis
+<br>
+
+
+
+
+<p align="center">
+  <img src="docs/images/jesse-beginning.png" width="90%" alt="Terminal screenshot of a Jesse run"/>
+</p>
 <br>
 
 
@@ -145,6 +153,14 @@ Jesse emphasizes readable runtime output and operational transparency.
 Structured logging, color hierarchy, progress tracking, warning recovery, and classification summaries make large processing runs easier to interpret during active development and testing.
 
 Rather than hiding internal behavior, the system exposes decision-making and recovery steps in real time to support debugging, experimentation, and workflow trust.
+<br>
+
+
+
+
+<p align="center">
+  <img src="docs/images/jesse-ending.png" width="90%" alt="Terminal screenshot of a Jesse run"/>
+</p>
 <br>
 
 

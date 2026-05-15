@@ -221,7 +221,7 @@ This project is under continuous refinement as new workflows, classification log
 ## Project Structure
 ```bash
 
-Scraper_Project/
+Jesse Job Intelligence/
 ├── po_job_scraper.py          # Main entry point
 ├── classification_rules.py    # Logic for keep/skip rules
 ├── logging_utils.py           # Custom logging and progress display
@@ -240,8 +240,8 @@ The architecture prioritizes experimentation, transparency, and iterative improv
 To run it locally:
 ```bash
 
-git clone https://github.com/angespring/Scraper_Project
-cd Scraper_Project
+git clone https://github.com/angespring/jesse-job-intelligence
+cd jesse-job-intelligence
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt

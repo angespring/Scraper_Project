@@ -48,6 +48,47 @@ say() { $QUIET || echo -e "$@"; }
 time_human() { perl -e 'print int($ARGV[0]/3600),"h ",int(($ARGV[0]%3600)/60),"m ",int($ARGV[0]%60),"s\n"' "$1"; }
 log_note() { echo "$1" >>"$LOG"; $QUIET || echo "$1"; }
 file_mtime() { stat -f '%m' "$1" 2>/dev/null || echo 0; }
+network_probe() {
+  local url="$1"
+  local timeout_seconds="$2"
+  /usr/bin/curl --silent --show-error --location --head --max-time "$timeout_seconds" "$url" >/dev/null 2>&1
+}
+
+run_network_preflight() {
+  local attempt
+  local general_ok
+  local sheets_ok
+
+  for (( attempt=1; attempt<=NETWORK_PREFLIGHT_RETRIES; attempt++ )); do
+    general_ok=0
+    sheets_ok=0
+
+    if network_probe "https://pypi.org/simple/pip/" "$NETWORK_PREFLIGHT_TIMEOUT_SECONDS" || \
+       network_probe "https://about.gitlab.com/" "$NETWORK_PREFLIGHT_TIMEOUT_SECONDS"; then
+      general_ok=1
+    fi
+
+    if network_probe "https://oauth2.googleapis.com/" "$NETWORK_PREFLIGHT_TIMEOUT_SECONDS"; then
+      sheets_ok=1
+    fi
+
+    if (( general_ok )); then
+      if (( ! sheets_ok )); then
+        log_note "[PRECHECK] Reached the internet, but oauth2.googleapis.com is unavailable. Google Sheets carry-forward may fail in this run."
+      fi
+      return 0
+    fi
+
+    log_note "[PRECHECK] Network preflight attempt ${attempt}/${NETWORK_PREFLIGHT_RETRIES} failed. Could not reach general internet checks (pypi.org, about.gitlab.com)."
+    if (( attempt < NETWORK_PREFLIGHT_RETRIES )); then
+      log_note "[PRECHECK] Waiting ${NETWORK_PREFLIGHT_SLEEP_SECONDS}s before retrying. This often catches wake-from-sleep or DNS recovery."
+      sleep "$NETWORK_PREFLIGHT_SLEEP_SECONDS"
+    fi
+  done
+
+  log_note "[PRECHECK] Network preflight failed after ${NETWORK_PREFLIGHT_RETRIES} attempt(s). Aborting before pip install and scrape to avoid an empty run."
+  return 75
+}
 
 parse_last_checkpoint() {
   local line
@@ -115,6 +156,9 @@ cd "$ROOT"
 mkdir -p "$LOGDIR"
 
 start_ts=$(date +%s)
+NETWORK_PREFLIGHT_RETRIES="${NETWORK_PREFLIGHT_RETRIES:-3}"
+NETWORK_PREFLIGHT_SLEEP_SECONDS="${NETWORK_PREFLIGHT_SLEEP_SECONDS:-30}"
+NETWORK_PREFLIGHT_TIMEOUT_SECONDS="${NETWORK_PREFLIGHT_TIMEOUT_SECONDS:-8}"
 say "[SETUP] Working directory: $ROOT"
 
 # (Re)create venv if missing or requested
@@ -126,6 +170,16 @@ fi
 # Activate venv for this shell
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
+
+if ! run_network_preflight; then
+  exit_code=$?
+  end_ts=$(date +%s)
+  elapsed=$(( end_ts - start_ts ))
+  ln -sfn "$LOG" "$LOGDIR/latest.log"
+  say "[DONE] Exit ${exit_code}. Elapsed: $(time_human $elapsed)"
+  echo "[DONE] Finished at $(date '+%Y-%m-%d %H:%M:%S'). Elapsed: $(time_human $elapsed)" >>"$LOG"
+  exit "$exit_code"
+fi
 
 # Upgrade pip (fast, quiet-ish)
 say "[SETUP] Ensuring recent pip…"
@@ -163,10 +217,14 @@ if $STREAM; then
 else
   say "[RUN] Console streaming: off (use --stream to mirror output live)"
 fi
-if [[ -n "${RUN_TS_OVERRIDE:-}" && -f "$LOG" ]]; then
+if [[ -s "$LOG" ]]; then
   (
     echo
-    echo "[RUN] Resumed at $(date '+%Y-%m-%d %H:%M:%S')"
+    if [[ -n "${RUN_TS_OVERRIDE:-}" ]]; then
+      echo "[RUN] Resumed at $(date '+%Y-%m-%d %H:%M:%S')"
+    else
+      echo "[RUN] Started at $(date '+%Y-%m-%d %H:%M:%S')"
+    fi
     echo "[RUN] Python: $PY"
     echo "[RUN] CWD: $(pwd)"
     echo "[RUN] Run stamp: $STAMP"

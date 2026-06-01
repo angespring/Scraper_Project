@@ -171,8 +171,9 @@ fi
 # shellcheck disable=SC1091
 source "$VENV/bin/activate"
 
-if ! run_network_preflight; then
-  exit_code=$?
+run_network_preflight
+exit_code=$?
+if (( exit_code != 0 )); then
   end_ts=$(date +%s)
   elapsed=$(( end_ts - start_ts ))
   ln -sfn "$LOG" "$LOGDIR/latest.log"
